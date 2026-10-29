@@ -96,30 +96,30 @@ public final class MapDraw {
     private static final double SHARP_SCALE = 1;
     /** From this zoom up, the close-up textures (a texel a block) are drawn; below it, the small ones. */
     private static final double CLOSE_SCALE = 0.5;
-    /** Texels of the clouds' texture along a side (for {@link Clouds#PERIOD} blocks). */
-    private static final int CLOUD_TEXELS = 512;
-    private static final Identifier CLOUDS = MapMod.id("map/clouds");
-    private static @Nullable DynamicTexture clouds;
-    private static boolean cloudsStarted;
+    /** Texels of the parchment's texture along a side (for {@link Parchment#PERIOD} blocks). */
+    private static final int PAPER_TEXELS = 512;
+    private static final Identifier PARCHMENT = MapMod.id("map/parchment");
+    private static @Nullable DynamicTexture parchment;
+    private static boolean parchmentStarted;
 
     /**
-     * The clouds over everything unexplored, then every region the group has explored in the view, clipped to it. Each
+     * Empty parchment under everything unexplored, then every region the group has explored in the view, clipped to it. Each
      * region's edges are put on whole pixels from the same rounding of its corners, so neighbouring regions meet
      * exactly.
      */
     public static void tiles(GuiGraphicsExtractor g, View v) {
-        g.fill(v.left, v.top, v.left + v.width, v.top + v.height, 0xFF000000 | Clouds.SKY);
+        g.fill(v.left, v.top, v.left + v.width, v.top + v.height, 0xFF000000 | Parchment.PAPER);
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
-        DynamicTexture sky = clouds();
-        if (sky != null) {
-            int p = Clouds.PERIOD;
+        DynamicTexture paper = parchment();
+        if (paper != null) {
+            int p = Parchment.PERIOD;
             int i0 = (int) Math.floor((v.cx - (v.width / 2.0) / v.scale) / p), i1 = (int) Math.floor((v.cx + (v.width / 2.0) / v.scale) / p);
             int j0 = (int) Math.floor((v.cz - (v.height / 2.0) / v.scale) / p), j1 = (int) Math.floor((v.cz + (v.height / 2.0) / v.scale) / p);
             for (int j = j0; j <= j1; j++) {
                 for (int i = i0; i <= i1; i++) {
                     int x0 = (int) Math.round(v.sx((double) i * p)), x1 = (int) Math.round(v.sx((double) (i + 1) * p));
                     int y0 = (int) Math.round(v.sy((double) j * p)), y1 = (int) Math.round(v.sy((double) (j + 1) * p));
-                    g.blit(sky.getTextureView(), smooth, x0, y0, x1, y1, 0f, 1f, 0f, 1f);
+                    g.blit(paper.getTextureView(), smooth, x0, y0, x1, y1, 0f, 1f, 0f, 1f);
                 }
             }
         }
@@ -136,20 +136,20 @@ public final class MapDraw {
         }
     }
 
-    /** The clouds' texture, one period of them; made once on a background thread (null until it is). */
-    private static @Nullable DynamicTexture clouds() {
-        if (clouds != null || cloudsStarted) return clouds;
-        cloudsStarted = true;
+    /** The parchment's texture, one period of it; made once on a background thread (null until it is). */
+    private static @Nullable DynamicTexture parchment() {
+        if (parchment != null || parchmentStarted) return parchment;
+        parchmentStarted = true;
         Util.backgroundExecutor().execute(() -> {
-            int n = CLOUD_TEXELS;
-            double per = (double) Clouds.PERIOD / n;
+            int n = PAPER_TEXELS;
+            double per = (double) Parchment.PERIOD / n;
             int[] rgb = new int[n * n];
-            for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) rgb[z * n + x] = Clouds.at((x + 0.5) * per, (z + 0.5) * per);
+            for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) rgb[z * n + x] = Parchment.at((x + 0.5) * per, (z + 0.5) * per);
             Minecraft.getInstance().execute(() -> {
                 NativeImage image = new NativeImage(n, n, false);
                 for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) image.setPixel(x, z, 0xFF000000 | rgb[z * n + x]);
-                clouds = new DynamicTexture(() -> MapMod.ID + " map clouds", image);
-                Minecraft.getInstance().getTextureManager().register(CLOUDS, clouds);
+                parchment = new DynamicTexture(() -> MapMod.ID + " map parchment", image);
+                Minecraft.getInstance().getTextureManager().register(PARCHMENT, parchment);
             });
         });
         return null;

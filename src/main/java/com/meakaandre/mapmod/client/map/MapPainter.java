@@ -9,12 +9,10 @@ import org.jspecify.annotations.Nullable;
  * Paints a region of the map as a flat painted map, mostly in the manner of Elden Ring's and a little of Satisfactory's:
  * the land in soft colours on parchment (each block's own colour, blended with its neighbours' and pulled toward a
  * parchment tone, so areas read as patches of colour, not blocks), coastlines in dark ink, water in slate blue with faint
- * brush strokes and a pale band along the shore, a paper grain over everything, and drawn clouds over what has not been
+ * brush strokes and a pale band along the shore, a paper grain over everything, and empty parchment where nothing has been
  * explored. Nothing is shaded by height: the map is flat.
  */
 final class MapPainter {
-    /** Explored but not recorded yet: blank parchment. */
-    static final int BLANK = 0xCDBF99;
     /** Water: open, by the shore, and its brush strokes. */
     private static final int WATER = 0x5D7682, SHORE_WATER = 0x8FA3A4, STROKE = 0x9AA9A8;
     /** The ink of coastlines. */
@@ -22,11 +20,11 @@ final class MapPainter {
     /** The parchment tone land colours are pulled toward (a ramp from dark sepia to light parchment), and the share pulled. */
     private static final int PARCHMENT_DARK = 0x5B4B33, PARCHMENT_LIGHT = 0xE2D5B0;
     private static final float PARCHMENT_SHARE = 0.68f;
-    /** Pixels read from the neighbouring regions round a region: enough for the blends and the bent cloud edges. */
+    /** Pixels read from the neighbouring regions round a region: enough for the blends. */
     static final int PAD = 8;
     /** Blocks a land colour is blended over either way, and the water's outline. */
     private static final int COLOUR_BLUR = 2, WATER_BLUR = 1, SHORE_BLUR = 4;
-    /** How much noise bends the clouds' edge over unexplored chunks (in shares of a chunk's worth of blending). */
+    /** How much noise bends the edge of the explored land (in shares of a chunk's worth of blending). */
     private static final float FOG_BEND = 0.7f;
 
     /** A block's colour, as the client works it out (its texture tinted by its biome). */
@@ -121,12 +119,11 @@ final class MapPainter {
         blur(shore, side, SHORE_BLUR);
         blur(known, side, 1);
         float[] explored = fogField(fog);
-        Grid bend = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 31));
-        Grid broad = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 41));
-        Grid cloud = new Grid(x0, z0, Clouds::value);
-        Grid wobble = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 7));
-        Grid strokeAt = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 64, 21));
-        Grid strokeOn = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 22));
+        Grid bend = new Grid(x0, z0, (x, z) -> Parchment.noise(x, z, 32, 31));
+        Grid broad = new Grid(x0, z0, (x, z) -> Parchment.noise(x, z, 32, 41));
+        Grid paper = new Grid(x0, z0, Parchment::value);
+        Grid strokeAt = new Grid(x0, z0, (x, z) -> Parchment.noise(x, z, 64, 21));
+        Grid strokeOn = new Grid(x0, z0, (x, z) -> Parchment.noise(x, z, 32, 22));
         int cs = 3 * MapGrid.REGION_CHUNKS;
         for (int pz = 0; pz < n; pz++) {
             for (int px = 0; px < n; px++) {
@@ -138,9 +135,9 @@ final class MapPainter {
                 float grainLight = (float) (1 + (hash(bx, bz) - 0.5) * 0.05 + (broad.at(px, pz) - 0.5) * 0.08);
                 int rgb;
                 if (seen < 0.5f) {
-                    rgb = Clouds.colour(cloud.at(px, pz), bx, bz, wobble.at(px, pz));
+                    rgb = Parchment.colour(paper.at(px, pz), bx, bz);
                 } else if (known[k] < 0.5f) {
-                    rgb = scale(BLANK, grainLight);
+                    rgb = Parchment.colour(paper.at(px, pz), bx, bz);
                 } else if (wet[k] >= 0.5f) {
                     if (edge(wet, side, k)) {
                         // ink where the water meets the land
@@ -153,7 +150,7 @@ final class MapPainter {
                         rgb = scale(rgb, grainLight);
                     }
                 } else if (w[k] < 1e-3f) {
-                    rgb = scale(BLANK, grainLight);
+                    rgb = Parchment.colour(paper.at(px, pz), bx, bz);
                 } else {
                     float wt = w[k];
                     rgb = scale(Math.clamp((int) (r[k] / wt), 0, 255) << 16 | Math.clamp((int) (g[k] / wt), 0, 255) << 8
