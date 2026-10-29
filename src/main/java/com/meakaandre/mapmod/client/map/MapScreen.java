@@ -32,8 +32,8 @@ import java.util.Set;
  */
 public class MapScreen extends Screen {
     private static final int PANEL = 140, BAR = 16, FOOT = 14, ROW = 12;
-    /** Zoomed out no further than about a hundred regions on screen, so the tiles drawn stay few and cached. */
-    private static final double MIN_SCALE = 0.3, MAX_SCALE = 8;
+    /** Zoomed out to about a thousand regions on screen at most (each drawn from its small texture when zoomed out). */
+    private static final double MIN_SCALE = 0.08, MAX_SCALE = 8;
     /** Zoom factor of one scroll step in and out. */
     private static final double ZOOM_IN = 1.25, ZOOM_OUT = 0.8;
     /** Length of the scale bar (pixels). */

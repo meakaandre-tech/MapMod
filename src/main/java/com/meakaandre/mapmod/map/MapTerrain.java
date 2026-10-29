@@ -209,7 +209,7 @@ public final class MapTerrain {
         }
     }
 
-    /** Records a loaded chunk's 16 pixels and asks the scanners what stands in it. */
+    /** Records a loaded chunk (a pixel a block) and asks the scanners what stands in it. */
     public static void record(ServerLevel level, LevelChunk chunk) {
         long region = MapGrid.regionOfChunk(chunk.getPos().x(), chunk.getPos().z());
         MapTile tile = tile(region);

@@ -95,12 +95,15 @@ public final class MapDraw {
      */
     /** From this zoom (screen pixels a block) up, the map is drawn as sharp pixels; below it, filtered so it does not shimmer. */
     private static final double SHARP_SCALE = 1;
+    /** From this zoom up, the close-up textures (a texel a block) are drawn; below it, the small ones. */
+    private static final double CLOSE_SCALE = 0.5;
 
     public static void tiles(GuiGraphicsExtractor g, View v) {
         g.fill(v.left, v.top, v.left + v.width, v.top + v.height, FOG_BACK);
         GpuSampler sampler = RenderSystem.getSamplerCache().getClampToEdge(v.scale >= SHARP_SCALE ? FilterMode.NEAREST : FilterMode.LINEAR);
+        boolean close = v.scale >= CLOSE_SCALE;
         for (long region : v.regions()) {
-            DynamicTexture texture = ClientTiles.texture(region);
+            DynamicTexture texture = ClientTiles.texture(region, close);
             if (texture == null) continue;
             double rx = (double) MapGrid.keyX(region) * MapGrid.REGION_BLOCKS, rz = (double) MapGrid.keyZ(region) * MapGrid.REGION_BLOCKS;
             int x0 = (int) Math.round(v.sx(rx)), x1 = (int) Math.round(v.sx(rx + MapGrid.REGION_BLOCKS));

@@ -2,7 +2,6 @@ package com.meakaandre.mapmod.client.map;
 
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapTile;
-import com.mojang.blaze3d.platform.NativeImage;
 import org.jspecify.annotations.Nullable;
 
 import java.util.HashMap;
@@ -37,7 +36,7 @@ final class MapPainter {
      * Paints the region. {@code near} holds the 3 by 3 tiles round it (it in the middle; missing ones null),
      * {@code fog} their explored chunks.
      */
-    static void paint(NativeImage image, @Nullable MapTile tile, @Nullable MapTile[] near, long[] @Nullable [] fog) {
+    static void paint(int[] out, @Nullable MapTile tile, @Nullable MapTile[] near, long[] @Nullable [] fog) {
         int n = MapGrid.REGION_PX;
         long[] own = fog[4];
         Map<Integer, Integer> colours = new HashMap<>();
@@ -83,7 +82,7 @@ final class MapPainter {
                     }
                     if (tile.guessed(i)) rgb = scale(rgb, GUESS_LIGHT);
                 }
-                image.setPixel(px, pz, 0xFF000000 | rgb);
+                out[i] = rgb;
             }
         }
     }

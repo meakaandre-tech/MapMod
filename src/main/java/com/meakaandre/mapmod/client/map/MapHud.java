@@ -56,6 +56,7 @@ public final class MapHud {
     }
 
     public static void register() {
+        HudElementRegistry.addLast(MapMod.id("waypoints"), Waypoints::draw);
         HudElementRegistry.addLast(MapMod.id("compass"), MapHud::compass);
         HudElementRegistry.addLast(MapMod.id("minimap"), MapHud::minimap);
         HudElementRegistry.replaceElement(VanillaHudElements.BOSS_BAR, vanilla -> (g, delta) -> shifted(g, delta, vanilla, 0, BAND + 12));
