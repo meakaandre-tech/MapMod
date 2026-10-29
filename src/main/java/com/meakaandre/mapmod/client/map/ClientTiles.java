@@ -74,6 +74,7 @@ public final class ClientTiles {
     }
 
     private static void release(Slot e) {
+        if (lastSlot == e) lastSlot = null;
         releaseDetail(e);
         if (e.id != null) Minecraft.getInstance().getTextureManager().release(e.id);
         e.texture = null;
@@ -266,6 +267,7 @@ public final class ClientTiles {
             if (image != null) {
                 paint(image, 1, region, e.tile);
                 e.texture.upload();
+                Map3D.changed();
             }
             e.stale = false;
             e.detailStale = true;
@@ -288,6 +290,7 @@ public final class ClientTiles {
         if (image != null) {
             paint(image, DETAIL, region, e.tile);
             e.detail.upload();
+            Map3D.changed();
             e.detailReady = true;
         }
         e.detailStale = false;
@@ -354,7 +357,70 @@ public final class ClientTiles {
         return e.tile.known(i) ? (int) e.tile.height[i] : null;
     }
 
+    /**
+     * For the 3D map, on the client thread: the ground's (or water's) height at a point, smoothly between the recorded
+     * samples, and the painted map's colour there (ARGB). The height is NaN where nothing is recorded; the colour 0 where
+     * the region is not painted.
+     */
+    static float surface(double x, double z) {
+        double gx = x / MapGrid.PX_BLOCKS - 0.5, gz = z / MapGrid.PX_BLOCKS - 0.5;
+        int x0 = (int) Math.floor(gx), z0 = (int) Math.floor(gz);
+        double fx = gx - x0, fz = gz - z0;
+        float sum = 0, w = 0;
+        for (int k = 0; k < 4; k++) {
+            int px = x0 + (k & 1), pz = z0 + (k >> 1);
+            double weight = ((k & 1) == 0 ? 1 - fx : fx) * ((k >> 1) == 0 ? 1 - fz : fz);
+            if (weight <= 0) continue;
+            float h = sampleHeight(px, pz);
+            if (Float.isNaN(h)) continue;
+            sum += (float) (h * weight);
+            w += (float) weight;
+        }
+        return w <= 0 ? Float.NaN : sum / w;
+    }
+
+    private static long lastRegion = Long.MIN_VALUE;
+    private static @Nullable Slot lastSlot;
+
+    private static @Nullable Slot slotAt(long region) {
+        if (region != lastRegion || lastSlot == null) {
+            lastSlot = TILES.get(region);
+            lastRegion = region;
+        }
+        return lastSlot;
+    }
+
+    /** The height of a data pixel (in data pixel coordinates of the whole world), or NaN. */
+    private static float sampleHeight(int px, int pz) {
+        int bx = px * MapGrid.PX_BLOCKS, bz = pz * MapGrid.PX_BLOCKS;
+        Slot e = slotAt(MapGrid.regionOfBlock(bx, bz));
+        if (e == null || e.tile == null) return Float.NaN;
+        int i = MapTile.index(Math.floorMod(px, MapGrid.REGION_PX), Math.floorMod(pz, MapGrid.REGION_PX));
+        return e.tile.known(i) ? e.tile.height[i] : Float.NaN;
+    }
+
+    static int painted(double x, double z) {
+        int bx = (int) Math.floor(x), bz = (int) Math.floor(z);
+        Slot e = slotAt(MapGrid.regionOfBlock(bx, bz));
+        if (e == null) return 0;
+        int lx = Math.floorMod(bx, MapGrid.REGION_BLOCKS), lz = Math.floorMod(bz, MapGrid.REGION_BLOCKS);
+        if (e.detail != null && e.detailReady) {
+            NativeImage image = e.detail.getPixels();
+            if (image != null) return image.getPixel(lx * DETAIL / MapGrid.PX_BLOCKS, lz * DETAIL / MapGrid.PX_BLOCKS);
+        }
+        if (e.texture == null) return 0;
+        NativeImage image = e.texture.getPixels();
+        return image == null ? 0 : image.getPixel(lx / MapGrid.PX_BLOCKS, lz / MapGrid.PX_BLOCKS);
+    }
+
+    /** True if a region's overview is painted and up to date. */
+    static boolean painted(long region) {
+        Slot e = TILES.get(region);
+        return e != null && e.texture != null && !e.stale;
+    }
+
     public static void clear() {
+        lastSlot = null;
         saveDirty();
         for (Slot e : TILES.values()) release(e);
         TILES.clear();

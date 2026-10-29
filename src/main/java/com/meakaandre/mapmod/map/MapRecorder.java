@@ -91,7 +91,7 @@ public final class MapRecorder {
                         colour = LAVA_COLOUR | MapTile.KNOWN;
                     } else {
                         Holder<Biome> biome = level.getBiome(pos);
-                        colour = MapPalette.land(biome) | MapTile.KNOWN;
+                        colour = MapPalette.ground(chunk.getBlockState(pos), chunk, pos, biome) | MapTile.KNOWN;
                     }
                     height = found;
                 }
