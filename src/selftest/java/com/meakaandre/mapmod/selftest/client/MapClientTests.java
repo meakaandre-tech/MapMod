@@ -81,7 +81,14 @@ public final class MapClientTests {
     private static void check(String what) {
         Minecraft mc = Minecraft.getInstance();
         passed = failed = 0;
-        if (what.equals("locked")) {
+        if (what.equals("join")) {
+            // before any test provider steps in: a plain join with the map's defaults
+            expect("on joining, with nothing but the map's defaults, everything is unlocked", MapClient.unlocks == MapFeature.ALL, Integer.toString(MapClient.unlocks));
+            expect("on joining, the map's id arrives (the client's tile cache needs it)", MapClient.mapId != null, String.valueOf(MapClient.mapId));
+            MapClient.open();
+            expect("on joining, M opens the fullscreen map", mc.gui.screen() instanceof MapScreen, "");
+            if (mc.gui.screen() instanceof MapScreen) mc.gui.setScreen(null);
+        } else if (what.equals("locked")) {
             expect("the provider's lock reaches the client: terrain on, minimap and fullscreen map off",
                 MapClient.unlocked(MapFeature.TERRAIN) && !MapClient.unlocked(MapFeature.MINIMAP) && !MapClient.unlocked(MapFeature.FULLSCREEN), Integer.toString(MapClient.unlocks));
             MapClient.open();

@@ -20,6 +20,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.S2CPlayChannelEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
@@ -157,6 +158,11 @@ public final class MapServer {
         });
         ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> MapTerrain.loaded(level, chunk));
         ServerPlayerEvents.JOIN.register(MapServer::sync);
+        // a client says which payloads it takes only after it has joined: what was sent before that never arrived, so
+        // the map is sent again once its channels are known
+        S2CPlayChannelEvents.REGISTER.register((handler, sender, server, channels) -> {
+            if (channels.contains(MapPayloads.Hello.TYPE.id())) server.execute(() -> sync(handler.getPlayer()));
+        });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUUID();
             SYNCED.remove(id);
@@ -298,8 +304,11 @@ public final class MapServer {
 
     // ------------------------------------------------------------------------------------------------ sending
 
-    private static void send(ServerPlayer player, CustomPacketPayload payload) {
-        if (!ignored(player) && ServerPlayNetworking.canSend(player, payload.type())) ServerPlayNetworking.send(player, payload);
+    /** Sends if the client takes it; true if it was sent. */
+    private static boolean send(ServerPlayer player, CustomPacketPayload payload) {
+        if (ignored(player) || !ServerPlayNetworking.canSend(player, payload.type())) return false;
+        ServerPlayNetworking.send(player, payload);
+        return true;
     }
 
     /** To every online player of the group. */
@@ -315,9 +324,11 @@ public final class MapServer {
         if (ignored(player)) return;
         int mask = 0;
         for (MapFeature f : MapFeature.values()) if (MapModApi.unlocked(player, f)) mask |= f.bit();
-        Integer before = UNLOCKS.put(player.getUUID(), mask);
+        Integer before = UNLOCKS.get(player.getUUID());
         if (!force && before != null && before == mask) return;
-        send(player, new MapPayloads.Unlocks(mask, MapModApi.unlocks().lockedMessage(player)));
+        // remembered only once it reached the client, so one sent too early is sent again a second later
+        if (send(player, new MapPayloads.Unlocks(mask, MapModApi.unlocks().lockedMessage(player)))) UNLOCKS.put(player.getUUID(), mask);
+        else UNLOCKS.remove(player.getUUID());
     }
 
     /** Everything a player's client needs: the map's id, their unlocks, their group's fog, their markers and the POIs. */
