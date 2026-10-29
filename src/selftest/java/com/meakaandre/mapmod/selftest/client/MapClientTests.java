@@ -110,6 +110,11 @@ public final class MapClientTests {
         MapMod.LOGGER.info("SELFTEST local {} its tiles, fog and markers are saved in the game folder ({})", saved ? "PASS" : "FAIL", dir);
         if (saved) pass++;
         else fail++;
+        for (CaptureClientTests.Check c : CaptureClientTests.run(true)) {
+            MapMod.LOGGER.info("SELFTEST local {} {}{}", c.ok() ? "PASS" : "FAIL", c.what(), c.detail().isEmpty() ? "" : " (" + c.detail() + ")");
+            if (c.ok()) pass++;
+            else fail++;
+        }
         MapScreen screen = new MapScreen();
         screen.centre(px, pz, 0.5f);
         MapClient.show(screen);
@@ -219,6 +224,7 @@ public final class MapClientTests {
                 mobs + " mobs, no face for " + faceless);
             expect("a pinned marker is kept", !MapClient.PINS.isEmpty(), MapClient.PINS.size() + " pins");
             expect("the map runs next to Quicksilver", FabricLoader.getInstance().isModLoaded("quicksilver"), "");
+            for (CaptureClientTests.Check c : CaptureClientTests.run(false)) expect(c.what(), c.ok(), c.detail());
         }
         MapMod.LOGGER.info("SELFTEST client done {}: {} passed, {} failed", what, passed, failed);
     }

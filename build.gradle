@@ -17,6 +17,9 @@ dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    // zstd for the map's tile files: pure Java, bundled in the jar
+    implementation "io.airlift:aircompressor:${project.aircompressor_version}"
+    include "io.airlift:aircompressor:${project.aircompressor_version}"
 }
 
 // The selftests (/mapmod selftest and worldtest, and a test POI provider that uses the public API the way another mod
