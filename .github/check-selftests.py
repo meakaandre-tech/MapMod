@@ -70,9 +70,15 @@ def main():
             continue
         im = Image.open(os.path.join(ci, shot)).convert("RGB")
         px, (w, h) = im.load(), im.size
+        # a gap is the fog colour between two pixels of land on either side; the fog's own weave (its darker and lighter
+        # lines) is not land
         fog = (0x2A, 0x34, 0x40)
-        gaps = [x for x in range(285, w - 1) if sum(1 for y in range(40, h - 20) if px[x, y] == fog and px[x - 1, y] != fog and px[x + 1, y] != fog) > 30]
-        gaps += [y for y in range(40, h - 21) if sum(1 for x in range(285, w - 1) if px[x, y] == fog and px[x, y - 1] != fog and px[x, y + 1] != fog) > 30]
+        weave = {fog, (0x31, 0x3C, 0x4A)}
+
+        def gap(a, b, c):
+            return a == fog and b not in weave and c not in weave
+        gaps = [x for x in range(285, w - 1) if sum(1 for y in range(40, h - 20) if gap(px[x, y], px[x - 1, y], px[x + 1, y])) > 30]
+        gaps += [y for y in range(40, h - 21) if sum(1 for x in range(285, w - 1) if gap(px[x, y], px[x, y - 1], px[x, y + 1])) > 30]
         print(f"{shot}: {len(gaps)} lines of fog between tiles{' at ' + str(gaps) if gaps else ''}")
         if gaps:
             bad.append(f"lines between map tiles in {shot}")
