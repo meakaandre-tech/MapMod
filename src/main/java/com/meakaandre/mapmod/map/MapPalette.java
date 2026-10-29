@@ -21,28 +21,28 @@ public final class MapPalette {
     public static int biome(Holder<Biome> biome) {
         String path = biome.unwrapKey().map(k -> k.identifier().getPath()).orElse("");
         if (path.contains("frozen") || path.contains("snowy") || path.contains("ice") || path.contains("grove") || path.contains("jagged")
-            || path.contains("frozen_peaks")) return 0xE4EAEC;
-        if (biome.is(BiomeTags.IS_BADLANDS)) return 0xC27C52;
-        if (path.contains("desert")) return 0xDCCB98;
-        if (biome.is(BiomeTags.IS_BEACH)) return 0xDDD2A2;
-        if (path.contains("stony") || path.contains("peaks") || path.contains("windswept_gravelly")) return 0x9C9B93;
-        if (biome.is(BiomeTags.IS_JUNGLE)) return 0x5E9442;
-        if (path.contains("swamp")) return 0x627A55;
-        if (path.contains("mangrove")) return 0x5B7A4C;
-        if (biome.is(BiomeTags.IS_SAVANNA)) return 0xB3A962;
-        if (biome.is(BiomeTags.IS_TAIGA)) return 0x627F62;
-        if (path.contains("dark_forest") || path.contains("pale_garden")) return 0x55704A;
-        if (biome.is(BiomeTags.IS_FOREST)) return 0x6D9853;
-        if (path.contains("mushroom")) return 0x8C7A8C;
-        if (path.contains("cherry")) return 0xC8A0B0;
-        if (path.contains("meadow")) return 0x86AE66;
-        return 0x8AAE62;
+            || path.contains("frozen_peaks")) return 0xC6CCCE;
+        if (biome.is(BiomeTags.IS_BADLANDS)) return 0xB57A5E;
+        if (path.contains("desert")) return 0xCFA28A;
+        if (biome.is(BiomeTags.IS_BEACH)) return 0xD2B49A;
+        if (path.contains("stony") || path.contains("peaks") || path.contains("windswept_gravelly")) return 0x8A8986;
+        if (biome.is(BiomeTags.IS_JUNGLE)) return 0x46703A;
+        if (path.contains("swamp")) return 0x4F6248;
+        if (path.contains("mangrove")) return 0x4A6240;
+        if (biome.is(BiomeTags.IS_SAVANNA)) return 0x9E9460;
+        if (biome.is(BiomeTags.IS_TAIGA)) return 0x48634A;
+        if (path.contains("dark_forest") || path.contains("pale_garden")) return 0x3E5638;
+        if (biome.is(BiomeTags.IS_FOREST)) return 0x4E7041;
+        if (path.contains("mushroom")) return 0x7E6E7E;
+        if (path.contains("cherry")) return 0xB89AA4;
+        if (path.contains("meadow")) return 0x6E8E55;
+        return 0x6A8A52;
     }
 
     /** A water pixel by depth (blocks of water over the floor). */
     public static int water(int depth) {
         float t = Math.min(1f, Math.max(0, depth) / DEEPEST_WATER);
-        return mix(0x79BED0, 0x2D5F88, t);
+        return mix(0x74AEBB, 0x24496C, t);
     }
 
     /** Ground: the biome's colour with a little of the top block's map colour, softened. */
@@ -51,18 +51,23 @@ public final class MapPalette {
         return soften(c);
     }
 
+    /** Land as the map shows it: just its biome's soft colour, whatever stands on it (the same as a guess). */
+    public static int land(Holder<Biome> biome) {
+        return soften(biome(biome));
+    }
+
     /** A guess from the world generator alone: just the biome's colour. */
     public static int guess(Holder<Biome> biome) {
-        return soften(biome(biome));
+        return land(biome);
     }
 
     private static int soften(int c) {
         int r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255;
         int grey = (r * 30 + g * 59 + b * 11) / 100;
-        // a fifth of the way to grey, then a little lighter
-        r = Math.min(255, (r * 4 + grey) / 5 + 8);
-        g = Math.min(255, (g * 4 + grey) / 5 + 8);
-        b = Math.min(255, (b * 4 + grey) / 5 + 8);
+        // a tenth of the way to grey: muted, like a painted survey map
+        r = (r * 9 + grey) / 10;
+        g = (g * 9 + grey) / 10;
+        b = (b * 9 + grey) / 10;
         return r << 16 | g << 8 | b;
     }
 

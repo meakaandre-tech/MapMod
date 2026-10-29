@@ -29,5 +29,8 @@
   "mapmod.map.with_purity": "%s (%s)",
   "mapmod.map.purity.0": "impure",
   "mapmod.map.purity.1": "normal",
-  "mapmod.map.purity.2": "pure"
+  "mapmod.map.purity.2": "pure",
+  "mapmod.map.filter.mobs": "Mobs",
+  "mapmod.map.filter.hostile": "Hostile mobs",
+  "mapmod.map.filter.passive": "Passive mobs"
 }

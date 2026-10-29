@@ -11,6 +11,7 @@ import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapFilters;
 import com.meakaandre.mapmod.client.map.MapScreen;
+import com.meakaandre.mapmod.client.map.MobRadar;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
@@ -20,6 +21,10 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Items;
 
 import java.nio.file.Files;
@@ -202,6 +207,16 @@ public final class MapClientTests {
             MapPoi gold = MapPoi.of(TestPois.ORE, "gold", 2, 0, 64, 0);
             expect("a sub-type's item falls back to the next one the game has", MapDraw.item(tin).is(Items.RAW_GOLD) && MapDraw.item(gold).isEmpty(),
                 MapDraw.item(tin).toString());
+            List<String> faceless = new ArrayList<>();
+            int mobs = 0;
+            for (Entity en : mc.level.entitiesForRendering()) {
+                if (!(en instanceof LivingEntity living) || en instanceof Player) continue;
+                if (en.distanceTo(mc.player) > 64) continue;
+                mobs++;
+                if (!MobRadar.hasFace(living)) faceless.add(EntityType.getKey(en.getType()) + (living.isBaby() ? " (baby)" : ""));
+            }
+            expect("the mob radar finds a face on every mob near the player, read off its model", mobs >= 8 && faceless.isEmpty(),
+                mobs + " mobs, no face for " + faceless);
             expect("a pinned marker is kept", !MapClient.PINS.isEmpty(), MapClient.PINS.size() + " pins");
             expect("the map runs next to Quicksilver", FabricLoader.getInstance().isModLoaded("quicksilver"), "");
         }

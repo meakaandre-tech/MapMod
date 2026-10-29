@@ -302,15 +302,14 @@ public final class MapHud {
         int size = MINIMAP, left = g.guiWidth() - size - 5, top = 5;
         float pt = delta.getGameTimeDeltaPartialTick(true);
         double x = player.xo + (player.getX() - player.xo) * pt, z = player.zo + (player.getZ() - player.zo) * pt;
-        MapDraw.View v = new MapDraw.View(x, z, MINIMAP_SCALE, left, top, size, size);
-        g.fill(left - 2, top - 2, left + size + 2, top + size + 2, 0xFF0E1216);
-        g.enableScissor(left, top, left + size, top + size);
-        MapDraw.tiles(g, v);
+        MapDraw.View v = new MapDraw.View(x, z, MINIMAP_SCALE, left, top, size, size, true);
+        // a round minimap: the map in a disc, then what is on it, then its ring
+        MapDraw.roundTiles(g, v);
         things(g, v, false);
-        g.disableScissor();
-        g.outline(left - 1, top - 1, size + 2, size + 2, 0x60FFFFFF);
+        MobRadar.draw(g, v, false);
+        MapIcons.ring(g, left, top, size);
         MapDraw.self(g, (float) v.sx(x), (float) v.sy(z));
-        g.centeredText(mc.font, "N", left + size / 2, top + 2, 0xFFFF6A4D);
+        g.centeredText(mc.font, "N", left + size / 2, top + 3, 0xFFFF6A4D);
         small(g, "X " + player.getBlockX() + "   Z " + player.getBlockZ(), left + size / 2, top + size + 4, 0xFFE6E6E6);
     }
 

@@ -22,8 +22,9 @@ import java.util.Set;
 /**
  * The client's map tiles: kept on disk per map ({@code mapmod/<map id>/} in the game folder) so a world's map is
  * there at once on the next visit and only changed tiles are sent again, and turned into textures for the screen in
- * the manner of Satisfactory's map: soft ground colours, light from the north-west, contour lines every 16 blocks
- * (darker every 64), and the fog of war over what the group has not explored.
+ * the manner of Satisfactory's map: each biome's soft colour blended into its neighbours', soft light from the
+ * north-west on the land's smoothed shape, sparse contour lines every 32 blocks (darker every 128), drawn smoothly, and
+ * the fog of war over what the group has not explored.
  * <p>
  * Cached tiles are read from disk on a background thread, never while drawing; only regions the group has explored
  * are read at all; and only the {@link #KEPT} regions used most recently keep their tile and texture.
@@ -36,11 +37,14 @@ public final class ClientTiles {
     /** Pixels between the fog weave's diagonal lines. */
     private static final int FOG_WEAVE = 6;
     /** Hill shading: light per block of rise toward the north-west, and its most either way. */
-    private static final float SLOPE_LIGHT = 0.07f, MAX_SLOPE_LIGHT = 0.3f;
+    private static final float SLOPE_LIGHT = 0.04f, MAX_SLOPE_LIGHT = 0.22f;
     /** Blocks between contour lines, and between the darker major ones. */
-    private static final int CONTOUR_STEP = 16, MAJOR_CONTOUR_STEP = 64;
+    private static final int CONTOUR_STEP = 32, MAJOR_CONTOUR_STEP = 128;
     /** Light on a major contour, a contour and the shore. */
-    private static final float MAJOR_CONTOUR_LIGHT = 0.72f, CONTOUR_LIGHT = 0.86f, SHORE_LIGHT = 0.8f;
+    private static final float MAJOR_CONTOUR_LIGHT = 0.84f, CONTOUR_LIGHT = 0.93f, SHORE_LIGHT = 0.86f;
+
+    /** Pixels either way a colour is blended over. */
+    private static final int BLUR = 2;
 
     /** Regions whose tile and texture are kept in memory; the least recently used beyond this are let go. */
     private static final int KEPT = 192;
@@ -116,6 +120,7 @@ public final class ClientTiles {
                         fresh.tile = tile;
                         fresh.fromDisk = true;
                         fresh.stale = true;
+                        neighboursChanged(region);
                     }
                 });
             });
@@ -199,7 +204,19 @@ public final class ClientTiles {
         Slot e = entry(region);
         e.tile = tile;
         e.stale = true;
+        neighboursChanged(region);
         write(region, data);
+    }
+
+    /** The tiles round a changed one are painted again: their edges blend into it. */
+    private static void neighboursChanged(long region) {
+        int rx = MapGrid.keyX(region), rz = MapGrid.keyZ(region);
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                Slot n = (dx == 0 && dz == 0) ? null : TILES.get(MapGrid.key(rx + dx, rz + dz));
+                if (n != null) n.stale = true;
+            }
+        }
     }
 
     /** The region's fog changed: drawn again next time it is shown. */
@@ -209,7 +226,7 @@ public final class ClientTiles {
     }
 
     /** The region's texture, drawn or redrawn as needed; null when nothing is known there. */
-    public static @Nullable Identifier texture(long region) {
+    public static @Nullable DynamicTexture texture(long region) {
         // a region the group has not explored at all is plain fog: nothing is read or kept for it
         long[] fog = MapClient.FOG.get(region);
         if (fog == null) return null;
@@ -220,15 +237,31 @@ public final class ClientTiles {
             Minecraft.getInstance().getTextureManager().register(e.id, e.texture);
             e.stale = true;
         }
-        if (e.stale) {
+        if (e.stale && repaintAllowed()) {
             NativeImage image = e.texture.getPixels();
             if (image != null) {
-                paint(image, e.tile, fog);
+                paint(image, region, e.tile, fog);
                 e.texture.upload();
             }
             e.stale = false;
         }
-        return e.id;
+        return e.texture;
+    }
+
+    /** Tiles painted again in one go at most, and the stretch of time that counts as one go (ns): a frame's worth. */
+    private static final int REPAINTS = 3;
+    private static final long REPAINT_WINDOW = 16_000_000L;
+    private static long windowStart;
+    private static int repaints;
+
+    /** True if one more tile may be painted again now; the rest wait for a later frame and show as they were. */
+    private static boolean repaintAllowed() {
+        long now = System.nanoTime();
+        if (now - windowStart > REPAINT_WINDOW) {
+            windowStart = now;
+            repaints = 0;
+        }
+        return repaints++ < REPAINTS;
     }
 
     /** The height recorded at a block, or null. */
@@ -250,63 +283,153 @@ public final class ClientTiles {
 
     // ------------------------------------------------------------------------------------------------ drawing
 
-    private static void paint(NativeImage image, @Nullable MapTile tile, long[] fog) {
+    /** Pixels of the neighbouring tiles read round a tile while painting it, so blends and shading run on across edges. */
+    private static final int PAD = BLUR + 2;
+
+    /**
+     * The tile with a border of its neighbours' pixels round it: colours, heights and what is known, in one grid of
+     * {@code REGION_PX + 2 * PAD} pixels a side (a neighbour that is not loaded counts as unknown).
+     */
+    private static final class Grid {
+        final int side = MapGrid.REGION_PX + 2 * PAD;
+        final int[] colour = new int[side * side];
+        final float[] height = new float[side * side];
+        final boolean[] known = new boolean[side * side];
+        final boolean[] wet = new boolean[side * side];
+
+        Grid(long region, MapTile tile) {
+            int rx = MapGrid.keyX(region), rz = MapGrid.keyZ(region), n = MapGrid.REGION_PX;
+            MapTile[] near = new MapTile[9];
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dz == 0) near[4] = tile;
+                    else {
+                        Slot e = TILES.get(MapGrid.key(rx + dx, rz + dz));
+                        near[(dz + 1) * 3 + dx + 1] = e == null ? null : e.tile;
+                    }
+                }
+            }
+            for (int gz = 0; gz < side; gz++) {
+                for (int gx = 0; gx < side; gx++) {
+                    int px = gx - PAD, pz = gz - PAD;
+                    int tx = px < 0 ? -1 : px >= n ? 1 : 0, tz = pz < 0 ? -1 : pz >= n ? 1 : 0;
+                    MapTile t = near[(tz + 1) * 3 + tx + 1];
+                    int g = gz * side + gx;
+                    if (t == null) continue;
+                    int i = MapTile.index(Math.floorMod(px, n), Math.floorMod(pz, n));
+                    if (!t.known(i)) continue;
+                    known[g] = true;
+                    colour[g] = t.colour[i] & 0xFFFFFF;
+                    height[g] = t.height[i];
+                    wet[g] = (t.colour[i] & MapTile.WATER) != 0;
+                }
+            }
+        }
+
+        int at(int px, int pz) {
+            return (pz + PAD) * side + px + PAD;
+        }
+    }
+
+    private static void paint(NativeImage image, long region, @Nullable MapTile tile, long[] fog) {
         int n = MapGrid.REGION_PX;
+        Grid grid = tile == null ? null : new Grid(region, tile);
+        int[] base = grid == null ? null : smoothColours(grid);
+        float[] heights = grid == null ? null : smoothHeights(grid);
         for (int pz = 0; pz < n; pz++) {
             for (int px = 0; px < n; px++) {
                 int chunkBit = (pz / MapGrid.CHUNK_PX) * MapGrid.REGION_CHUNKS + px / MapGrid.CHUNK_PX;
                 int rgb;
                 if (!MapGrid.get(fog, chunkBit)) {
                     rgb = ((px + pz) % FOG_WEAVE == 0) ? FOG_LINE : FOG;
-                } else if (tile == null || !tile.known(MapTile.index(px, pz))) {
+                } else if (grid == null || !grid.known[grid.at(px, pz)]) {
                     rgb = UNKNOWN;
                 } else {
-                    rgb = shade(tile, px, pz);
+                    rgb = shade(grid, base, heights, px, pz);
                 }
                 image.setPixel(px, pz, 0xFF000000 | rgb);
             }
         }
     }
 
-    private static int h(MapTile tile, int px, int pz) {
-        px = Math.clamp(px, 0, MapGrid.REGION_PX - 1);
-        pz = Math.clamp(pz, 0, MapGrid.REGION_PX - 1);
-        int i = MapTile.index(px, pz);
-        return tile.known(i) ? tile.height[i] : Integer.MIN_VALUE;
+    /** A weighted blend over the pixels round each one, land with land and water with water. */
+    private static int[] smoothColours(Grid g) {
+        int[] out = new int[g.side * g.side];
+        for (int z = BLUR; z < g.side - BLUR; z++) {
+            for (int x = BLUR; x < g.side - BLUR; x++) {
+                int i = z * g.side + x;
+                if (!g.known[i]) continue;
+                int r = 0, gr = 0, b = 0, w = 0;
+                for (int dz = -BLUR; dz <= BLUR; dz++) {
+                    for (int dx = -BLUR; dx <= BLUR; dx++) {
+                        int j = (z + dz) * g.side + x + dx;
+                        if (!g.known[j] || g.wet[j] != g.wet[i]) continue;
+                        // nearer pixels count more
+                        int weight = BLUR + 1 - Math.max(Math.abs(dx), Math.abs(dz));
+                        int c = g.colour[j];
+                        r += (c >> 16 & 255) * weight;
+                        gr += (c >> 8 & 255) * weight;
+                        b += (c & 255) * weight;
+                        w += weight;
+                    }
+                }
+                out[i] = (r / w) << 16 | (gr / w) << 8 | (b / w);
+            }
+        }
+        return out;
     }
 
-    private static boolean water(MapTile tile, int px, int pz) {
-        px = Math.clamp(px, 0, MapGrid.REGION_PX - 1);
-        pz = Math.clamp(pz, 0, MapGrid.REGION_PX - 1);
-        return (tile.colour[MapTile.index(px, pz)] & MapTile.WATER) != 0;
+    /** Heights blended the same way, so the shading and contour lines follow the land's shape, not its blocks. */
+    private static float[] smoothHeights(Grid g) {
+        float[] out = new float[g.side * g.side];
+        for (int z = 0; z < g.side; z++) {
+            for (int x = 0; x < g.side; x++) {
+                int i = z * g.side + x;
+                if (!g.known[i]) continue;
+                float sum = 0, w = 0;
+                for (int dz = -BLUR; dz <= BLUR; dz++) {
+                    for (int dx = -BLUR; dx <= BLUR; dx++) {
+                        int xx = x + dx, zz = z + dz;
+                        if (xx < 0 || zz < 0 || xx >= g.side || zz >= g.side) continue;
+                        int j = zz * g.side + xx;
+                        if (!g.known[j] || g.wet[j] != g.wet[i]) continue;
+                        float weight = BLUR + 1 - Math.max(Math.abs(dx), Math.abs(dz));
+                        sum += g.height[j] * weight;
+                        w += weight;
+                    }
+                }
+                out[i] = sum / w;
+            }
+        }
+        return out;
     }
 
-    /** One pixel: its colour, lit from the north-west, with contour lines and shore lines. */
-    private static int shade(MapTile tile, int px, int pz) {
-        int i = MapTile.index(px, pz);
-        int c = tile.colour[i] & 0xFFFFFF;
-        int here = tile.height[i];
-        boolean wet = (tile.colour[i] & MapTile.WATER) != 0;
+    /** One pixel: its blended colour, lit softly from the north-west, with sparse contour lines and shore lines. */
+    private static int shade(Grid g, int[] base, float[] h, int px, int pz) {
+        int i = g.at(px, pz);
+        int c = base[i];
         float light = 1f;
-        if (!wet) {
-            int nw = h(tile, px - 1, pz - 1);
-            if (nw != Integer.MIN_VALUE) light += Math.clamp((here - nw) * SLOPE_LIGHT, -MAX_SLOPE_LIGHT, MAX_SLOPE_LIGHT);
-            int east = h(tile, px + 1, pz), south = h(tile, px, pz + 1);
+        if (!g.wet[i]) {
+            int nw = g.at(px - 1, pz - 1), se = g.at(px + 1, pz + 1);
+            if (g.known[nw] && g.known[se] && !g.wet[nw] && !g.wet[se]) {
+                light += Math.clamp((h[se] - h[nw]) * -SLOPE_LIGHT, -MAX_SLOPE_LIGHT, MAX_SLOPE_LIGHT);
+            }
             boolean contour = false, major = false;
-            for (int o : new int[]{east, south}) {
-                if (o == Integer.MIN_VALUE) continue;
-                if (Math.floorDiv(o, CONTOUR_STEP) != Math.floorDiv(here, CONTOUR_STEP)) contour = true;
-                if (Math.floorDiv(o, MAJOR_CONTOUR_STEP) != Math.floorDiv(here, MAJOR_CONTOUR_STEP)) major = true;
+            for (int o : new int[]{g.at(px + 1, pz), g.at(px, pz + 1)}) {
+                if (!g.known[o] || g.wet[o]) continue;
+                if (Math.floor(h[o] / CONTOUR_STEP) != Math.floor(h[i] / CONTOUR_STEP)) contour = true;
+                if (Math.floor(h[o] / MAJOR_CONTOUR_STEP) != Math.floor(h[i] / MAJOR_CONTOUR_STEP)) major = true;
             }
             if (major) light *= MAJOR_CONTOUR_LIGHT;
             else if (contour) light *= CONTOUR_LIGHT;
-        } else if (!water(tile, px + 1, pz) || !water(tile, px, pz + 1) || !water(tile, px - 1, pz) || !water(tile, px, pz - 1)) {
-            // the shore
-            light = SHORE_LIGHT;
+        } else {
+            for (int o : new int[]{g.at(px + 1, pz), g.at(px, pz + 1), g.at(px - 1, pz), g.at(px, pz - 1)}) {
+                if (g.known[o] && !g.wet[o]) light = SHORE_LIGHT;
+            }
         }
         int r = Math.clamp((int) ((c >> 16 & 255) * light), 0, 255);
-        int g = Math.clamp((int) ((c >> 8 & 255) * light), 0, 255);
+        int gr = Math.clamp((int) ((c >> 8 & 255) * light), 0, 255);
         int b = Math.clamp((int) ((c & 255) * light), 0, 255);
-        return r << 16 | g << 8 | b;
+        return r << 16 | gr << 8 | b;
     }
 }
