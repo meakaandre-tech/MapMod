@@ -51,6 +51,15 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/ci
+          if [ -f .github/dump-textures ]; then
+            # the game's entity textures, to read mob faces off (one jar holds the client's assets)
+            for j in $(find ~/.gradle/caches/fabric-loom .gradle/loom-cache -name '*.jar' 2>/dev/null | grep -iE 'minecraft' | grep -v sources); do
+              if unzip -Z1 "$j" 2>/dev/null | grep -q '^assets/minecraft/textures/entity/'; then
+                mkdir -p /tmp/ci/textures && unzip -o -q "$j" 'assets/minecraft/textures/entity/*' -d /tmp/ci/textures && break
+              fi
+            done
+            ls -R /tmp/ci/textures | head -5 || true
+          fi
           if [ -f .github/dump-signatures ]; then
             mcjars=$(find ~/.gradle/caches/fabric-loom .gradle/loom-cache -name '*.jar' 2>/dev/null | grep -iE 'minecraft' | grep -v sources || true)
             ./gradlew dumpCompileClasspath --no-daemon -q -I /tmp/maxerrs.gradle >/dev/null 2>&1 || true

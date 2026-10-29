@@ -51,9 +51,14 @@ public final class MapPalette {
         return soften(c);
     }
 
+    /** Land as the map shows it: just its biome's soft colour, whatever stands on it (the same as a guess). */
+    public static int land(Holder<Biome> biome) {
+        return soften(biome(biome));
+    }
+
     /** A guess from the world generator alone: just the biome's colour. */
     public static int guess(Holder<Biome> biome) {
-        return soften(biome(biome));
+        return land(biome);
     }
 
     private static int soften(int c) {
