@@ -7,7 +7,7 @@ cmd mapmod worldtest pin Placed by a group mate
 sleep 25
 shot
 cmd mapmod worldtest open 0.12
-sleep 8
+sleep 20
 shot
 cmd mapmod worldtest open 0.6
 sleep 6

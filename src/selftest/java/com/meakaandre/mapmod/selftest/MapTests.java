@@ -247,9 +247,14 @@ public final class MapTests {
 
         // ---- a POI source: worked out for the group, and again when its stamp moves
         TestPois.LOCKED.put(A, Set.of(TestPois.SUBS));
-        MapModApi.refreshPois(server, A);
+        // the group goes to the region's first few ore spots, so some are explored whatever the seed's grid puts here
         List<MapPoi> expected = new ArrayList<>();
-        for (MapPoi p : TestPois.SEED.pois(level, MapServer.area(region), Set.of())) if (p.kind().equals(TestPois.ORE.key()) && MapModApi.explored(A, p.x() >> 4, p.z() >> 4)) expected.add(p);
+        for (MapPoi p : TestPois.SEED.pois(level, MapServer.area(region), Set.of())) {
+            if (!p.kind().equals(TestPois.ORE.key()) || expected.size() >= 3) continue;
+            MapFog.reveal(A, p.x() >> 4, p.z() >> 4, 1, new LongOpenHashSet());
+            expected.add(p);
+        }
+        MapModApi.refreshPois(server, A);
         when(source, level, () -> kinds(MapServer.poisFor(A, region), TestPois.CAMP.key()) > 0, 200, "source POIs arrive", () -> {
             List<MapPoi> now = MapServer.poisFor(A, region);
             expect(source, "a POI source's POIs show where the group explored (a camp)", kinds(now, TestPois.CAMP.key()) == 1, TestPois.counts(now).toString());
