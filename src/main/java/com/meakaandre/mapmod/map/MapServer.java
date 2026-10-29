@@ -20,7 +20,6 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
-import net.fabricmc.fabric.api.networking.v1.S2CPlayChannelEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
@@ -87,6 +86,11 @@ public final class MapServer {
     private static final Set<Key> RUNNING = new HashSet<>();
     /** Which group each online player was last sent the map of. */
     private static final Map<UUID, String> SYNCED = new HashMap<>();
+    /**
+     * Players whose client has had the map: a client says which payloads it takes only after it has joined, so what was
+     * sent at the join may never have arrived, and the map is sent again until it does.
+     */
+    private static final Set<UUID> GREETED = new HashSet<>();
     /** What each online player was last told they have unlocked. */
     private static final Map<UUID, Integer> UNLOCKS = new HashMap<>();
     /** When each player's last tile request was answered (server ticks). */
@@ -148,6 +152,7 @@ public final class MapServer {
             PENDING.clear();
             RUNNING.clear();
             SYNCED.clear();
+            GREETED.clear();
             UNLOCKS.clear();
             TILE_ASKED.clear();
             NO_MATES.clear();
@@ -158,14 +163,10 @@ public final class MapServer {
         });
         ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> MapTerrain.loaded(level, chunk));
         ServerPlayerEvents.JOIN.register(MapServer::sync);
-        // a client says which payloads it takes only after it has joined: what was sent before that never arrived, so
-        // the map is sent again once its channels are known
-        S2CPlayChannelEvents.REGISTER.register((handler, sender, server, channels) -> {
-            if (channels.contains(MapPayloads.Hello.TYPE.id())) server.execute(() -> sync(handler.getPlayer()));
-        });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUUID();
             SYNCED.remove(id);
+            GREETED.remove(id);
             UNLOCKS.remove(id);
             TILE_ASKED.remove(id);
             NO_MATES.remove(id);
@@ -223,7 +224,7 @@ public final class MapServer {
             if (ignored(player)) continue;
             String before = SYNCED.get(player.getUUID());
             if (before == null) continue; // not joined yet: the join sends everything
-            if (!before.equals(MapModApi.groupOf(player))) sync(player);
+            if (!GREETED.contains(player.getUUID()) || !before.equals(MapModApi.groupOf(player))) sync(player);
             else sendUnlocks(player, false);
         }
     }
@@ -337,7 +338,7 @@ public final class MapServer {
         MinecraftServer server = player.level().getServer();
         String group = MapModApi.groupOf(player);
         SYNCED.put(player.getUUID(), group);
-        if (mapId != null) send(player, new MapPayloads.Hello(mapId, groups().sharedLabel()));
+        if (mapId != null && send(player, new MapPayloads.Hello(mapId, groups().sharedLabel()))) GREETED.add(player.getUUID());
         sendUnlocks(player, true);
         sendMarkers(player);
         if (group.isEmpty()) {
