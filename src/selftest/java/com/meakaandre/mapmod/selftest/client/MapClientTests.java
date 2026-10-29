@@ -11,6 +11,7 @@ import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapFilters;
 import com.meakaandre.mapmod.client.map.MapScreen;
+import com.meakaandre.mapmod.client.map.Waypoints;
 import com.meakaandre.mapmod.client.map.MobRadar;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
@@ -194,6 +195,18 @@ public final class MapClientTests {
             expect("the group's fog and the terrain round the player arrive", MapClient.FOG.containsKey(here) && ClientTiles.version(here) > 0, "");
             expect("a shared marker from the group's other player and the player's own marker arrive",
                 named("Placed by a group mate") != null && named("My marker") != null && MapClient.markers.stream().anyMatch(m -> m.death), MapClient.markers.size() + " markers");
+            if (mc.player != null) {
+                // a point straight ahead shows in the middle of the screen; one to the player's right, right of it
+                var eye = mc.gameRenderer.mainCamera().position();
+                var look = mc.player.getViewVector(1f);
+                double[] ahead = Waypoints.project(eye.x + look.x * 30, eye.y + look.y * 30, eye.z + look.z * 30, 400, 300);
+                double yaw = Math.toRadians(mc.player.getYRot());
+                // the player's right, flat: (-cos yaw, 0, -sin yaw)
+                double[] right = Waypoints.project(eye.x + look.x * 30 - Math.cos(yaw) * 8, eye.y + look.y * 30, eye.z + look.z * 30 - Math.sin(yaw) * 8, 400, 300);
+                expect("a waypoint straight ahead shows in the middle of the screen, one to the right right of it",
+                    ahead != null && Math.abs(ahead[0] - 200) < 3 && Math.abs(ahead[1] - 150) < 3 && right != null && right[0] > 210,
+                    ahead == null ? "behind" : String.format("%.1f,%.1f / %s", ahead[0], ahead[1], right == null ? "behind" : String.format("%.1f", right[0])));
+            }
             List<MovingPoi> moving = MapClient.moving;
             expect("moving POIs arrive", moving.size() == 1 && moving.get(0).kind().equals(TestPois.CART.key()), moving.size() + " moving");
             Set<String> filters = new HashSet<>();

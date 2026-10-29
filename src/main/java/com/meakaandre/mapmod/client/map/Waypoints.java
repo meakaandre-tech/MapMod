@@ -9,6 +9,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3fc;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,13 +34,7 @@ public final class Waypoints {
         Minecraft mc = Minecraft.getInstance();
         LocalPlayer player = mc.player;
         if (player == null || mc.level == null || !MapClient.mappedHere() || MapClient.PINS.isEmpty()) return;
-        Camera camera = mc.gameRenderer.mainCamera();
-        if (!camera.isInitialized()) return;
-        Vec3 eye = camera.position();
-        Vector3fc fwd = camera.forwardVector(), up = camera.upVector(), left = camera.leftVector();
-        double tan = Math.tan(Math.toRadians(camera.getFov()) / 2);
         int w = g.guiWidth(), h = g.guiHeight();
-        double aspect = (double) w / h;
         List<MapClient.Pin> reached = new ArrayList<>();
         for (MapClient.Pin pin : MapClient.PINS.values()) {
             double dist = Math.sqrt(player.distanceToSqr(pin.x() + 0.5, pin.y(), pin.z() + 0.5));
@@ -48,12 +43,9 @@ public final class Waypoints {
                 reached.add(pin);
                 continue;
             }
-            double rx = pin.x() + 0.5 - eye.x, ry = pin.y() + LIFT - eye.y, rz = pin.z() + 0.5 - eye.z;
-            double depth = rx * fwd.x() + ry * fwd.y() + rz * fwd.z();
-            if (depth < 0.5) continue;
-            double sx = (rx * left.x() + ry * left.y() + rz * left.z()) / depth / tan / aspect;
-            double sy = (rx * up.x() + ry * up.y() + rz * up.z()) / depth / tan;
-            int x = (int) Math.round(w / 2.0 - sx * w / 2.0), y = (int) Math.round(h / 2.0 - sy * h / 2.0);
+            double[] at = project(pin.x() + 0.5, pin.y() + LIFT, pin.z() + 0.5, w, h);
+            if (at == null) continue;
+            int x = (int) Math.round(at[0]), y = (int) Math.round(at[1]);
             if (x < -16 || y < -16 || x > w + 16 || y > h + 16) continue;
             MapIcons.centred(g, pin.icon(), x, y, pin.argb());
             String name = death ? Component.translatable("mapmod.map.death_marker").getString() : pin.label();
@@ -64,5 +56,23 @@ public final class Waypoints {
             g.centeredText(mc.font, text, x, y + 9, 0xFFE6E6E6);
         }
         for (MapClient.Pin pin : reached) MapClient.togglePin(pin);
+    }
+
+    /** Where a world point shows on a screen of w by h (GUI pixels), as the camera sees it now; null when behind it. */
+    public static double @Nullable [] project(double x, double y, double z, int w, int h) {
+        Camera camera = Minecraft.getInstance().gameRenderer.mainCamera();
+        if (!camera.isInitialized()) return null;
+        Vec3 eye = camera.position();
+        Vector3fc fwd = camera.forwardVector(), up = camera.upVector(), left = camera.leftVector();
+        // the field of view (vertical), in degrees; taken as radians should it be that small
+        double fov = camera.getFov();
+        if (fov <= 0) fov = Minecraft.getInstance().options.fov().get();
+        double tan = Math.tan((fov < 3.2 ? fov : Math.toRadians(fov)) / 2);
+        double rx = x - eye.x, ry = y - eye.y, rz = z - eye.z;
+        double depth = rx * fwd.x() + ry * fwd.y() + rz * fwd.z();
+        if (depth < 0.5) return null;
+        double sx = (rx * left.x() + ry * left.y() + rz * left.z()) / depth / tan / ((double) w / h);
+        double sy = (rx * up.x() + ry * up.y() + rz * up.z()) / depth / tan;
+        return new double[]{w / 2.0 - sx * w / 2.0, h / 2.0 - sy * h / 2.0};
     }
 }
