@@ -193,6 +193,8 @@ jobs:
         run: |
           # every suite must have run to its end with no failed check, and every screenshot must be there
           mkdir -p /tmp/ci
+          python3 -m pip install --quiet --user pillow || true
+          set -o pipefail
           python3 .github/check-selftests.py /tmp/ci | tee /tmp/ci/selftests.txt
       - name: Publish logs to the ci-logs branch
         if: always()
