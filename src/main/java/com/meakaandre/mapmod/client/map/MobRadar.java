@@ -9,7 +9,7 @@ import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.entity.AgeableMobRenderer;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
-import net.minecraft.client.renderer.entity.state.EntityRenderState;
+import net.minecraft.client.renderer.entity.state.LivingEntityRenderState;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
@@ -103,7 +103,7 @@ public final class MobRadar {
         try {
             EntityRenderer renderer = mc.getEntityRenderDispatcher().getRenderer(e);
             if (!(renderer instanceof LivingEntityRenderer living)) return null;
-            EntityRenderState state = renderer.createRenderState(e, 1f);
+            if (!(renderer.createRenderState(e, 1f) instanceof LivingEntityRenderState state)) return null;
             return living.getTextureLocation(state);
         } catch (RuntimeException ex) {
             MapMod.LOGGER.debug("no map face for {}", e.getType(), ex);
