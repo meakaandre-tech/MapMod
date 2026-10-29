@@ -72,8 +72,8 @@ def main():
         px, (w, h) = im.load(), im.size
         # a gap is the fog colour between two pixels of land on either side; the fog's own weave (its darker and lighter
         # lines) is not land
-        fog = (0x2A, 0x34, 0x40)
-        weave = {fog, (0x31, 0x3C, 0x4A)}
+        fog = (0x14, 0x1A, 0x26)
+        weave = {fog, (0x19, 0x20, 0x2D)}
 
         def gap(a, b, c):
             return a == fog and b not in weave and c not in weave

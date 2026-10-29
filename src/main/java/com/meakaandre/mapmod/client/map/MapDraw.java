@@ -33,7 +33,7 @@ import java.util.Map;
  */
 public final class MapDraw {
     private static final Map<Identifier, ItemStack> ITEMS = new HashMap<>();
-    public static final int PLAYER = 0xFFFFFFFF, MATE = 0xFF5FD4FF, FOG_BACK = 0xFF2A3440;
+    public static final int PLAYER = 0xFFFFFFFF, MATE = 0xFF5FD4FF, FOG_BACK = 0xFF141A26;
     /** Size an item is drawn at in a purity ring (pixels; items are 16). */
     private static final int ITEM_PX = 9;
     /** Height of the strips a round view is drawn in (pixels). */

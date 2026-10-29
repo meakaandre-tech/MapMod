@@ -21,28 +21,34 @@ public final class MapPalette {
     public static int biome(Holder<Biome> biome) {
         String path = biome.unwrapKey().map(k -> k.identifier().getPath()).orElse("");
         if (path.contains("frozen") || path.contains("snowy") || path.contains("ice") || path.contains("grove") || path.contains("jagged")
-            || path.contains("frozen_peaks")) return 0xC6CCCE;
-        if (biome.is(BiomeTags.IS_BADLANDS)) return 0xB57A5E;
-        if (path.contains("desert")) return 0xCFA28A;
-        if (biome.is(BiomeTags.IS_BEACH)) return 0xD2B49A;
-        if (path.contains("stony") || path.contains("peaks") || path.contains("windswept_gravelly")) return 0x8A8986;
-        if (biome.is(BiomeTags.IS_JUNGLE)) return 0x46703A;
-        if (path.contains("swamp")) return 0x4F6248;
-        if (path.contains("mangrove")) return 0x4A6240;
-        if (biome.is(BiomeTags.IS_SAVANNA)) return 0x9E9460;
-        if (biome.is(BiomeTags.IS_TAIGA)) return 0x48634A;
-        if (path.contains("dark_forest") || path.contains("pale_garden")) return 0x3E5638;
-        if (biome.is(BiomeTags.IS_FOREST)) return 0x4E7041;
-        if (path.contains("mushroom")) return 0x7E6E7E;
-        if (path.contains("cherry")) return 0xB89AA4;
-        if (path.contains("meadow")) return 0x6E8E55;
-        return 0x6A8A52;
+            || path.contains("frozen_peaks")) return 0xD5D9DA;
+        if (biome.is(BiomeTags.IS_BADLANDS)) return 0x9C604A;
+        if (path.contains("desert") || path.contains("dune")) return 0xDDB792;
+        if (biome.is(BiomeTags.IS_BEACH)) return 0xE4D6BA;
+        if (path.contains("stony") || path.contains("peaks") || path.contains("windswept_gravelly")) return 0x6B6A6C;
+        if (biome.is(BiomeTags.IS_JUNGLE) || path.contains("jungle")) return 0x3D5C26;
+        if (path.contains("swamp")) return 0x4C5C3A;
+        if (path.contains("mangrove")) return 0x3E5230;
+        if (biome.is(BiomeTags.IS_SAVANNA) || path.contains("savanna")) return 0xC9A47C;
+        if (biome.is(BiomeTags.IS_TAIGA) || path.contains("taiga")) return 0x34483A;
+        if (path.contains("dark_forest") || path.contains("pale_garden")) return 0x2C3A22;
+        if (biome.is(BiomeTags.IS_FOREST) || path.contains("forest") || path.contains("wood")) return 0x36482A;
+        if (path.contains("mushroom")) return 0x7A6474;
+        if (path.contains("cherry")) return 0xB8919C;
+        if (path.contains("meadow")) return 0x5C8C40;
+        if (path.contains("plains") || path.contains("field") || path.contains("grass")) return 0x4F8638;
+        // a biome nobody named here (a mod's): told apart by its climate, which every biome has
+        float t = biome.value().getBaseTemperature();
+        if (t < 0.15f) return 0xD5D9DA;
+        if (!biome.value().hasPrecipitation() && t > 1.0f) return 0xDDB792;
+        if (t > 0.9f) return 0x5A7A34;
+        return 0x46713A;
     }
 
     /** A water pixel by depth (blocks of water over the floor). */
     public static int water(int depth) {
         float t = Math.min(1f, Math.max(0, depth) / DEEPEST_WATER);
-        return mix(0x74AEBB, 0x24496C, t);
+        return mix(0x5DC0D2, 0x4A757B, t);
     }
 
     /** Ground: the biome's colour with a little of the top block's map colour, softened. */
