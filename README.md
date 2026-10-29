@@ -26,7 +26,7 @@ sides, identically).
 | --- | --- |
 | **Sharing groups**: who shares fog, shared markers and compass players | `setGroups(GroupProvider)` — `groupOf(server, uuid)`, optional `same`, `ignored`, `sharedLabel`; `groupChanged(player)`, `mergeGroups(server, from, into)` |
 | **Unlocks**: per-player gates | `setUnlocks(UnlockProvider)` — `unlocked(player, MapFeature)` for `TERRAIN`, `MINIMAP`, `FULLSCREEN`, optional `lockedMessage`; `unlocksChanged(player)` |
-| **POI categories and kinds** | `category(id, label)`; `kind(id, category)` → `PoiKind.Builder` (`label`, `labeller`, `glyph`, `item`, `purity`, `filter`, `subFilters`, `sub(PoiSubType)`, `compassRange`, `compassNearest`, `detail`, `dimColour`) `.register()` |
+| **POI categories and kinds** | `category(id, label)`; `kind(id, category)` → `PoiKind.Builder` (`label`, `labeller`, `glyph`, `item`, `purity`, `filter`, `subFilters`, `sub(PoiSubType)` (a label, items to try in order, a glyph, a colour), `compassRange`, `compassNearest`, `detail`, `dimColour`) `.register()` |
 | **Glyphs** | `MapGlyphs` stock set, `MapGlyphs.register(rows...)` |
 | **POIs worked out per group and region** | `addSource(id, PoiSource<S>)` — `prepare(level, group)` on the server thread, `pois(level, PoiArea, prepared)` on the worker, optional `stamp`, `ready`, `executor`; `refreshPois(server[, group])` |
 | **Chunk hook**: things found in recorded chunks | `addChunkScanner(id, ChunkScanner)` returning `FoundPoi(poi, owner)`; `setChunkPois(level, scanner, cx, cz, list)`; `foundNear(kind, x, z, blocks)`, `foundIn(region, group)` |

@@ -188,7 +188,7 @@ public final class MapTests {
         expect(source, "the filter panel lists players, markers, then the registered categories in order",
             cats.size() >= 3 && cats.get(0) == MapModApi.PLAYERS && cats.get(1) == MapModApi.MARKERS && cats.get(2) == TestPois.FINDS, cats.size() + " categories");
         expect(source, "kinds keep their category, sub-types and filter switches", MapModApi.kind(TestPois.ORE.key()) == TestPois.ORE
-            && TestPois.ORE.subFilters() && !TestPois.ORE.filter() && TestPois.ORE.subTypes().size() == 3 && TestPois.CAMP.filter() && TestPois.CART.category() == null, "");
+            && TestPois.ORE.subFilters() && !TestPois.ORE.filter() && TestPois.ORE.subTypes().size() == 4 && TestPois.CAMP.filter() && TestPois.CART.category() == null, "");
         expect(source, "vanilla's player locator bar is switched off", !server.getGameRules().get(GameRules.LOCATOR_BAR), "");
         expect(source, "the map saves into data/mapmod", MapTerrain.root() != null && MapTerrain.root().endsWith(MapMod.ID)
             && Files.exists(MapTerrain.root().resolve("id.txt")), String.valueOf(MapTerrain.root()));

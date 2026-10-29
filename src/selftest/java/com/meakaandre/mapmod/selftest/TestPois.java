@@ -124,7 +124,7 @@ public final class TestPois {
         }
     };
 
-    public static final String[] SUBS = {"iron", "copper", "gold"};
+    public static final String[] SUBS = {"iron", "copper", "gold", "tin"};
 
     public static long hash(int a, int b) {
         long h = a * 0x9E3779B97F4A7C15L ^ b * 0xC2B2AE3D27D4EB4FL ^ 0x165667B19E3779F9L;
@@ -148,7 +148,10 @@ public final class TestPois {
         ORE = MapModApi.kind(id("ore"), FINDS).label(Component.literal("Test ore")).glyph(MapGlyphs.NODE, 0xFFF0F0F0).purity().subFilters()
             .sub(new PoiSubType("iron", Component.literal("Test iron"), Identifier.fromNamespaceAndPath("minecraft", "raw_iron"), -1, 0))
             .sub(new PoiSubType("copper", Component.literal("Test copper"), Identifier.fromNamespaceAndPath("minecraft", "raw_copper"), -1, 0))
-            .sub(new PoiSubType("gold", Component.literal("Test gold"), null, MapGlyphs.DROP, 0xFFF2D64B))
+            .sub(new PoiSubType("gold", Component.literal("Test gold"), List.<Identifier>of(), MapGlyphs.DROP, 0xFFF2D64B))
+            // a mod's item that may be missing first, a vanilla one after it
+            .sub(new PoiSubType("tin", Component.literal("Test tin"), List.of(Identifier.fromNamespaceAndPath("nosuchmod", "raw_tin"),
+                Identifier.fromNamespaceAndPath("minecraft", "raw_gold")), -1, 0))
             .compassRange(120).detail().register();
         CAMP = MapModApi.kind(id("camp"), FINDS).label(Component.literal("Test camp")).glyph(TENT, 0xFFFFA530).compassNearest().register();
         BEACON = MapModApi.kind(id("beacon"), FINDS).label(Component.literal("Test beacon")).glyph(MapGlyphs.RADAR, 0xFF4FB8E8).compassRange(300).register();

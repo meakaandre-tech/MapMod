@@ -17,7 +17,6 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -116,12 +115,22 @@ public final class MapDraw {
         return kind == null ? 0xFFF0F0F0 : kind.markColour(poi.sub(), poi.purity());
     }
 
-    private static ItemStack item(@Nullable Identifier id) {
-        if (id == null) return ItemStack.EMPTY;
+    private static ItemStack item(Identifier id) {
         return ITEMS.computeIfAbsent(id, k -> {
             Item item = BuiltInRegistries.ITEM.getValue(k);
             return item == null || item == Items.AIR ? ItemStack.EMPTY : new ItemStack(item);
         });
+    }
+
+    /** The item drawn in a POI's purity ring: the first of its kind's or sub-type's items the game has; empty for none. */
+    public static ItemStack item(MapPoi poi) {
+        PoiKind kind = MapModApi.kind(poi.kind());
+        if (kind == null) return ItemStack.EMPTY;
+        for (Identifier id : kind.items(poi.sub())) {
+            ItemStack stack = item(id);
+            if (!stack.isEmpty()) return stack;
+        }
+        return ItemStack.EMPTY;
     }
 
     /** Draws a POI centred on x, y: in a purity ring (an item or a glyph inside) or as its tinted glyph. */
@@ -134,7 +143,7 @@ public final class MapDraw {
         }
         MapIcons.centred(g, MapGlyphs.DISC, x, y, 0xE0202020);
         MapIcons.centred(g, MapGlyphs.RING, x, y, kind.markColour(poi.sub(), poi.purity()));
-        ItemStack stack = item(kind.item(poi.sub()));
+        ItemStack stack = item(poi);
         if (!stack.isEmpty()) {
             g.pose().pushMatrix();
             g.pose().translate(x - ITEM_PX / 2f, y - ITEM_PX / 2f);
