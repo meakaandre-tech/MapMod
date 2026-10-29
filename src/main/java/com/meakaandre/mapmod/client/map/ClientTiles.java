@@ -378,15 +378,18 @@ public final class ClientTiles {
         for (int z = 0; z < SMALL; z++) {
             for (int x = 0; x < SMALL; x++) {
                 int r = 0, g = 0, b = 0;
+                boolean fog = true;
                 for (int dz = 0; dz < 4; dz++) {
                     for (int dx = 0; dx < 4; dx++) {
                         int c = PIXELS[(z * 4 + dz) * n + x * 4 + dx];
+                        if (c != MapPainter.FOG && c != MapPainter.FOG_LINE) fog = false;
                         r += c >> 16 & 255;
                         g += c >> 8 & 255;
                         b += c & 255;
                     }
                 }
-                image.setPixel(x, z, 0xFF000000 | (r / 16) << 16 | (g / 16) << 8 | (b / 16));
+                // unexplored ground stays the plain fog colour, the same as the map's background
+                image.setPixel(x, z, 0xFF000000 | (fog ? MapPainter.FOG : (r / 16) << 16 | (g / 16) << 8 | (b / 16)));
             }
         }
     }
