@@ -1,12 +1,12 @@
 package com.meakaandre.mapmod.map;
 
 /**
- * The map's grid. The map is kept at low resolution: one pixel for every 4 by 4 blocks, so a chunk is 4 by 4 pixels.
- * A region (tile) is 32 by 32 chunks, 512 by 512 blocks, 128 by 128 pixels. Fog of war is kept per chunk.
+ * The map's grid: one pixel a block, so a chunk is 16 by 16 pixels.
+ * A region (tile) is 32 by 32 chunks, 512 by 512 blocks and pixels. Fog of war is kept per chunk.
  */
 public final class MapGrid {
     /** Blocks along one side of a pixel. */
-    public static final int PX_BLOCKS = 4;
+    public static final int PX_BLOCKS = 1;
     /** Pixels along one side of a chunk. */
     public static final int CHUNK_PX = 16 / PX_BLOCKS;
     /** Chunks along one side of a region. */

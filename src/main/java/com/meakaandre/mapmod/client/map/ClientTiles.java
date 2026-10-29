@@ -22,26 +22,20 @@ import java.util.Set;
 /**
  * The client's map tiles: kept on disk per map ({@code mapmod/<map id>/} in the game folder) so a world's map is
  * there at once on the next visit and only changed tiles are sent again, and turned into textures for the screen by
- * {@link MapPainter}: an overview texture per region (a texel for 4 by 4 blocks) and, for regions shown zoomed in, a
- * close-up one (a texel a block).
+ * {@link MapPainter}, a texel a block.
  * <p>
  * Cached tiles are read from disk on a background thread, never while drawing; only regions the group has explored
  * are read at all; and only the {@link #KEPT} regions used most recently keep their tile and texture.
  */
 public final class ClientTiles {
     /** Regions whose tile and texture are kept in memory; the least recently used beyond this are let go. */
-    private static final int KEPT = 192;
+    private static final int KEPT = 72;
 
     private static final class Slot {
         @Nullable MapTile tile;
         @Nullable DynamicTexture texture;
         @Nullable Identifier id;
         boolean stale = true;
-        /** The close-up texture, when the map was zoomed in on this region lately. */
-        @Nullable DynamicTexture detail;
-        @Nullable Identifier detailId;
-        boolean detailStale = true, detailReady;
-        long detailUsed;
         long asked;
         boolean fromDisk;
         /** True while its cached tile is being read from disk: no tile asked for yet, so the disk copy's version counts. */
@@ -74,8 +68,6 @@ public final class ClientTiles {
     }
 
     private static void release(Slot e) {
-        if (lastSlot == e) lastSlot = null;
-        releaseDetail(e);
         if (e.id != null) Minecraft.getInstance().getTextureManager().release(e.id);
         e.texture = null;
         e.id = null;
@@ -243,15 +235,6 @@ public final class ClientTiles {
 
     /** The region's texture, drawn or redrawn as needed; null when nothing is known there. */
     public static @Nullable DynamicTexture texture(long region) {
-        return texture(region, false);
-    }
-
-    /**
-     * The region's texture, drawn or redrawn as needed; null when nothing is known there. {@code detailed} asks for the
-     * close-up one (a texel a block) where it is ready, for a map zoomed in; otherwise, or until it is, the overview one
-     * (a texel for 4 by 4 blocks).
-     */
-    public static @Nullable DynamicTexture texture(long region, boolean detailed) {
         // a region the group has not explored at all is plain fog: nothing is read or kept for it
         long[] fog = MapClient.FOG.get(region);
         if (fog == null) return null;
@@ -265,71 +248,16 @@ public final class ClientTiles {
         if (e.stale && repaintAllowed(1)) {
             NativeImage image = e.texture.getPixels();
             if (image != null) {
-                paint(image, 1, region, e.tile);
+                paint(image, region, e.tile);
                 e.texture.upload();
-                Map3D.changed();
             }
             e.stale = false;
-            e.detailStale = true;
         }
-        if (!detailed) return e.texture;
-        e.detailUsed = ++detailClock;
-        if (e.detail == null) {
-            if (!repaintAllowed(DETAIL_COST)) return e.texture;
-            keepDetailRoom();
-            e.detailId = MapMod.id("map/tile_" + Long.toHexString(region) + "_detail");
-            e.detail = new DynamicTexture(() -> MapMod.ID + " map tile detail", MapGrid.REGION_PX * DETAIL, MapGrid.REGION_PX * DETAIL, false);
-            Minecraft.getInstance().getTextureManager().register(e.detailId, e.detail);
-            e.detailStale = true;
-            e.detailReady = false;
-            details++;
-        } else if (!e.detailStale || !repaintAllowed(DETAIL_COST)) {
-            return e.detailReady ? e.detail : e.texture;
-        }
-        NativeImage image = e.detail.getPixels();
-        if (image != null) {
-            paint(image, DETAIL, region, e.tile);
-            e.detail.upload();
-            Map3D.changed();
-            e.detailReady = true;
-        }
-        e.detailStale = false;
-        return e.detail;
-    }
-
-    /** Close-up texels a data pixel, and the close-up textures kept at most (each a megabyte). */
-    private static final int DETAIL = 4, DETAILS_KEPT = 40;
-    /** A close-up texture costs as much painting as this many overview ones. */
-    private static final int DETAIL_COST = 3;
-    private static int details;
-    private static long detailClock;
-
-    /** Lets go of the close-up texture used longest ago while too many are kept. */
-    private static void keepDetailRoom() {
-        while (details >= DETAILS_KEPT) {
-            Slot oldest = null;
-            for (Slot s : TILES.values()) {
-                if (s.detail != null && (oldest == null || s.detailUsed < oldest.detailUsed)) oldest = s;
-            }
-            if (oldest == null) {
-                details = 0;
-                return;
-            }
-            releaseDetail(oldest);
-        }
-    }
-
-    private static void releaseDetail(Slot e) {
-        if (e.detail == null) return;
-        if (e.detailId != null) Minecraft.getInstance().getTextureManager().release(e.detailId);
-        e.detail = null;
-        e.detailId = null;
-        e.detailReady = false;
-        details--;
+        return e.texture;
     }
 
     /** Overview tiles' worth of painting done in one go at most, and the stretch of time that counts as one go (ns): a frame's worth. */
-    private static final int REPAINTS = 3;
+    private static final int REPAINTS = 2;
     private static final long REPAINT_WINDOW = 16_000_000L;
     private static long windowStart;
     private static int repaints;
@@ -357,70 +285,8 @@ public final class ClientTiles {
         return e.tile.known(i) ? (int) e.tile.height[i] : null;
     }
 
-    /**
-     * For the 3D map, on the client thread: the ground's (or water's) height at a point, smoothly between the recorded
-     * samples, and the painted map's colour there (ARGB). The height is NaN where nothing is recorded; the colour 0 where
-     * the region is not painted.
-     */
-    static float surface(double x, double z) {
-        double gx = x / MapGrid.PX_BLOCKS - 0.5, gz = z / MapGrid.PX_BLOCKS - 0.5;
-        int x0 = (int) Math.floor(gx), z0 = (int) Math.floor(gz);
-        double fx = gx - x0, fz = gz - z0;
-        float sum = 0, w = 0;
-        for (int k = 0; k < 4; k++) {
-            int px = x0 + (k & 1), pz = z0 + (k >> 1);
-            double weight = ((k & 1) == 0 ? 1 - fx : fx) * ((k >> 1) == 0 ? 1 - fz : fz);
-            if (weight <= 0) continue;
-            float h = sampleHeight(px, pz);
-            if (Float.isNaN(h)) continue;
-            sum += (float) (h * weight);
-            w += (float) weight;
-        }
-        return w <= 0 ? Float.NaN : sum / w;
-    }
-
-    private static long lastRegion = Long.MIN_VALUE;
-    private static @Nullable Slot lastSlot;
-
-    private static @Nullable Slot slotAt(long region) {
-        if (region != lastRegion || lastSlot == null) {
-            lastSlot = TILES.get(region);
-            lastRegion = region;
-        }
-        return lastSlot;
-    }
-
-    /** The height of a data pixel (in data pixel coordinates of the whole world), or NaN. */
-    private static float sampleHeight(int px, int pz) {
-        int bx = px * MapGrid.PX_BLOCKS, bz = pz * MapGrid.PX_BLOCKS;
-        Slot e = slotAt(MapGrid.regionOfBlock(bx, bz));
-        if (e == null || e.tile == null) return Float.NaN;
-        int i = MapTile.index(Math.floorMod(px, MapGrid.REGION_PX), Math.floorMod(pz, MapGrid.REGION_PX));
-        return e.tile.known(i) ? e.tile.height[i] : Float.NaN;
-    }
-
-    static int painted(double x, double z) {
-        int bx = (int) Math.floor(x), bz = (int) Math.floor(z);
-        Slot e = slotAt(MapGrid.regionOfBlock(bx, bz));
-        if (e == null) return 0;
-        int lx = Math.floorMod(bx, MapGrid.REGION_BLOCKS), lz = Math.floorMod(bz, MapGrid.REGION_BLOCKS);
-        if (e.detail != null && e.detailReady) {
-            NativeImage image = e.detail.getPixels();
-            if (image != null) return image.getPixel(lx * DETAIL / MapGrid.PX_BLOCKS, lz * DETAIL / MapGrid.PX_BLOCKS);
-        }
-        if (e.texture == null) return 0;
-        NativeImage image = e.texture.getPixels();
-        return image == null ? 0 : image.getPixel(lx / MapGrid.PX_BLOCKS, lz / MapGrid.PX_BLOCKS);
-    }
-
-    /** True if a region's overview is painted and up to date. */
-    static boolean painted(long region) {
-        Slot e = TILES.get(region);
-        return e != null && e.texture != null && !e.stale;
-    }
-
     public static void clear() {
-        lastSlot = null;
+        BlockColours.clear();
         saveDirty();
         for (Slot e : TILES.values()) release(e);
         TILES.clear();
@@ -429,7 +295,7 @@ public final class ClientTiles {
 
     // ------------------------------------------------------------------------------------------------ drawing
 
-    private static void paint(NativeImage image, int up, long region, @Nullable MapTile tile) {
+    private static void paint(NativeImage image, long region, @Nullable MapTile tile) {
         int rx = MapGrid.keyX(region), rz = MapGrid.keyZ(region);
         MapTile[] near = new MapTile[9];
         long[][] fog = new long[9][];
@@ -445,6 +311,6 @@ public final class ClientTiles {
                 }
             }
         }
-        MapPainter.paint(image, up, region, tile == null ? null : new MapPainter.Grid(near), fog);
+        MapPainter.paint(image, tile, near, fog);
     }
 }

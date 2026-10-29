@@ -30,7 +30,7 @@ import java.util.List;
 
 /**
  * The Overworld's map terrain on the server, kept low-resolution and on disk ({@code data/mapmod/terrain}). A chunk is
- * recorded (16 samples: height, the top block's colour, the biome) when it loads and again a few seconds after a block
+ * recorded (a pixel a block: the top block, its biome and height) when it loads and again a few seconds after a block
  * in it changes, and nowhere else: there is no scanning of the world. A reveal with a guess fills land nobody has loaded
  * with the world generator's guess, which real recording replaces.
  * <p>
@@ -374,8 +374,11 @@ public final class MapTerrain {
 
     // ------------------------------------------------------------------------------------------------ guesses
 
-    /** A chunk of generator guesses: 2 by 2 samples, each covering 2 by 2 pixels. */
-    public record Guess(long chunk, int[] colour, short[] height) {
+    /**
+     * A chunk of generator guesses: 2 by 2 samples, each covering 8 by 8 pixels: the block the ground likely shows, its
+     * map colour, the biome, flags, water depth and height.
+     */
+    public record Guess(long chunk, String[] block, int[] colour, String[] biome, int[] flags, int[] depth, short[] height) {
     }
 
     /** True if the chunk has nothing recorded or only a guess (so a guess may fill it). */
@@ -388,23 +391,35 @@ public final class MapTerrain {
 
     /** Off the server thread: the generator's ground for a chunk, at 2 by 2 points. */
     public static Guess guess(ServerLevel level, int cx, int cz, int seaLevel) {
-        int[] colour = new int[GUESS_POINTS];
-        short[] height = new short[GUESS_POINTS];
-        for (int s = 0; s < GUESS_POINTS; s++) {
+        int n = GUESS_POINTS;
+        String[] block = new String[n], biome = new String[n];
+        int[] colour = new int[n], flags = new int[n], depth = new int[n];
+        short[] height = new short[n];
+        for (int s = 0; s < n; s++) {
             int x = (cx << 4) + (s & 1) * GUESS_SPACING + GUESS_INSET, z = (cz << 4) + (s >> 1) * GUESS_SPACING + GUESS_INSET;
             MapGuess.Column col = MapGuess.column(level, x, z);
+            flags[s] = MapTile.KNOWN | MapTile.GUESSED;
+            biome[s] = "";
             if (col == null) {
-                colour[s] = MapRecorder.VOID_COLOUR | MapTile.KNOWN | MapTile.GUESSED;
+                block[s] = "";
+                colour[s] = MapRecorder.VOID_COLOUR;
                 height[s] = (short) level.getMinY();
-            } else if (col.y() < seaLevel - 1) {
-                colour[s] = MapPalette.water(seaLevel - 1 - col.y()) | MapTile.withDepth(seaLevel - 1 - col.y()) | MapTile.KNOWN | MapTile.GUESSED | MapTile.WATER;
+                continue;
+            }
+            biome[s] = col.biome().unwrapKey().map(k -> k.identifier().toString()).orElse("");
+            boolean underwater = col.y() < seaLevel - 1;
+            block[s] = MapPalette.guessBlock(col.biome(), underwater);
+            colour[s] = MapPalette.guess(col.biome());
+            if (underwater) {
+                flags[s] |= MapTile.WATER;
+                depth[s] = seaLevel - 1 - col.y();
+                colour[s] = MapPalette.water(depth[s]);
                 height[s] = (short) (seaLevel - 1);
             } else {
-                colour[s] = MapPalette.guess(col.biome()) | MapTile.KNOWN | MapTile.GUESSED;
                 height[s] = (short) col.y();
             }
         }
-        return new Guess(MapGrid.key(cx, cz), colour, height);
+        return new Guess(MapGrid.key(cx, cz), block, colour, biome, flags, depth, height);
     }
 
     /** On the server thread: puts guesses in where nothing real has been recorded. Returns the regions changed. */
@@ -422,7 +437,7 @@ public final class MapTerrain {
                     int i = MapTile.index(baseX + px, baseZ + pz);
                     if (tile.known(i) && !tile.guessed(i)) continue;
                     int s = (pz >= MapGrid.CHUNK_PX / 2 ? 2 : 0) + (px >= MapGrid.CHUNK_PX / 2 ? 1 : 0);
-                    tile.colour[i] = g.colour()[s];
+                    tile.cell[i] = MapTile.cell(tile.block(g.block()[s], g.colour()[s]), tile.biome(g.biome()[s]), g.flags()[s], g.depth()[s]);
                     tile.height[i] = g.height()[s];
                     any = true;
                 }

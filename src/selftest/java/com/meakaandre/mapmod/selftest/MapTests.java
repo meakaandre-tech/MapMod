@@ -215,7 +215,7 @@ public final class MapTests {
         MapTerrain.record(level, chunk);
         long region = MapGrid.regionOfChunk(X >> 4, Z >> 4);
         MapTile tile = MapTerrain.tile(region);
-        expect(source, "a loaded chunk is recorded as 16 pixels", knownPixels(tile, X >> 4, Z >> 4) == 16, knownPixels(tile, X >> 4, Z >> 4) + " of 16");
+        expect(source, "a loaded chunk is recorded as 256 pixels, a pixel a block", knownPixels(tile, X >> 4, Z >> 4) == 256, knownPixels(tile, X >> 4, Z >> 4) + " of 256");
         boolean same = false;
         int bytes = 0;
         if (tile != null) {
@@ -223,12 +223,12 @@ public final class MapTests {
                 byte[] packed = tile.pack();
                 bytes = packed.length;
                 MapTile back = MapTile.unpack(packed);
-                same = back.version == tile.version && Arrays.equals(back.colour, tile.colour) && Arrays.equals(back.height, tile.height);
+                same = back.version == tile.version && Arrays.equals(back.cell, tile.cell) && back.blocks.equals(tile.blocks) && back.biomes.equals(tile.biomes) && Arrays.equals(back.height, tile.height);
             } catch (IOException e) {
                 same = false;
             }
         }
-        expect(source, "a tile packs small and unpacks the same", same && bytes < 120_000, bytes + " bytes");
+        expect(source, "a tile packs small and unpacks the same", same && bytes < 400_000, bytes + " bytes");
 
         // ---- the chunk hook
         List<MapPoi> seenB = MapModApi.foundIn(region, B), seenA = MapModApi.foundIn(region, A);
@@ -394,7 +394,7 @@ public final class MapTests {
             long region = MapGrid.regionOfChunk(X >> 4, Z >> 4);
             RESTART.expect(source, "the map keeps its id", MapTerrain.root() != null && Files.exists(MapTerrain.root().resolve("id.txt")), "");
             RESTART.expect(source, "a group's fog loads again", MapModApi.explored(A, X >> 4, Z >> 4) && MapModApi.explored(B, (X + 4000) >> 4, Z >> 4), "");
-            RESTART.expect(source, "recorded terrain loads again", knownPixels(MapTerrain.tile(region), X >> 4, Z >> 4) == 16, "");
+            RESTART.expect(source, "recorded terrain loads again", knownPixels(MapTerrain.tile(region), X >> 4, Z >> 4) == 256, "");
             RESTART.expect(source, "what the chunk hook found loads again", MapModApi.foundIn(region, B).stream().anyMatch(p -> p.kind().equals(TestPois.BEACON.key())), "");
             RESTART.expect(source, "markers load again", MapMarkers.get(server).all().stream().anyMatch(m -> m.name.equals("Restart check") && m.shared && m.group.equals(A)), "");
             RESTART.expect(source, "the guessed land of a reveal loads again", guessedAt(X + 4700, Z), "");

@@ -1,120 +1,90 @@
 package com.meakaandre.mapmod.map;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Holder;
-import net.minecraft.tags.BlockTags;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.MapColor;
 
 /**
- * Records a loaded chunk's 16 map pixels (the natural ground's height and the biome's colour) into its tile: on the server for
- * everyone, and on a client by itself when the server has no MapMod.
+ * Records a loaded chunk into its tile, a pixel a block, as Xaero's map does: the top block a player would see from
+ * above (plants like grass and flowers are looked past, snow is not), its biome and height; for water its depth and the
+ * floor's block. On the server for everyone, and on a client by itself when the server has no MapMod.
  */
 public final class MapRecorder {
     /** Colour of a column with nothing in it (the void). */
     public static final int VOID_COLOUR = 0x202020;
-    /** Blocks a client looks down through water for the floor at most (clients have no ocean-floor heightmap). */
-    private static final int MAX_WATER_DEPTH = 40;
+    /** Blocks looked down through water for the floor at most. */
+    private static final int MAX_WATER_DEPTH = MapTile.MAX_DEPTH;
+    /** Blocks looked down past see-through blocks and plants at most. */
+    private static final int MAX_LOOK = 32;
 
     private MapRecorder() {
     }
 
-    /** Blocks under the top one a pixel looks down for natural ground at most (through trees, plants and buildings). */
-    private static final int MAX_DEPTH = 48;
-    /** A soft orange for lava, which counts as ground. */
-    private static final int LAVA_COLOUR = 0xC9733F;
-
-    /**
-     * Ground the map shows: what the world is made of, not what stands on it. Trees, plants, buildings and paths are
-     * looked through, so the map shows the land's shape and its biome's colour, as Satisfactory's map does.
-     */
-    public static boolean natural(BlockState state) {
-        return state.is(BlockTags.DIRT) || state.is(BlockTags.SAND) || state.is(BlockTags.BASE_STONE_OVERWORLD) || state.is(BlockTags.TERRACOTTA)
-            || state.is(BlockTags.SNOW) || state.is(BlockTags.ICE) || state.is(Blocks.GRAVEL) || state.is(Blocks.CLAY) || state.is(Blocks.SANDSTONE)
-            || state.is(Blocks.RED_SANDSTONE) || state.is(Blocks.CALCITE) || state.is(Blocks.BEDROCK) || state.is(Blocks.OBSIDIAN)
-            || state.is(BlockTags.ORES);
+    /** True for blocks a map looks past: nothing to see (air, glass), or small plants (grass, flowers, saplings). */
+    private static boolean seeThrough(BlockState state, LevelChunk chunk, BlockPos pos) {
+        if (state.isAir()) return true;
+        if (state.is(Blocks.SNOW)) return false;
+        if (!state.getFluidState().isEmpty()) return false;
+        MapColor colour = state.getMapColor(chunk, pos);
+        return colour == MapColor.NONE || state.canBeReplaced();
     }
 
-    /**
-     * Writes the chunk's pixels into the tile of its region: for each, the height of its natural ground and its biome's
-     * soft colour, or for water the depth's blue. {@code oceanFloor} is kept for callers and no longer needed: the floor
-     * under water is found by looking down. Returns true if a pixel changed.
-     */
-    public static boolean record(Level level, LevelChunk chunk, MapTile tile, boolean oceanFloor) {
+    public static String name(BlockState state) {
+        return BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+    }
+
+    /** Writes the chunk's pixels into the tile of its region. Returns true if a pixel changed. */
+    public static boolean record(Level level, LevelChunk chunk, MapTile tile, boolean server) {
         int cx = chunk.getPos().x(), cz = chunk.getPos().z();
         boolean any = false;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         int baseX = Math.floorMod(cx, MapGrid.REGION_CHUNKS) * MapGrid.CHUNK_PX, baseZ = Math.floorMod(cz, MapGrid.REGION_CHUNKS) * MapGrid.CHUNK_PX;
         int min = level.getMinY();
-        for (int pz = 0; pz < MapGrid.CHUNK_PX; pz++) {
-            for (int px = 0; px < MapGrid.CHUNK_PX; px++) {
-                int lx = px * MapGrid.PX_BLOCKS + MapGrid.PX_BLOCKS / 2, lz = pz * MapGrid.PX_BLOCKS + MapGrid.PX_BLOCKS / 2;
+        for (int lz = 0; lz < 16; lz++) {
+            for (int lx = 0; lx < 16; lx++) {
                 int x = (cx << 4) + lx, z = (cz << 4) + lz;
                 int top = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, lx, lz);
-                int colour, height;
+                int cell, height;
                 if (top <= min) {
-                    colour = VOID_COLOUR | MapTile.KNOWN;
+                    cell = MapTile.cell(tile.block("", VOID_COLOUR), 0, MapTile.KNOWN, 0);
                     height = min;
                 } else {
-                    // down from the top block to the first natural ground or water
-                    int y = top, found = Integer.MIN_VALUE;
-                    boolean water = false, lava = false;
-                    for (; y > min && top - y <= MAX_DEPTH; y--) {
-                        pos.set(x, y, z);
-                        BlockState state = chunk.getBlockState(pos);
-                        if (state.getFluidState().is(FluidTags.WATER)) {
-                            water = true;
-                            found = y;
-                            break;
+                    int y = top;
+                    BlockState state = chunk.getBlockState(pos.set(x, y, z));
+                    // down past air, glass and small plants to what is seen from above
+                    while (y > min && top - y < MAX_LOOK && seeThrough(state, chunk, pos)) state = chunk.getBlockState(pos.set(x, --y, z));
+                    height = y;
+                    int flags = MapTile.KNOWN, depth = 0;
+                    if (state.getFluidState().is(FluidTags.WATER)) {
+                        // through the water (and the weed in it) to the floor
+                        flags |= MapTile.WATER;
+                        int floor = y;
+                        while (floor > min && y - floor < MAX_WATER_DEPTH && !state.getFluidState().isEmpty()) {
+                            state = chunk.getBlockState(pos.set(x, --floor, z));
                         }
-                        if (state.getFluidState().is(FluidTags.LAVA)) {
-                            lava = true;
-                            found = y;
-                            break;
-                        }
-                        if (natural(state)) {
-                            found = y;
-                            break;
-                        }
+                        depth = y - floor;
+                        if (!state.getFluidState().isEmpty()) state = Blocks.WATER.defaultBlockState();
                     }
-                    if (found == Integer.MIN_VALUE) found = top;
-                    pos.set(x, found, z);
-                    if (water) {
-                        int floor = floor(chunk, pos, found, min);
-                        colour = MapPalette.water(found - floor) | MapTile.withDepth(found - floor) | MapTile.KNOWN | MapTile.WATER;
-                    } else if (lava) {
-                        colour = LAVA_COLOUR | MapTile.KNOWN;
-                    } else {
-                        Holder<Biome> biome = level.getBiome(pos);
-                        colour = MapPalette.ground(chunk.getBlockState(pos), chunk, pos, biome) | MapTile.KNOWN;
-                    }
-                    height = found;
+                    pos.set(x, height, z);
+                    int colour = state.getMapColor(chunk, pos).col;
+                    int block = tile.block(name(state), colour);
+                    int biome = tile.biome(level.getBiome(pos).unwrapKey().map(k -> k.identifier().toString()).orElse(""));
+                    cell = MapTile.cell(block, biome, flags, depth);
                 }
-                int i = MapTile.index(baseX + px, baseZ + pz);
-                if (tile.colour[i] != colour || tile.height[i] != height) {
-                    tile.colour[i] = colour;
+                int i = MapTile.index(baseX + lx, baseZ + lz);
+                if (tile.cell[i] != cell || tile.height[i] != height) {
+                    tile.cell[i] = cell;
                     tile.height[i] = (short) height;
                     any = true;
                 }
             }
         }
         return any;
-    }
-
-    /** The top of the ground under water, looked for downwards from the surface. */
-    private static int floor(LevelChunk chunk, BlockPos.MutableBlockPos pos, int top, int min) {
-        int y = top;
-        while (y > min && top - y < MAX_WATER_DEPTH) {
-            pos.setY(y);
-            if (!chunk.getBlockState(pos).getFluidState().is(FluidTags.WATER)) break;
-            y--;
-        }
-        pos.setY(top);
-        return y;
     }
 }
