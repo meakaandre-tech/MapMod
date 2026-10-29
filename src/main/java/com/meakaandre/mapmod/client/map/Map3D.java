@@ -41,7 +41,7 @@ public final class Map3D {
     private static @Nullable DynamicTexture texture;
     private static @Nullable Identifier textureId;
     private static @Nullable Frame shown;
-    private static @Nullable MapModel.Cam drawing;
+    private static MapModel.@Nullable Cam drawing;
     private static boolean busy;
     private static long lastDraw;
     /** True if the last drawing was made before every region under it was painted. */
