@@ -60,9 +60,9 @@ final class MapPainter {
                         colours.put(key, base);
                     }
                     rgb = base;
-                    boolean guess = MapTile.blockOf(cell) < tile.blocks.size() && tile.blocks.get(MapTile.blockOf(cell)).isEmpty();
+                    boolean plain = MapTile.blockOf(cell) < tile.blocks.size() && tile.blocks.get(MapTile.blockOf(cell)).isEmpty();
                     if (MapTile.water(cell)) {
-                        if (!guess) {
+                        if (!plain) {
                             // the floor seen through the water
                             int water = BlockColours.colour("minecraft:water", biome(tile, cell), 0x3F76E4);
                             float alpha = Math.min(WATER_ALPHA_MAX, WATER_ALPHA + MapTile.depth(cell) * WATER_ALPHA_PER_BLOCK);
@@ -72,7 +72,8 @@ final class MapPainter {
                         // lighter where higher than the block north of it, darker where lower
                         int above = MapTile.index(px, pz > 0 ? pz - 1 : n - 1);
                         MapTile t = pz > 0 ? tile : north;
-                        if (t != null && t.known(above) && !MapTile.water(t.cell[above])) {
+                        // (guesses are 8 blocks a sample: they are left flat, or their steps would show as stripes)
+                        if (t != null && t.known(above) && !MapTile.water(t.cell[above]) && !tile.guessed(i) && !t.guessed(above)) {
                             int d = tile.height[i] - t.height[above];
                             float light = 1f;
                             if (d > 0) light = Math.min(UP_LIGHT + (d - 1) * STEP_LIGHT, 1.25f);

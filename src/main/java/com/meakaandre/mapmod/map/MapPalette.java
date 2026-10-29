@@ -43,6 +43,34 @@ public final class MapPalette {
         return 0x46713A;
     }
 
+    /**
+     * The block a biome's ground most likely shows from above, for a guess over land nobody has loaded (a forest shows
+     * its leaves, a desert its sand, a snowy biome snow). Any biome works: a mod's is told apart by its climate.
+     */
+    public static String guessBlock(Holder<Biome> biome, boolean underwater) {
+        String path = biome.unwrapKey().map(k -> k.identifier().getPath()).orElse("");
+        if (underwater) return path.contains("deep") || path.contains("cold") || path.contains("frozen") ? "minecraft:gravel" : "minecraft:sand";
+        if (path.contains("frozen") || path.contains("snowy") || path.contains("ice") || path.contains("grove") || path.contains("jagged")) {
+            return path.contains("taiga") ? "minecraft:spruce_leaves" : "minecraft:snow_block";
+        }
+        if (biome.is(BiomeTags.IS_BADLANDS)) return "minecraft:red_sand";
+        if (path.contains("desert") || path.contains("dune") || biome.is(BiomeTags.IS_BEACH)) return "minecraft:sand";
+        if (path.contains("stony") || path.contains("peaks") || path.contains("windswept_gravelly")) return "minecraft:stone";
+        if (path.contains("mushroom")) return "minecraft:mycelium";
+        if (biome.is(BiomeTags.IS_JUNGLE) || path.contains("jungle")) return "minecraft:jungle_leaves";
+        if (path.contains("mangrove")) return "minecraft:mangrove_leaves";
+        if (biome.is(BiomeTags.IS_TAIGA) || path.contains("taiga")) return "minecraft:spruce_leaves";
+        if (path.contains("dark_forest")) return "minecraft:dark_oak_leaves";
+        if (path.contains("pale_garden")) return "minecraft:pale_oak_leaves";
+        if (path.contains("cherry")) return "minecraft:cherry_leaves";
+        if (path.contains("birch")) return "minecraft:birch_leaves";
+        if (biome.is(BiomeTags.IS_FOREST) || path.contains("forest") || path.contains("wood")) return "minecraft:oak_leaves";
+        float t = biome.value().getBaseTemperature();
+        if (t < 0.15f) return "minecraft:snow_block";
+        if (!biome.value().hasPrecipitation() && t > 1.0f) return "minecraft:sand";
+        return "minecraft:grass_block";
+    }
+
     /** A water pixel by depth (blocks of water over the floor). */
     public static int water(int depth) {
         float t = Math.min(1f, Math.max(0, depth) / DEEPEST_WATER);
