@@ -2,6 +2,17 @@ cmd mapmod worldtest check join
 wait 30 SELFTEST client done join
 cmd time set noon
 cmd weather clear
+cmd difficulty easy
+cmd execute at @p run summon husk ~12 ~ ~6 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon creeper ~-10 ~ ~14 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon spider ~18 ~ ~-12 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon enderman ~-16 ~ ~-8 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon cow ~6 ~ ~-18 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon pig ~-20 ~ ~4 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon sheep ~22 ~ ~16 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon chicken ~-6 ~ ~-24 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon villager ~26 ~ ~-2 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+cmd execute at @p run summon pig ~-14 ~ ~22 {NoAI:1b,PersistenceRequired:1b,Silent:1b,Age:-24000}
 cmd mapmod worldtest setup
 wait 60 SELFTEST smoke setup done.
 sleep 2

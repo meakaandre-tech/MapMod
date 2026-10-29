@@ -37,7 +37,7 @@ public final class MapRecorder {
         return state.is(BlockTags.DIRT) || state.is(BlockTags.SAND) || state.is(BlockTags.BASE_STONE_OVERWORLD) || state.is(BlockTags.TERRACOTTA)
             || state.is(BlockTags.SNOW) || state.is(BlockTags.ICE) || state.is(Blocks.GRAVEL) || state.is(Blocks.CLAY) || state.is(Blocks.SANDSTONE)
             || state.is(Blocks.RED_SANDSTONE) || state.is(Blocks.CALCITE) || state.is(Blocks.BEDROCK) || state.is(Blocks.OBSIDIAN)
-            || state.is(BlockTags.COAL_ORES) || state.is(BlockTags.IRON_ORES) || state.is(BlockTags.COPPER_ORES);
+            || state.is(BlockTags.ORES);
     }
 
     /**

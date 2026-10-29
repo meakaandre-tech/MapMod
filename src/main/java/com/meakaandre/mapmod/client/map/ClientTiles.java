@@ -42,6 +42,9 @@ public final class ClientTiles {
     /** Light on a major contour, a contour and the shore. */
     private static final float MAJOR_CONTOUR_LIGHT = 0.72f, CONTOUR_LIGHT = 0.86f, SHORE_LIGHT = 0.8f;
 
+    /** Pixels either way a colour is blended over. */
+    private static final int BLUR = 2;
+
     /** Regions whose tile and texture are kept in memory; the least recently used beyond this are let go. */
     private static final int KEPT = 192;
 
@@ -209,7 +212,7 @@ public final class ClientTiles {
     }
 
     /** The region's texture, drawn or redrawn as needed; null when nothing is known there. */
-    public static @Nullable Identifier texture(long region) {
+    public static @Nullable DynamicTexture texture(long region) {
         // a region the group has not explored at all is plain fog: nothing is read or kept for it
         long[] fog = MapClient.FOG.get(region);
         if (fog == null) return null;
@@ -228,7 +231,7 @@ public final class ClientTiles {
             }
             e.stale = false;
         }
-        return e.id;
+        return e.texture;
     }
 
     /** The height recorded at a block, or null. */
@@ -252,6 +255,7 @@ public final class ClientTiles {
 
     private static void paint(NativeImage image, @Nullable MapTile tile, long[] fog) {
         int n = MapGrid.REGION_PX;
+        int[] base = tile == null ? null : smoothed(tile);
         for (int pz = 0; pz < n; pz++) {
             for (int px = 0; px < n; px++) {
                 int chunkBit = (pz / MapGrid.CHUNK_PX) * MapGrid.REGION_CHUNKS + px / MapGrid.CHUNK_PX;
@@ -261,11 +265,47 @@ public final class ClientTiles {
                 } else if (tile == null || !tile.known(MapTile.index(px, pz))) {
                     rgb = UNKNOWN;
                 } else {
-                    rgb = shade(tile, px, pz);
+                    rgb = shade(tile, base[MapTile.index(px, pz)], px, pz);
                 }
                 image.setPixel(px, pz, 0xFF000000 | rgb);
             }
         }
+    }
+
+    /**
+     * Each pixel's colour blended with its neighbours' (land with land, water with water), so biomes and depths run into
+     * each other softly, as on Satisfactory's map, instead of meeting at hard pixel edges.
+     */
+    private static int[] smoothed(MapTile tile) {
+        int n = MapGrid.REGION_PX;
+        int[] out = new int[MapTile.AREA];
+        for (int pz = 0; pz < n; pz++) {
+            for (int px = 0; px < n; px++) {
+                int i = MapTile.index(px, pz);
+                if (!tile.known(i)) continue;
+                boolean wet = (tile.colour[i] & MapTile.WATER) != 0;
+                int r = 0, g = 0, b = 0, w = 0;
+                for (int dz = -BLUR; dz <= BLUR; dz++) {
+                    int z = pz + dz;
+                    if (z < 0 || z >= n) continue;
+                    for (int dx = -BLUR; dx <= BLUR; dx++) {
+                        int x = px + dx;
+                        if (x < 0 || x >= n) continue;
+                        int j = MapTile.index(x, z);
+                        if (!tile.known(j) || ((tile.colour[j] & MapTile.WATER) != 0) != wet) continue;
+                        // nearer pixels count more
+                        int weight = BLUR + 1 - Math.max(Math.abs(dx), Math.abs(dz));
+                        int c = tile.colour[j];
+                        r += (c >> 16 & 255) * weight;
+                        g += (c >> 8 & 255) * weight;
+                        b += (c & 255) * weight;
+                        w += weight;
+                    }
+                }
+                out[i] = w == 0 ? tile.colour[i] & 0xFFFFFF : (r / w) << 16 | (g / w) << 8 | (b / w);
+            }
+        }
+        return out;
     }
 
     private static int h(MapTile tile, int px, int pz) {
@@ -282,9 +322,8 @@ public final class ClientTiles {
     }
 
     /** One pixel: its colour, lit from the north-west, with contour lines and shore lines. */
-    private static int shade(MapTile tile, int px, int pz) {
+    private static int shade(MapTile tile, int c, int px, int pz) {
         int i = MapTile.index(px, pz);
-        int c = tile.colour[i] & 0xFFFFFF;
         int here = tile.height[i];
         boolean wet = (tile.colour[i] & MapTile.WATER) != 0;
         float light = 1f;

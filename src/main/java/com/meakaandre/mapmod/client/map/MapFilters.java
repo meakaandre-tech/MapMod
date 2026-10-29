@@ -19,6 +19,8 @@ import java.util.List;
  */
 public final class MapFilters {
     public static final String PLACED = "markers:placed", DEATHS = "markers:death";
+    /** The mob radar's switches: all mobs, and hostile and passive ones (the client's own, not a category of the API). */
+    public static final String MOBS = "cat:mapmod:mobs", HOSTILE = "mobs:hostile", PASSIVE = "mobs:passive";
 
     /**
      * One switch.
@@ -47,6 +49,9 @@ public final class MapFilters {
             if (c == MapModApi.MARKERS) {
                 out.add(new Filter(PLACED, Component.translatable("mapmod.map.filter.placed"), cat));
                 out.add(new Filter(DEATHS, Component.translatable("mapmod.map.filter.deaths"), cat));
+                out.add(new Filter(MOBS, Component.translatable("mapmod.map.filter.mobs"), null));
+                out.add(new Filter(HOSTILE, Component.translatable("mapmod.map.filter.hostile"), MOBS));
+                out.add(new Filter(PASSIVE, Component.translatable("mapmod.map.filter.passive"), MOBS));
             }
             for (PoiKind k : kinds) {
                 if (k.category() == null || !k.category().id().equals(c.id())) continue;

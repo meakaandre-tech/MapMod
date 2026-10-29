@@ -119,6 +119,7 @@ public class MapScreen extends Screen {
         g.enableScissor(v.left(), v.top(), v.left() + v.width(), v.top() + v.height());
         MapDraw.tiles(g, v);
         MapHud.things(g, v, true);
+        MobRadar.draw(g, v, true);
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) MapDraw.self(g, (float) v.sx(mc.player.getX()), (float) v.sy(mc.player.getZ()));
         g.disableScissor();
