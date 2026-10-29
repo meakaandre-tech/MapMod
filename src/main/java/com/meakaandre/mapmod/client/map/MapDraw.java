@@ -71,17 +71,23 @@ public final class MapDraw {
         }
     }
 
-    /** The fog-coloured ground and every known tile in the view, clipped to it. */
+    /**
+     * The fog-coloured ground and every known tile in the view, clipped to it. Each tile's edges are put on whole pixels
+     * from the same rounding of the region's corners, so neighbouring tiles meet exactly: drawn at a fraction of a pixel,
+     * a zoomed-out map could leave a one-pixel line of the fog colour between two of them.
+     */
     public static void tiles(GuiGraphicsExtractor g, View v) {
         g.fill(v.left, v.top, v.left + v.width, v.top + v.height, FOG_BACK);
-        float size = (float) (MapGrid.REGION_BLOCKS * v.scale) / MapGrid.REGION_PX;
         for (long region : v.regions()) {
             Identifier id = ClientTiles.texture(region);
             if (id == null) continue;
-            double x = v.sx((double) MapGrid.keyX(region) * MapGrid.REGION_BLOCKS), y = v.sy((double) MapGrid.keyZ(region) * MapGrid.REGION_BLOCKS);
+            double rx = (double) MapGrid.keyX(region) * MapGrid.REGION_BLOCKS, rz = (double) MapGrid.keyZ(region) * MapGrid.REGION_BLOCKS;
+            int x0 = (int) Math.round(v.sx(rx)), x1 = (int) Math.round(v.sx(rx + MapGrid.REGION_BLOCKS));
+            int y0 = (int) Math.round(v.sy(rz)), y1 = (int) Math.round(v.sy(rz + MapGrid.REGION_BLOCKS));
+            if (x1 <= x0 || y1 <= y0) continue;
             g.pose().pushMatrix();
-            g.pose().translate((float) x, (float) y);
-            g.pose().scale(size, size);
+            g.pose().translate(x0, y0);
+            g.pose().scale((float) (x1 - x0) / MapGrid.REGION_PX, (float) (y1 - y0) / MapGrid.REGION_PX);
             g.blit(RenderPipelines.GUI_TEXTURED, id, 0, 0, 0, 0, MapGrid.REGION_PX, MapGrid.REGION_PX, MapGrid.REGION_PX, MapGrid.REGION_PX);
             g.pose().popMatrix();
         }
