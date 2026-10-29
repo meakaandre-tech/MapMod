@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "fix/selftest-ore-spots"]
   workflow_dispatch:
 
 permissions:
