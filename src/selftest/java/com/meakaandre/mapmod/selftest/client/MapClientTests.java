@@ -6,19 +6,25 @@ import com.meakaandre.mapmod.api.MapGlyphs;
 import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
 import com.meakaandre.mapmod.client.map.ClientTiles;
+import com.meakaandre.mapmod.client.map.LocalMap;
 import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapFilters;
 import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
+import com.meakaandre.mapmod.map.MapPayloads;
 import com.meakaandre.mapmod.selftest.MapTests;
 import com.meakaandre.mapmod.selftest.TestPois;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.Items;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -36,6 +42,77 @@ public final class MapClientTests {
 
     public static void register() {
         ClientPlayNetworking.registerGlobalReceiver(MapTests.Control.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> control(p)));
+        ClientTickEvents.END_CLIENT_TICK.register(MapClientTests::local);
+    }
+
+    /** Ticks of the client's own map before the screenshot of its HUD, and before the checks. */
+    private static final int LOCAL_READY = 200, LOCAL_CHECK = 400;
+
+    /**
+     * On a server with no MapMod (and so no selftest mod either) the client checks its own map by itself: it logs
+     * "SELFTEST local ready." once it has kept it for a while, then checks it and opens the fullscreen map.
+     */
+    private static void local(Minecraft mc) {
+        if (!LocalMap.active() || mc.player == null) return;
+        int t = LocalMap.ticks();
+        if (t == LOCAL_READY) MapMod.LOGGER.info("SELFTEST local ready.");
+        if (t != LOCAL_CHECK) return;
+        int pass = 0, fail = 0;
+        int px = mc.player.getBlockX(), pz = mc.player.getBlockZ();
+        boolean[] checks = {
+            MapClient.unlocked(MapFeature.TERRAIN) && MapClient.unlocked(MapFeature.MINIMAP) && MapClient.unlocked(MapFeature.FULLSCREEN),
+            MapClient.mapId != null && MapClient.mapId.startsWith("server-"),
+            MapClient.explored(px, pz) && MapClient.explored(px + 80, pz) && !MapClient.explored(px + 200, pz),
+            ClientTiles.height(px, pz) != null && ClientTiles.height(px + 40, pz - 40) != null,
+        };
+        String[] what = {
+            "with no MapMod on the server the whole map is open",
+            "the client keeps its own map for this server (" + MapClient.mapId + ")",
+            "the client clears its own fog round the player",
+            "the client records the terrain it has loaded",
+        };
+        for (int i = 0; i < checks.length; i++) {
+            MapMod.LOGGER.info("SELFTEST local {} {}", checks[i] ? "PASS" : "FAIL", what[i]);
+            if (checks[i]) pass++;
+            else fail++;
+        }
+        MapMarker m = new MapMarker();
+        m.name = "Local marker";
+        m.x = px + 30;
+        m.y = 70;
+        m.z = pz + 20;
+        m.icon = 1;
+        m.colour = 3;
+        LocalMap.apply(MapPayloads.ADD, m);
+        MapMarker placed = named("Local marker");
+        boolean kept = placed != null;
+        if (placed != null) {
+            MapMarker rename = new MapMarker();
+            rename.id = placed.id;
+            rename.name = "Local, renamed";
+            rename.icon = 2;
+            LocalMap.apply(MapPayloads.UPDATE, rename);
+            kept = named("Local, renamed") != null && named("Local marker") == null;
+        }
+        MapMod.LOGGER.info("SELFTEST local {} markers are placed and changed on the client's own map", kept ? "PASS" : "FAIL");
+        if (kept) pass++;
+        else fail++;
+        LocalMap.save();
+        Path dir = mc.gameDirectory.toPath().resolve(MapMod.ID).resolve(MapClient.mapId == null ? "none" : MapClient.mapId);
+        long region = MapGrid.regionOfBlock(px, pz);
+        boolean saved = Files.exists(dir.resolve("fog.bin")) && Files.exists(dir.resolve("markers.json"))
+            && Files.exists(dir.resolve("r." + MapGrid.keyX(region) + "." + MapGrid.keyZ(region) + ".bin"));
+        MapMod.LOGGER.info("SELFTEST local {} its tiles, fog and markers are saved in the game folder ({})", saved ? "PASS" : "FAIL", dir);
+        if (saved) pass++;
+        else fail++;
+        MapScreen screen = new MapScreen();
+        screen.centre(px, pz, 0.5f);
+        MapClient.show(screen);
+        boolean open = mc.gui.screen() instanceof MapScreen;
+        MapMod.LOGGER.info("SELFTEST local {} M opens the fullscreen map", open ? "PASS" : "FAIL");
+        if (open) pass++;
+        else fail++;
+        MapMod.LOGGER.info("SELFTEST local done: {} passed, {} failed", pass, fail);
     }
 
     private static MapMarker named(String name) {
@@ -81,7 +158,14 @@ public final class MapClientTests {
     private static void check(String what) {
         Minecraft mc = Minecraft.getInstance();
         passed = failed = 0;
-        if (what.equals("locked")) {
+        if (what.equals("join")) {
+            // before any test provider steps in: a plain join with the map's defaults
+            expect("on joining, with nothing but the map's defaults, everything is unlocked", MapClient.unlocks == MapFeature.ALL, Integer.toString(MapClient.unlocks));
+            expect("on joining, the map's id arrives (the client's tile cache needs it)", MapClient.mapId != null, String.valueOf(MapClient.mapId));
+            MapClient.open();
+            expect("on joining, M opens the fullscreen map", mc.gui.screen() instanceof MapScreen, "");
+            if (mc.gui.screen() instanceof MapScreen) mc.gui.setScreen(null);
+        } else if (what.equals("locked")) {
             expect("the provider's lock reaches the client: terrain on, minimap and fullscreen map off",
                 MapClient.unlocked(MapFeature.TERRAIN) && !MapClient.unlocked(MapFeature.MINIMAP) && !MapClient.unlocked(MapFeature.FULLSCREEN), Integer.toString(MapClient.unlocks));
             MapClient.open();

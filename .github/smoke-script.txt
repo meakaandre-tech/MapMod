@@ -1,3 +1,5 @@
+cmd mapmod worldtest check join
+wait 30 SELFTEST client done join
 cmd time set noon
 cmd weather clear
 cmd mapmod worldtest setup

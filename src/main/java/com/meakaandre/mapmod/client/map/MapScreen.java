@@ -485,14 +485,15 @@ public class MapScreen extends Screen {
         m.icon = editIcon;
         m.colour = editColour;
         m.shared = editShared;
-        if (ClientPlayNetworking.canSend(MapPayloads.MarkerEdit.TYPE)) {
-            ClientPlayNetworking.send(new MapPayloads.MarkerEdit(editingMarker == null ? MapPayloads.ADD : MapPayloads.UPDATE, m));
-        }
+        int op = editingMarker == null ? MapPayloads.ADD : MapPayloads.UPDATE;
+        if (LocalMap.active()) LocalMap.apply(op, m);
+        else if (ClientPlayNetworking.canSend(MapPayloads.MarkerEdit.TYPE)) ClientPlayNetworking.send(new MapPayloads.MarkerEdit(op, m));
         closeForm();
     }
 
     private void delete() {
-        if (editingMarker != null && ClientPlayNetworking.canSend(MapPayloads.MarkerEdit.TYPE)) {
+        if (editingMarker != null && LocalMap.active()) LocalMap.apply(MapPayloads.DELETE, editingMarker);
+        else if (editingMarker != null && ClientPlayNetworking.canSend(MapPayloads.MarkerEdit.TYPE)) {
             ClientPlayNetworking.send(new MapPayloads.MarkerEdit(MapPayloads.DELETE, editingMarker));
         }
         closeForm();

@@ -86,6 +86,11 @@ public final class MapServer {
     private static final Set<Key> RUNNING = new HashSet<>();
     /** Which group each online player was last sent the map of. */
     private static final Map<UUID, String> SYNCED = new HashMap<>();
+    /**
+     * Players whose client has had the map: a client says which payloads it takes only after it has joined, so what was
+     * sent at the join may never have arrived, and the map is sent again until it does.
+     */
+    private static final Set<UUID> GREETED = new HashSet<>();
     /** What each online player was last told they have unlocked. */
     private static final Map<UUID, Integer> UNLOCKS = new HashMap<>();
     /** When each player's last tile request was answered (server ticks). */
@@ -147,6 +152,7 @@ public final class MapServer {
             PENDING.clear();
             RUNNING.clear();
             SYNCED.clear();
+            GREETED.clear();
             UNLOCKS.clear();
             TILE_ASKED.clear();
             NO_MATES.clear();
@@ -160,6 +166,7 @@ public final class MapServer {
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUUID();
             SYNCED.remove(id);
+            GREETED.remove(id);
             UNLOCKS.remove(id);
             TILE_ASKED.remove(id);
             NO_MATES.remove(id);
@@ -217,7 +224,7 @@ public final class MapServer {
             if (ignored(player)) continue;
             String before = SYNCED.get(player.getUUID());
             if (before == null) continue; // not joined yet: the join sends everything
-            if (!before.equals(MapModApi.groupOf(player))) sync(player);
+            if (!GREETED.contains(player.getUUID()) || !before.equals(MapModApi.groupOf(player))) sync(player);
             else sendUnlocks(player, false);
         }
     }
@@ -298,8 +305,11 @@ public final class MapServer {
 
     // ------------------------------------------------------------------------------------------------ sending
 
-    private static void send(ServerPlayer player, CustomPacketPayload payload) {
-        if (!ignored(player) && ServerPlayNetworking.canSend(player, payload.type())) ServerPlayNetworking.send(player, payload);
+    /** Sends if the client takes it; true if it was sent. */
+    private static boolean send(ServerPlayer player, CustomPacketPayload payload) {
+        if (ignored(player) || !ServerPlayNetworking.canSend(player, payload.type())) return false;
+        ServerPlayNetworking.send(player, payload);
+        return true;
     }
 
     /** To every online player of the group. */
@@ -315,9 +325,11 @@ public final class MapServer {
         if (ignored(player)) return;
         int mask = 0;
         for (MapFeature f : MapFeature.values()) if (MapModApi.unlocked(player, f)) mask |= f.bit();
-        Integer before = UNLOCKS.put(player.getUUID(), mask);
+        Integer before = UNLOCKS.get(player.getUUID());
         if (!force && before != null && before == mask) return;
-        send(player, new MapPayloads.Unlocks(mask, MapModApi.unlocks().lockedMessage(player)));
+        // remembered only once it reached the client, so one sent too early is sent again a second later
+        if (send(player, new MapPayloads.Unlocks(mask, MapModApi.unlocks().lockedMessage(player)))) UNLOCKS.put(player.getUUID(), mask);
+        else UNLOCKS.remove(player.getUUID());
     }
 
     /** Everything a player's client needs: the map's id, their unlocks, their group's fog, their markers and the POIs. */
@@ -326,7 +338,7 @@ public final class MapServer {
         MinecraftServer server = player.level().getServer();
         String group = MapModApi.groupOf(player);
         SYNCED.put(player.getUUID(), group);
-        if (mapId != null) send(player, new MapPayloads.Hello(mapId, groups().sharedLabel()));
+        if (mapId != null && send(player, new MapPayloads.Hello(mapId, groups().sharedLabel()))) GREETED.add(player.getUUID());
         sendUnlocks(player, true);
         sendMarkers(player);
         if (group.isEmpty()) {

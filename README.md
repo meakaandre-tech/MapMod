@@ -13,6 +13,10 @@ scanning), and cached on the client per world. Only the Overworld's surface is m
 off (the compass shows your group's players instead). Needs Fabric API; works next to
 [Quicksilver](https://github.com/meakaandre-tech/Quicksilver).
 
+On a server that doesn't have MapMod, the client keeps the map by itself: it records the chunks it loads, clears its
+own fog and keeps its own markers, death markers and pins, all of it open (there are no POIs, mates or moving things
+then, which only a server can supply), in `mapmod/server-<address>/` in the game folder.
+
 Saves: `data/mapmod/` in the world (`terrain/`, `fog/`, `id.txt`, `markers.dat`); client cache and settings: `mapmod/`
 in the game folder (`mapmod/<map id>/` per world). Keys are under **Map** in the controls.
 

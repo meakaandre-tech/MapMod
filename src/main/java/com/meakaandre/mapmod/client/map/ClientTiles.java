@@ -14,8 +14,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The client's map tiles: kept on disk per map ({@code mapmod/<map id>/} in the game folder) so a world's map is
@@ -59,10 +61,14 @@ public final class ClientTiles {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Long, Slot> eldest) {
             if (size() <= KEPT) return false;
+            // a tile the client recorded itself is written out before it is let go
+            if (DIRTY.remove(eldest.getKey()) && eldest.getValue().tile != null) write(eldest.getKey(), eldest.getValue().tile.pack());
             release(eldest.getValue());
             return true;
         }
     };
+    /** Regions the client recorded itself (no MapMod on the server) and has not written to its disk cache yet. */
+    private static final Set<Long> DIRTY = new HashSet<>();
     /** Bumped whenever every tile is let go (a new map), so a disk read that finishes afterwards is dropped. */
     private static int generation;
 
@@ -138,6 +144,49 @@ public final class ClientTiles {
         return false;
     }
 
+    /**
+     * For the client's own recording (no MapMod on the server): the region's tile to write into, made if there is none
+     * yet; null while its disk copy is still being read, so nothing recorded before is lost.
+     */
+    public static @Nullable MapTile editable(long region) {
+        Slot e = entry(region);
+        if (e.loading) return null;
+        if (e.tile == null) e.tile = new MapTile();
+        return e.tile;
+    }
+
+    /** The client recorded into a region's tile: drawn again, and written to the disk cache with the next save. */
+    public static void edited(long region) {
+        Slot e = TILES.get(region);
+        if (e == null || e.tile == null) return;
+        e.tile.version = Math.max(e.tile.version + 1, System.currentTimeMillis());
+        e.stale = true;
+        DIRTY.add(region);
+    }
+
+    /** Writes every tile the client recorded itself since the last save. */
+    public static void saveDirty() {
+        for (long region : DIRTY) {
+            Slot e = TILES.get(region);
+            if (e != null && e.tile != null) write(region, e.tile.pack());
+        }
+        DIRTY.clear();
+    }
+
+    private static void write(long region, byte[] data) {
+        Path dir = dir();
+        if (dir == null) return;
+        try {
+            Files.createDirectories(dir);
+            Path file = dir.resolve("r." + MapGrid.keyX(region) + "." + MapGrid.keyZ(region) + ".bin");
+            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+            Files.write(tmp, data);
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException ex) {
+            MapMod.LOGGER.warn("could not cache a map tile", ex);
+        }
+    }
+
     /** A tile came from the server: kept, written to the disk cache, drawn again. */
     public static void accept(long region, byte[] data) {
         MapTile tile;
@@ -150,17 +199,7 @@ public final class ClientTiles {
         Slot e = entry(region);
         e.tile = tile;
         e.stale = true;
-        Path dir = dir();
-        if (dir == null) return;
-        try {
-            Files.createDirectories(dir);
-            Path file = dir.resolve("r." + MapGrid.keyX(region) + "." + MapGrid.keyZ(region) + ".bin");
-            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-            Files.write(tmp, data);
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException ex) {
-            MapMod.LOGGER.warn("could not cache a map tile", ex);
-        }
+        write(region, data);
     }
 
     /** The region's fog changed: drawn again next time it is shown. */
@@ -203,6 +242,7 @@ public final class ClientTiles {
     }
 
     public static void clear() {
+        saveDirty();
         for (Slot e : TILES.values()) release(e);
         TILES.clear();
         generation++;
