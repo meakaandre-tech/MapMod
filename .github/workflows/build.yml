@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "gap-check"]
   workflow_dispatch:
 
 permissions:
