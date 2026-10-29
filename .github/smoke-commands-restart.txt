@@ -1,0 +1,2 @@
+mapmod selftest restart
+#wait 60 SELFTEST restart done

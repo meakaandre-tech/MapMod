@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${version}",
+  "name": "${mod_name}",
+  "description": "A Satisfactory-style map for any modpack: a compass strip, a small square minimap and a fullscreen map with fog of war, filters, pins and markers. Other mods add their own points of interest, sharing groups and unlocks through its API.",
+  "authors": ["meakaandre"],
+  "contact": {
+    "sources": "https://github.com/meakaandre-tech/MapMod",
+    "issues": "https://github.com/meakaandre-tech/MapMod/issues"
+  },
+  "license": "LGPL-3.0-only",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.meakaandre.mapmod.MapMod"],
+    "client": ["com.meakaandre.mapmod.client.MapModClient"]
+  },
+  "mixins": ["mapmod.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "fabric-api": "*",
+    "minecraft": ">=26.3- <26.4-",
+    "java": ">=25"
+  }
+}

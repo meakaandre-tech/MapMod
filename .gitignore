@@ -1,0 +1,8 @@
+build/
+.gradle/
+run/
+libs/
+server/
+*.log
+.idea/
+out/

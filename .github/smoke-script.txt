@@ -1,0 +1,42 @@
+cmd time set noon
+cmd weather clear
+cmd mapmod worldtest setup
+wait 60 SELFTEST smoke setup done.
+sleep 2
+cmd mapmod worldtest pin Placed by a group mate
+sleep 25
+shot
+cmd mapmod worldtest open 0.12
+sleep 8
+shot
+cmd mapmod worldtest open 0.6
+sleep 6
+shot
+cmd mapmod worldtest unfold cat:mapmod_selftest:finds
+cmd mapmod worldtest unfold cat:mapmod:markers
+cmd mapmod worldtest hide sub:mapmod_selftest:ore/iron
+cmd mapmod worldtest hide kind:mapmod_selftest:camp
+cmd mapmod worldtest hide markers:death
+sleep 3
+shot
+cmd mapmod worldtest show sub:mapmod_selftest:ore/iron
+cmd mapmod worldtest show kind:mapmod_selftest:camp
+cmd mapmod worldtest show markers:death
+cmd mapmod worldtest open 2.5 My marker
+sleep 5
+move 780 362
+sleep 2
+shot
+cmd mapmod worldtest edit
+sleep 2
+shot
+cmd mapmod worldtest close
+sleep 2
+cmd mapmod worldtest check all
+wait 30 SELFTEST client done all
+cmd mapmod worldtest lock
+sleep 3
+cmd mapmod worldtest check locked
+wait 30 SELFTEST client done locked
+cmd mapmod worldtest unlock
+sleep 2

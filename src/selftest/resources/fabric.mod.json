@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "mapmod_selftest",
+  "version": "${version}",
+  "name": "${mod_name} Selftests",
+  "description": "The /mapmod selftest and worldtest suites the CI smoke run drives, and a test POI provider that uses the public API. Not part of a release.",
+  "authors": ["meakaandre"],
+  "license": "LGPL-3.0-only",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.meakaandre.mapmod.selftest.SelfTests"],
+    "client": ["com.meakaandre.mapmod.selftest.client.SelfTestsClient"]
+  },
+  "depends": {
+    "mapmod": "*"
+  }
+}

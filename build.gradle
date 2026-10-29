@@ -1,0 +1,81 @@
+plugins {
+    id "net.fabricmc.fabric-loom" version "${loom_version}"
+}
+
+version = "${project.mod_version}+${project.minecraft_version}"
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+// The selftests (/mapmod selftest and worldtest, and a test POI provider that uses the public API the way another mod
+// would) are their own mod, mapmod_selftest, built into a separate jar that only the CI smoke run loads; the release jar
+// holds none of their code.
+sourceSets {
+    selftest {
+        compileClasspath += main.compileClasspath + main.output
+        runtimeClasspath += main.runtimeClasspath + main.output
+    }
+}
+
+loom {
+    mods {
+        mapmod {
+            sourceSet sourceSets.main
+        }
+        mapmod_selftest {
+            sourceSet sourceSets.selftest
+        }
+    }
+    runs {
+        // the client the smoke run joins with: the mod and its selftests
+        selftestClient {
+            client()
+            source sourceSets.selftest
+            ideConfigGenerated false
+        }
+    }
+}
+
+def selftestJar = tasks.register("selftestJar", Jar) {
+    archiveBaseName = "${project.archives_base_name}-selftest"
+    from sourceSets.selftest.output
+}
+
+tasks.named("assemble") {
+    dependsOn selftestJar
+}
+
+tasks.withType(ProcessResources).configureEach {
+    def props = [version: project.version, mod_id: project.mod_id, mod_name: project.mod_name]
+    inputs.properties props
+    filesMatching("fabric.mod.json") {
+        expand props
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 25
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+jar {
+    from("LICENSE") { rename { "LICENSE_${project.archives_base_name}" } }
+    from("COPYING") { rename { "COPYING_${project.archives_base_name}" } }
+}

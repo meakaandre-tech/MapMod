@@ -1,0 +1,232 @@
+name: Build
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && 'main-release' || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          cat > /tmp/maxerrs.gradle <<'GRADLE'
+          allprojects {
+            tasks.withType(JavaCompile).configureEach {
+              options.compilerArgs += ["-Xmaxerrs", "20000", "-Xmaxwarns", "0"]
+            }
+            tasks.register("dumpCompileClasspath") {
+              doLast {
+                def files = new LinkedHashSet()
+                project.sourceSets.each { files.addAll(it.compileClasspath.files) }
+                new File("/tmp/compile-cp.txt").text = files.join("\n")
+              }
+            }
+          }
+          GRADLE
+          ./gradlew build --no-daemon --continue -Dorg.gradle.console=plain -I /tmp/maxerrs.gradle 2>&1 | tee build.log
+          # the release jar holds no selftest code: that is all in the selftest jar
+          jar=$(ls build/libs/mapmod-[0-9]*.jar | grep -v sources | head -1)
+          if unzip -Z1 "$jar" | grep -E '^com/meakaandre/mapmod/selftest/'; then echo "selftest classes in $jar"; exit 1; fi
+      - name: Dump game signatures on request
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/ci
+          if [ -f .github/dump-signatures ]; then
+            mcjars=$(find ~/.gradle/caches/fabric-loom .gradle/loom-cache -name '*.jar' 2>/dev/null | grep -iE 'minecraft' | grep -v sources || true)
+            ./gradlew dumpCompileClasspath --no-daemon -q -I /tmp/maxerrs.gradle >/dev/null 2>&1 || true
+            fabricjars=$(grep -E '/fabric-[^/]*\.jar$' /tmp/compile-cp.txt 2>/dev/null | grep -v sources | tr '\n' ' ')
+            jars="$mcjars $fabricjars"
+            cp=$(echo $jars | tr ' ' ':')
+            for j in $jars; do unzip -Z1 "$j" | grep '\.class$' ; done | sed 's/\.class$//' | sort -u > /tmp/ci/classes.txt || true
+            sed 's#/#.#g' /tmp/ci/classes.txt | grep -v 'package-info\|module-info' > /tmp/all-classes.txt
+            (xargs -a /tmp/all-classes.txt -n 300 javap -p -cp "$cp" 2>/dev/null || true) | gzip -9 > /tmp/ci/javap-all.txt.gz
+          fi
+      - name: Smoke test (dedicated server, then a client that joins it)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          # Starts a production Fabric server with Fabric API, the built jar and the selftest jar, feeds it
+          # .github/smoke-commands.txt, then joins it with a dev client under Xvfb (with Quicksilver loaded, to prove the
+          # map runs next to it), driven by .github/smoke-script.txt, and restarts the server on the saved world
+          # (.github/smoke-commands-restart.txt). Logs and screenshots go to the ci-logs branch.
+          # Waits are on conditions: "#wait <seconds> <text>" in the command files and "wait <seconds> <text>" in the
+          # script go on as soon as the text shows in the logs (or after the seconds).
+          set +e
+          mkdir -p /tmp/ci
+          waitfor() {
+            local secs=$1 text=$2
+            shift 2
+            for i in $(seq 1 "$secs"); do
+              for f in "$@"; do grep -qF -- "$text" "$f" 2>/dev/null && { echo "waited ${i}s for: $text"; return 0; }; done
+              sleep 1
+            done
+            echo "gave up after ${secs}s waiting for: $text"
+            return 1
+          }
+          if ls build/libs/mapmod-[0-9]*.jar >/dev/null 2>&1; then
+            exec > >(tee /tmp/ci/smoke.txt) 2>&1
+            root=$PWD
+            mc=$(grep '^minecraft_version' gradle.properties | sed 's/.*= *//')
+            loader=$(grep '^loader_version' gradle.properties | sed 's/.*= *//')
+            fapi=$(grep '^fabric_version' gradle.properties | sed 's/.*= *//')
+            mkdir -p server/mods && cd server
+            inst=$(curl -fsSL https://meta.fabricmc.net/v2/versions/installer | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['version'])")
+            curl -fsSL -o server.jar "https://meta.fabricmc.net/v2/versions/loader/$mc/$loader/$inst/server/jar"
+            fapiurl=$(curl -fsSL "https://api.modrinth.com/v2/project/fabric-api/version" | python3 -c "import json,sys; v=[x for x in json.load(sys.stdin) if x['version_number']=='$fapi']; print(v[0]['files'][0]['url'])")
+            echo "fabric api: $fapiurl"
+            curl -fsSL -o mods/fabric-api.jar "$fapiurl"
+            jar=$(ls ../build/libs/mapmod-[0-9]*.jar | grep -v sources | head -1)
+            cp "$jar" mods/
+            # the selftests and the test POI provider, a mod of their own that only this run loads
+            cp ../build/libs/mapmod-selftest-*.jar mods/
+            ls -l mods
+            echo "eula=true" > eula.txt
+            printf 'level-seed=12345\nwhite-list=false\nenforce-whitelist=false\nonline-mode=false\nmax-tick-time=-1\nview-distance=6\ngamemode=creative\ndifficulty=peaceful\nspawn-protection=0\npause-when-empty-seconds=-1\n' > server.properties
+            mkfifo in.fifo
+            (java -Xmx3G -jar server.jar --nogui < in.fifo > server.log 2>&1; echo "EXIT $?" >> server.log) &
+            exec 3> in.fifo
+            for i in $(seq 1 120); do
+              if grep -q 'Done (' server.log || grep -q '^EXIT' server.log; then break; fi
+              sleep 5
+            done
+            if grep -q 'Done (' server.log; then
+              while read -r line; do case "$line" in "#sleep "*) sleep "${line#\#sleep }";; "#wait "*) w=${line#\#wait }; waitfor "${w%% *}" "${w#* }" server.log;; *) echo "$line" >&3; sleep 0.3;; esac; done < $root/.github/smoke-commands.txt
+              sleep 5
+              cd $root
+              sudo apt-get update -q >/dev/null 2>&1
+              sudo apt-get install -y -q xvfb xdotool x11-utils imagemagick libgl1-mesa-dri libglx-mesa0 libegl1 libegl-mesa0 libgles2 mesa-vulkan-drivers libvulkan1 mesa-utils >/dev/null 2>&1
+              mkdir -p run/mods
+              # Quicksilver (meakaandre-tech/Quicksilver), the optimisation mod the map must keep working with
+              curl -fsSL -o run/mods/quicksilver-26.3.jar https://github.com/meakaandre-tech/Quicksilver/releases/download/latest/quicksilver-26.3.jar || echo "could not fetch Quicksilver"
+              ls -l run/mods
+              # no version line: the file is datafixed from the oldest layout
+              printf 'pauseOnLostFocus:false\nonboardAccessibility:false\ntutorialStep:none\nnarrator:0\nrenderDistance:6\nguiScale:2\nmaxFps:30\nsoundCategory_master:0.0\n' > run/options.txt
+              export LIBGL_ALWAYS_SOFTWARE=1
+              # MC 26.3 (SDL3) asks for an sRGB-capable framebuffer; Xvfb's GLX visuals have none, EGL does
+              export SDL_VIDEO_FORCE_EGL=1
+              Xvfb :99 -screen 0 1280x720x24 >/dev/null 2>&1 &
+              export DISPLAY=:99
+              sleep 2
+              (glxinfo -B; eglinfo -B 2>/dev/null | head -40) > /tmp/ci/gfx.txt 2>&1
+              (env -u CI timeout 1500 ./gradlew runSelftestClient --no-daemon -Dorg.gradle.console=plain --args="--quickPlayMultiplayer localhost --width 1280 --height 720" > client-gradle.log 2>&1; echo "EXIT $?" >> client-gradle.log) &
+              for i in $(seq 1 300); do
+                if grep -q 'joined the game' server/server.log || grep -q '^EXIT' client-gradle.log || grep -q -e 'Failed to create backend Vulkan' -e 'Caught error loading resourcepacks' run/logs/latest.log 2>/dev/null; then break; fi
+                sleep 5
+              done
+              n=0
+              shot() { n=$((n+1)); import -window root /tmp/ci/client-$(printf '%02d' $n).png; }
+              if grep -q 'joined the game' server/server.log; then
+                # the script starts once the client has the world around it loaded and drawn
+                echo "mapmod worldtest ready 0" >&3
+                waitfor 900 "SELFTEST client ready 0." run/logs/latest.log
+                xdotool mousemove 640 360
+                while read -r kind arg; do
+                  case "$kind" in
+                    cmd) echo "$arg" >&3;;
+                    key) xdotool key "$arg";;
+                    sleep) sleep "$arg";;
+                    wait) waitfor "${arg%% *}" "${arg#* }" server/server.log run/logs/latest.log;;
+                    shot) shot;;
+                    move) xdotool mousemove $arg;;
+                    click) xdotool mousemove $arg; sleep 0.3; xdotool click 1; sleep 0.4;;
+                  esac
+                done < .github/smoke-script.txt
+              else
+                shot
+              fi
+              pkill -f KnotClient; sleep 5
+              tail -c 400000 client-gradle.log > /tmp/ci/client-gradle.log
+              cp run/logs/latest.log /tmp/ci/client.log 2>/dev/null
+              cp -r run/crash-reports /tmp/ci/client-crash-reports 2>/dev/null
+              cd server
+              echo "stop" >&3
+              for i in $(seq 1 60); do grep -q '^EXIT' server.log && break; sleep 2; done
+            fi
+            exec 3>&-
+            cp server.log /tmp/ci/server.log
+            if grep -q 'Done (' server.log; then
+              # second start on the saved world: checks that everything written above loads again
+              rm -f in.fifo; mkfifo in.fifo
+              (java -Xmx3G -jar server.jar --nogui < in.fifo > server2.log 2>&1; echo "EXIT $?" >> server2.log) &
+              exec 3> in.fifo
+              for i in $(seq 1 120); do
+                if grep -q 'Done (' server2.log || grep -q '^EXIT' server2.log; then break; fi
+                sleep 5
+              done
+              if grep -q 'Done (' server2.log; then
+                while read -r line; do case "$line" in "#sleep "*) sleep "${line#\#sleep }";; "#wait "*) w=${line#\#wait }; waitfor "${w%% *}" "${w#* }" server2.log;; *) echo "$line" >&3; sleep 0.3;; esac; done < $root/.github/smoke-commands-restart.txt
+                sleep 5
+                echo "stop" >&3
+                for i in $(seq 1 60); do grep -q '^EXIT' server2.log && break; sleep 2; done
+              fi
+              exec 3>&-
+              cp server2.log /tmp/ci/server2.log
+            fi
+            ls world/data/mapmod world/data/mapmod/* > /tmp/ci/saves.txt 2>&1 || true
+            cp -r crash-reports /tmp/ci/ 2>/dev/null || true
+            cd $root
+          fi
+      - name: Selftest results
+        if: always()
+        shell: bash
+        run: |
+          # every suite must have run to its end with no failed check, and every screenshot must be there
+          mkdir -p /tmp/ci
+          python3 .github/check-selftests.py /tmp/ci | tee /tmp/ci/selftests.txt
+      - name: Publish logs to the ci-logs branch
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/ci && cp build.log /tmp/ci/build.log || echo "no log" > /tmp/ci/build.log
+          sed -i "s#${GITHUB_WORKSPACE}/##g" /tmp/ci/build.log
+          ls -l build/libs > /tmp/ci/jars.txt 2>&1 || true
+          echo "${GITHUB_SHA}" > /tmp/ci/commit.txt
+          echo "${GITHUB_REF}" > /tmp/ci/ref.txt
+          cd /tmp/ci
+          git init -q -b ci-logs
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A && git commit -q -m "Build log for ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-logs
+      - name: Upload jars
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapmod-26.3
+          path: |
+            build/libs/*.jar
+            !build/libs/mapmod-selftest-*.jar
+      - name: Publish the jar as a release
+        if: success() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release delete latest -y --cleanup-tag -R "${{ github.repository }}" || true
+          sleep 3
+          jar=$(ls build/libs/mapmod-[0-9]*.jar | grep -v sources | head -1)
+          cp "$jar" mapmod-26.3.jar
+          name=$(grep '^mod_name' gradle.properties | sed 's/.*= *//')
+          notes="Built from main at ${GITHUB_SHA}. Fabric 26.3, needs Fabric API. A Satisfactory-style map for any modpack; other mods plug in through com.meakaandre.mapmod.api.MapModApi (see the README)."
+          gh release create latest mapmod-26.3.jar -R "${{ github.repository }}" --target "${GITHUB_SHA}" --title "$name (latest build)" --notes "$notes"

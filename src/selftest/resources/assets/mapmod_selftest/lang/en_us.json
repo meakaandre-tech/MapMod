@@ -1,0 +1,5 @@
+{
+  "mapmod_selftest.shared": "Shared with the test group",
+  "mapmod_selftest.locked": "The test has locked the map",
+  "mapmod_selftest.by_time": "Where it would be (its land is not loaded)"
+}

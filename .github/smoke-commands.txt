@@ -1,0 +1,2 @@
+mapmod selftest map
+#wait 180 SELFTEST map done (later checks)
