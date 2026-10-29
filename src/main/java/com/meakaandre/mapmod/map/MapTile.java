@@ -23,8 +23,8 @@ public final class MapTile {
     /** A water pixel's depth (blocks to the floor, at most {@link #MAX_DEPTH}) is kept in the colour's top 5 bits. */
     private static final int DEPTH_SHIFT = 27;
     public static final int MAX_DEPTH = 31;
-    /** 5: water keeps its depth, new palette (older tiles are recorded again). */
-    private static final int FORMAT = 5;
+    /** 6: ground coloured by what it is made of (older tiles are recorded again). */
+    private static final int FORMAT = 6;
     /** Starting size of the buffer a tile is packed into (bytes). */
     private static final int PACK_BUFFER = 16384;
     /** Deflate level used to pack a tile. */

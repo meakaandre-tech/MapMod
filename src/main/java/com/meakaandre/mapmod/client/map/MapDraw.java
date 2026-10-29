@@ -20,6 +20,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -46,30 +47,49 @@ public final class MapDraw {
 
     /**
      * A view of the map: world (cx, cz) at the centre of the screen rectangle, {@code scale} screen pixels a block;
-     * {@code round} for the round minimap, which shows only the disc inside the rectangle.
+     * {@code round} for the round minimap, which shows only the disc inside the rectangle; {@code cam} for the 3D map,
+     * where things are placed by the camera instead (on the ground, as seen at an angle).
      */
-    public record View(double cx, double cz, double scale, int left, int top, int width, int height, boolean round) {
+    public record View(double cx, double cz, double scale, int left, int top, int width, int height, boolean round, MapModel.@Nullable Cam cam) {
+        public View(double cx, double cz, double scale, int left, int top, int width, int height, boolean round) {
+            this(cx, cz, scale, left, top, width, height, round, null);
+        }
+
         public View(double cx, double cz, double scale, int left, int top, int width, int height) {
-            this(cx, cz, scale, left, top, width, height, false);
+            this(cx, cz, scale, left, top, width, height, false, null);
         }
 
-        public double sx(double x) {
-            return left + width / 2.0 + (x - cx) * scale;
+        /** Screen x of a world point on the ground (NaN where the 3D camera cannot see it). */
+        public double sx(double x, double z) {
+            if (cam == null) return left + width / 2.0 + (x - cx) * scale;
+            return onGround(x, z)[0];
         }
 
-        public double sy(double z) {
-            return top + height / 2.0 + (z - cz) * scale;
+        /** Screen y of a world point on the ground (NaN where the 3D camera cannot see it). */
+        public double sy(double x, double z) {
+            if (cam == null) return top + height / 2.0 + (z - cz) * scale;
+            return onGround(x, z)[1];
         }
 
-        public double wx(double sx) {
-            return cx + (sx - left - width / 2.0) / scale;
+        private double[] onGround(double x, double z) {
+            float h = ClientTiles.surface(x, z);
+            return cam.project(x, Float.isNaN(h) ? cam.cy() : h, z);
         }
 
-        public double wz(double sy) {
-            return cz + (sy - top - height / 2.0) / scale;
+        /** World x under a screen point. */
+        public double wx(double sx, double sy) {
+            if (cam == null) return cx + (sx - left - width / 2.0) / scale;
+            return Map3D.world(cam, sx, sy)[0];
+        }
+
+        /** World z under a screen point. */
+        public double wz(double sx, double sy) {
+            if (cam == null) return cz + (sy - top - height / 2.0) / scale;
+            return Map3D.world(cam, sx, sy)[1];
         }
 
         public boolean inside(double sx, double sy, int margin) {
+            if (Double.isNaN(sx) || Double.isNaN(sy)) return false;
             if (round) {
                 // a round view: inside the disc, a little in from its edge so an icon is not cut off by the ring
                 double dx = sx - (left + width / 2.0), dy = sy - (top + height / 2.0), r = width / 2.0 - 3;
@@ -80,11 +100,17 @@ public final class MapDraw {
 
         /** The regions the view shows. */
         public List<Long> regions() {
+            if (cam != null) return Map3D.regions(cam);
             List<Long> out = new ArrayList<>();
-            int x0 = Math.floorDiv((int) Math.floor(wx(left)), MapGrid.REGION_BLOCKS), x1 = Math.floorDiv((int) Math.ceil(wx(left + width)), MapGrid.REGION_BLOCKS);
-            int z0 = Math.floorDiv((int) Math.floor(wz(top)), MapGrid.REGION_BLOCKS), z1 = Math.floorDiv((int) Math.ceil(wz(top + height)), MapGrid.REGION_BLOCKS);
+            int x0 = Math.floorDiv((int) Math.floor(wx(left, top)), MapGrid.REGION_BLOCKS), x1 = Math.floorDiv((int) Math.ceil(wx(left + width, top)), MapGrid.REGION_BLOCKS);
+            int z0 = Math.floorDiv((int) Math.floor(wz(left, top)), MapGrid.REGION_BLOCKS), z1 = Math.floorDiv((int) Math.ceil(wz(left, top + height)), MapGrid.REGION_BLOCKS);
             for (int rz = z0; rz <= z1; rz++) for (int rx = x0; rx <= x1; rx++) out.add(MapGrid.key(rx, rz));
             return out;
+        }
+
+        /** The map's turn (degrees clockwise from north): arrows on it turn back by as much. */
+        public double yaw() {
+            return cam == null ? 0 : cam.yaw();
         }
     }
 
@@ -97,14 +123,18 @@ public final class MapDraw {
     private static final double DETAIL_SCALE = 0.45;
 
     public static void tiles(GuiGraphicsExtractor g, View v) {
+        if (v.cam() != null) {
+            Map3D.draw(g, v);
+            return;
+        }
         g.fill(v.left, v.top, v.left + v.width, v.top + v.height, FOG_BACK);
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
         for (long region : v.regions()) {
             DynamicTexture texture = ClientTiles.texture(region, v.scale >= DETAIL_SCALE);
             if (texture == null) continue;
             double rx = (double) MapGrid.keyX(region) * MapGrid.REGION_BLOCKS, rz = (double) MapGrid.keyZ(region) * MapGrid.REGION_BLOCKS;
-            int x0 = (int) Math.round(v.sx(rx)), x1 = (int) Math.round(v.sx(rx + MapGrid.REGION_BLOCKS));
-            int y0 = (int) Math.round(v.sy(rz)), y1 = (int) Math.round(v.sy(rz + MapGrid.REGION_BLOCKS));
+            int x0 = (int) Math.round(v.sx(rx, rz)), x1 = (int) Math.round(v.sx(rx + MapGrid.REGION_BLOCKS, rz));
+            int y0 = (int) Math.round(v.sy(rx, rz)), y1 = (int) Math.round(v.sy(rx, rz + MapGrid.REGION_BLOCKS));
             if (x1 <= x0 || y1 <= y0) continue;
             // drawn smooth (filtered), not as blocks of pixels
             g.blit(texture.getTextureView(), smooth, x0, y0, x1, y1, 0f, 1f, 0f, 1f);
@@ -218,9 +248,14 @@ public final class MapDraw {
 
     /** The player themself. */
     public static void self(GuiGraphicsExtractor g, float x, float y) {
+        self(g, x, y, 0);
+    }
+
+    /** The player's arrow, on a map turned {@code mapYaw} degrees. */
+    public static void self(GuiGraphicsExtractor g, float x, float y, double mapYaw) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
-        MapIcons.turned(g, MapGlyphs.ARROW, x, y, (float) Math.toRadians(mc.player.getYRot() + 180), PLAYER);
+        MapIcons.turned(g, MapGlyphs.ARROW, x, y, (float) Math.toRadians(mc.player.getYRot() + 180 - mapYaw), PLAYER);
     }
 
     public static String distance(double blocks) {

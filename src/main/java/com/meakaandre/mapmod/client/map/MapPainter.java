@@ -151,7 +151,7 @@ final class MapPainter {
         // land: its blended colour; cliffs as flat dark rock with an ink outline; relief and grain; faint contours
         int land = rgb(bilinear(f.r, f.side, wgx, wgz), bilinear(f.g, f.side, wgx, wgz), bilinear(f.b, f.side, wgx, wgz));
         float cliffEdge = 0.08f + 0.1f * bpt / MapGrid.PX_BLOCKS;
-        land = mix(land, ROCK, smooth(CLIFF - cliffEdge, CLIFF + cliffEdge, steep));
+        land = mix(land, ROCK, 0.35f * smooth(CLIFF - cliffEdge, CLIFF + cliffEdge, steep));
         float ink = 1f - smooth(cliffEdge, cliffEdge * 3f, Math.abs(steep - CLIFF - cliffEdge * 2f));
         float landLight = Math.clamp(relief, 0.75f, 1.12f) * grain;
         float height = h[i];
