@@ -12,7 +12,7 @@ SCREENSHOTS = 6
 # suite prefix -> (log file, the line that says it ran to its end)
 SUITES = {
     "SELFTEST map ": ("server.log", "SELFTEST map done (later checks)"),
-    "SELFTEST smoke ": ("server.log", "SELFTEST smoke setup done."),
+    "SELFTEST smoke ": ("server.log", "SELFTEST smoke stamp done."),
     "SELFTEST client ": ("client.log", "SELFTEST client done locked"),
     "SELFTEST restart ": ("server2.log", "SELFTEST restart done"),
 }
@@ -35,6 +35,8 @@ def main():
         if lines is None:
             bad.append(f"{log} is missing")
             continue
+        # the server echoes command feedback as "System chat: ..." lines too: each check is counted once
+        lines = [l for l in lines if "System chat:" not in l]
         passed = sum(1 for l in lines if prefix + "PASS " in l)
         failed = [l for l in lines if prefix + "FAIL " in l]
         total_pass += passed
@@ -53,11 +55,13 @@ def main():
         bad.append(f"{len(shots)} screenshots, {SCREENSHOTS} expected")
     for log in ("server.log", "server2.log", "client.log"):
         lines = read(os.path.join(ci, log)) or []
-        errors = [l for l in lines if re.search(r"/(ERROR|WARN)\]", l) and "MapMod" in l]
-        if errors:
-            print(f"{log}: {len(errors)} map warnings or errors")
-            for l in errors[:20]:
+        # a stack trace through the map's code is a failure, even where no check noticed it
+        traces = [i for i, l in enumerate(lines) if re.match(r"\s+at com\.meakaandre\.mapmod\.", l)]
+        if traces:
+            print(f"{log}: {len(traces)} stack frames in the map's code, first near line {traces[0] + 1}:")
+            for l in lines[max(0, traces[0] - 6):traces[0] + 2]:
                 print("  " + l)
+            bad.append(f"stack traces through the map's code in {log}")
     print(f"total: {total_pass} passed, {total_fail} failed")
     if bad:
         print("NOT GREEN: " + "; ".join(bad))
