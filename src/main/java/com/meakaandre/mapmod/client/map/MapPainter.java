@@ -4,102 +4,238 @@ import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapTile;
 import org.jspecify.annotations.Nullable;
 
-import java.util.HashMap;
-import java.util.Map;
 
 /**
- * Paints a region of the map as pixel art, a pixel a block, in the manner of Xaero's map: each block in its own colour
- * (its texture's, tinted by the biome), a block higher than the one north of it a little lighter and a lower one a
- * little darker so hills and cliffs stand out, water see-through over its floor and darker the deeper it is, and the
- * fog of war over what the group has not explored.
+ * Paints a region of the map as a flat painted map, mostly in the manner of Elden Ring's and a little of Satisfactory's:
+ * the land in soft colours on parchment (each block's own colour, blended with its neighbours' and pulled toward a
+ * parchment tone, so areas read as patches of colour, not blocks), coastlines in dark ink, water in slate blue with faint
+ * brush strokes and a pale band along the shore, a paper grain over everything, and drawn clouds over what has not been
+ * explored. Nothing is shaded by height: the map is flat.
  */
 final class MapPainter {
-    /** Fog: a dark blue-grey with a faint diagonal weave (the colours the selftests look for). */
-    static final int FOG = 0x141A26, FOG_LINE = 0x19202D;
-    /** Explored but not recorded yet. */
-    static final int UNKNOWN = 0x3A424C;
-    /** Blocks between the fog weave's diagonal lines. */
-    private static final int FOG_WEAVE = 6;
-    /** Pixels read from the neighbouring regions round a region (the shading looks one block north). */
-    static final int PAD = 1;
-    /** Light on a block higher and lower than the one north of it, and more for each further block of difference. */
-    private static final float UP_LIGHT = 1.10f, DOWN_LIGHT = 0.86f, STEP_LIGHT = 0.035f;
-    /** How much the water covers its floor: at the surface, more per block of depth, and at most. */
-    private static final float WATER_ALPHA = 0.45f, WATER_ALPHA_PER_BLOCK = 0.045f, WATER_ALPHA_MAX = 0.88f;
-    /** A generator guess (land nobody loaded yet) is drawn a little dimmer than recorded land. */
-    private static final float GUESS_LIGHT = 0.85f;
+    /** Explored but not recorded yet: blank parchment. */
+    static final int BLANK = 0xCDBF99;
+    /** Water: open, by the shore, and its brush strokes. */
+    private static final int WATER = 0x5D7682, SHORE_WATER = 0x8FA3A4, STROKE = 0x9AA9A8;
+    /** The ink of coastlines. */
+    private static final int INK = 0x2F2A21;
+    /** The parchment tone land colours are pulled toward (a ramp from dark sepia to light parchment), and the share pulled. */
+    private static final int PARCHMENT_DARK = 0x5B4B33, PARCHMENT_LIGHT = 0xE2D5B0;
+    private static final float PARCHMENT_SHARE = 0.68f;
+    /** Pixels read from the neighbouring regions round a region: enough for the blends and the bent cloud edges. */
+    static final int PAD = 8;
+    /** Blocks a land colour is blended over either way, and the water's outline. */
+    private static final int COLOUR_BLUR = 2, WATER_BLUR = 1, SHORE_BLUR = 4;
+    /** How much noise bends the clouds' edge over unexplored chunks (in shares of a chunk's worth of blending). */
+    private static final float FOG_BEND = 0.7f;
+
+    /** A block's colour, as the client works it out (its texture tinted by its biome). */
+    interface Colours {
+        int of(MapTile tile, int cell);
+    }
+
+    /** Blocks between the samples of the smooth noises, which are blended between (much faster than working each out). */
+    private static final int STEP = 8;
 
     private MapPainter() {
     }
 
     /**
-     * Paints the region. {@code near} holds the 3 by 3 tiles round it (it in the middle; missing ones null),
-     * {@code fog} their explored chunks.
+     * Every colour a tile's palettes can make, painted: by block times biome (see {@link #paletteIndex}). Worked out
+     * on the client thread, so painting itself may run on another.
      */
-    static void paint(int[] out, @Nullable MapTile tile, @Nullable MapTile[] near, long[] @Nullable [] fog) {
-        int n = MapGrid.REGION_PX;
-        long[] own = fog[4];
-        Map<Integer, Integer> colours = new HashMap<>();
-        MapTile north = near[1];
+    static int[] palette(MapTile tile, Colours colours) {
+        int biomes = Math.max(1, tile.biomes.size());
+        int[] out = new int[tile.blocks.size() * biomes];
+        for (int bl = 0; bl < tile.blocks.size(); bl++) {
+            for (int bi = 0; bi < biomes; bi++) out[bl * biomes + bi] = parchment(colours.of(tile, MapTile.cell(bl, bi, 0, 0)));
+        }
+        return out;
+    }
+
+    private static int paletteIndex(MapTile tile, int cell) {
+        return MapTile.blockOf(cell) * Math.max(1, tile.biomes.size()) + MapTile.biomeOf(cell);
+    }
+
+    /** A smooth noise sampled every STEP blocks over a region, for blending between. */
+    private static final class Grid {
+        final int side = MapGrid.REGION_PX / STEP + 2;
+        final float[] v = new float[side * side];
+
+        Grid(int x0, int z0, java.util.function.DoubleBinaryOperator f) {
+            for (int j = 0; j < side; j++) for (int i = 0; i < side; i++) v[j * side + i] = (float) f.applyAsDouble(x0 + i * STEP, z0 + j * STEP);
+        }
+
+        float at(int px, int pz) {
+            int i = px / STEP, j = pz / STEP;
+            float fx = (px % STEP) / (float) STEP, fz = (pz % STEP) / (float) STEP;
+            int k = j * side + i;
+            float a = v[k] + (v[k + 1] - v[k]) * fx, b = v[k + side] + (v[k + side + 1] - v[k + side]) * fx;
+            return a + (b - a) * fz;
+        }
+    }
+
+    /**
+     * Paints the region whose north-west corner is at block (x0, z0) into {@code out} (0xRRGGBB a pixel). {@code near}
+     * holds the 3 by 3 tiles round it (it in the middle; missing ones null) and {@code palettes} their {@link #palette}s,
+     * {@code fog} their explored chunks. Reads nothing else, so it may run off the client thread.
+     */
+    static void paint(int[] out, int x0, int z0, @Nullable MapTile[] near, int[] @Nullable [] palettes, long[] @Nullable [] fog) {
+        int n = MapGrid.REGION_PX, side = n + 2 * PAD;
+        // the padded grid: land colour (weighted by w, land only), whether it is water, whether anything is known
+        float[] r = new float[side * side], g = new float[side * side], b = new float[side * side], w = new float[side * side];
+        float[] wet = new float[side * side], known = new float[side * side];
+        for (int gz = 0; gz < side; gz++) {
+            for (int gx = 0; gx < side; gx++) {
+                int px = gx - PAD, pz = gz - PAD;
+                int tx = px < 0 ? -1 : px >= n ? 1 : 0, tz = pz < 0 ? -1 : pz >= n ? 1 : 0;
+                int ti = (tz + 1) * 3 + tx + 1;
+                MapTile t = near[ti];
+                int[] pal = palettes[ti];
+                int k = gz * side + gx;
+                if (t == null || pal == null) continue;
+                int i = MapTile.index(Math.floorMod(px, n), Math.floorMod(pz, n));
+                if (!t.known(i)) continue;
+                int cell = t.cell[i];
+                known[k] = 1;
+                if (MapTile.water(cell)) {
+                    wet[k] = 1;
+                    continue;
+                }
+                int pi = paletteIndex(t, cell);
+                if (pi >= pal.length) continue;
+                int c = pal[pi];
+                r[k] = c >> 16 & 255;
+                g[k] = c >> 8 & 255;
+                b[k] = c & 255;
+                w[k] = 1;
+            }
+        }
+        // land colours blended with their neighbours (land only), water and what is known smoothed a little
+        blur(r, side, COLOUR_BLUR);
+        blur(g, side, COLOUR_BLUR);
+        blur(b, side, COLOUR_BLUR);
+        blur(w, side, COLOUR_BLUR);
+        float[] shore = wet.clone();
+        blur(wet, side, WATER_BLUR);
+        blur(shore, side, SHORE_BLUR);
+        blur(known, side, 1);
+        float[] explored = fogField(fog);
+        Grid bend = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 31));
+        Grid broad = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 41));
+        Grid cloud = new Grid(x0, z0, Clouds::value);
+        Grid wobble = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 7));
+        Grid strokeAt = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 64, 21));
+        Grid strokeOn = new Grid(x0, z0, (x, z) -> Clouds.noise(x, z, 32, 22));
+        int cs = 3 * MapGrid.REGION_CHUNKS;
         for (int pz = 0; pz < n; pz++) {
             for (int px = 0; px < n; px++) {
-                int chunkBit = (pz / MapGrid.CHUNK_PX) * MapGrid.REGION_CHUNKS + px / MapGrid.CHUNK_PX;
-                int i = MapTile.index(px, pz);
+                int k = (pz + PAD) * side + px + PAD;
+                int bx = x0 + px, bz = z0 + pz;
+                // explored: the explored chunks blended between their middles, the edge bent by noise into a soft ragged rim
+                float cx = (px + n) / (float) MapGrid.CHUNK_PX - 0.5f, cz = (pz + n) / (float) MapGrid.CHUNK_PX - 0.5f;
+                float seen = bilinear(explored, cs, cx, cz) + (bend.at(px, pz) - 0.5f) * FOG_BEND;
+                float grainLight = (float) (1 + (hash(bx, bz) - 0.5) * 0.05 + (broad.at(px, pz) - 0.5) * 0.08);
                 int rgb;
-                if (own == null || !MapGrid.get(own, chunkBit)) {
-                    rgb = ((px + pz) % FOG_WEAVE == 0) ? FOG_LINE : FOG;
-                } else if (tile == null || !tile.known(i)) {
-                    rgb = UNKNOWN;
-                } else {
-                    int cell = tile.cell[i];
-                    int key = MapTile.blockOf(cell) << 8 | MapTile.biomeOf(cell);
-                    Integer base = colours.get(key);
-                    if (base == null) {
-                        base = colourOf(tile, cell);
-                        colours.put(key, base);
-                    }
-                    rgb = base;
-                    boolean plain = MapTile.blockOf(cell) < tile.blocks.size() && tile.blocks.get(MapTile.blockOf(cell)).isEmpty();
-                    if (MapTile.water(cell)) {
-                        if (!plain) {
-                            // the floor seen through the water
-                            int water = BlockColours.colour("minecraft:water", biome(tile, cell), 0x3F76E4);
-                            float alpha = Math.min(WATER_ALPHA_MAX, WATER_ALPHA + MapTile.depth(cell) * WATER_ALPHA_PER_BLOCK);
-                            rgb = mix(rgb, water, alpha);
-                        }
+                if (seen < 0.5f) {
+                    rgb = Clouds.colour(cloud.at(px, pz), bx, bz, wobble.at(px, pz));
+                } else if (known[k] < 0.5f) {
+                    rgb = scale(BLANK, grainLight);
+                } else if (wet[k] >= 0.5f) {
+                    if (edge(wet, side, k)) {
+                        // ink where the water meets the land
+                        rgb = INK;
                     } else {
-                        // lighter where higher than the block north of it, darker where lower
-                        int above = MapTile.index(px, pz > 0 ? pz - 1 : n - 1);
-                        MapTile t = pz > 0 ? tile : north;
-                        // (guesses are 8 blocks a sample: they are left flat, or their steps would show as stripes)
-                        if (t != null && t.known(above) && !MapTile.water(t.cell[above]) && !tile.guessed(i) && !t.guessed(above)) {
-                            int d = tile.height[i] - t.height[above];
-                            float light = 1f;
-                            if (d > 0) light = Math.min(UP_LIGHT + (d - 1) * STEP_LIGHT, 1.25f);
-                            else if (d < 0) light = Math.max(DOWN_LIGHT - (-d - 1) * STEP_LIGHT, 0.65f);
-                            rgb = scale(rgb, light);
-                        }
+                        // water: paler by the shore, with faint strokes
+                        rgb = mix(SHORE_WATER, WATER, smooth(0.55f, 0.95f, shore[k]));
+                        double stroke = Math.sin((bz + strokeAt.at(px, pz) * 24) / 2.2);
+                        if (stroke > 0.94 && strokeOn.at(px, pz) > 0.45f) rgb = mix(rgb, STROKE, 0.35f);
+                        rgb = scale(rgb, grainLight);
                     }
-                    if (tile.guessed(i)) rgb = scale(rgb, GUESS_LIGHT);
+                } else if (w[k] < 1e-3f) {
+                    rgb = scale(BLANK, grainLight);
+                } else {
+                    float wt = w[k];
+                    rgb = scale(Math.clamp((int) (r[k] / wt), 0, 255) << 16 | Math.clamp((int) (g[k] / wt), 0, 255) << 8
+                        | Math.clamp((int) (b[k] / wt), 0, 255), grainLight);
                 }
-                out[i] = rgb;
+                out[pz * n + px] = rgb;
             }
         }
     }
 
-    private static @Nullable String biome(MapTile tile, int cell) {
-        int b = MapTile.biomeOf(cell);
-        return b < tile.biomes.size() ? tile.biomes.get(b) : null;
+    /** The explored chunks of the 3 by 3 regions round a region, as 1 or 0 in one grid of chunks. */
+    private static float[] fogField(long[] @Nullable [] fog) {
+        int c = MapGrid.REGION_CHUNKS, side = 3 * c;
+        float[] out = new float[side * side];
+        for (int rz = 0; rz < 3; rz++) {
+            for (int rx = 0; rx < 3; rx++) {
+                long[] bits = fog[rz * 3 + rx];
+                if (bits == null) continue;
+                for (int z = 0; z < c; z++) for (int x = 0; x < c; x++) if (MapGrid.get(bits, z * c + x)) out[(rz * c + z) * side + rx * c + x] = 1;
+            }
+        }
+        return out;
     }
 
-    /** A pixel's block colour: from its texture and biome, or the map colour the server sent. */
-    private static int colourOf(MapTile tile, int cell) {
-        int b = MapTile.blockOf(cell);
-        if (b >= tile.blocks.size()) return UNKNOWN;
-        String name = tile.blocks.get(b);
-        int fallback = tile.blockColours.get(b) & 0xFFFFFF;
-        if (name.isEmpty()) return fallback;
-        return BlockColours.colour(name, biome(tile, cell), fallback);
+    private static float bilinear(float[] v, int side, float x, float z) {
+        int x0 = (int) Math.floor(x), z0 = (int) Math.floor(z);
+        float fx = x - x0, fz = z - z0;
+        int xa = Math.clamp(x0, 0, side - 1), xb = Math.clamp(x0 + 1, 0, side - 1), za = Math.clamp(z0, 0, side - 1), zb = Math.clamp(z0 + 1, 0, side - 1);
+        float a = v[za * side + xa] + (v[za * side + xb] - v[za * side + xa]) * fx;
+        float b2 = v[zb * side + xa] + (v[zb * side + xb] - v[zb * side + xa]) * fx;
+        return a + (b2 - a) * fz;
+    }
+
+    /** True for water next to land (after smoothing): where the coast's ink line goes. */
+    private static boolean edge(float[] wet, int side, int k) {
+        return wet[k - 1] < 0.5f || wet[k + 1] < 0.5f || wet[k - side] < 0.5f || wet[k + side] < 0.5f;
+    }
+
+    /**
+     * A block colour as the map paints it: pulled toward parchment (a ramp from dark sepia to light parchment by the
+     * colour's lightness), keeping enough of its own hue to tell grass, sand, snow and stone apart.
+     */
+    static int parchment(int c) {
+        int r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255;
+        float light = (r * 0.3f + g * 0.59f + b * 0.11f) / 255f;
+        int tone = mix(PARCHMENT_DARK, PARCHMENT_LIGHT, Math.clamp(light * 1.15f, 0f, 1f));
+        // a little lighter and softer overall, as paint on paper
+        return mix(mix(c, tone, PARCHMENT_SHARE), PARCHMENT_LIGHT, 0.08f);
+    }
+
+    private static double hash(int x, int z) {
+        int h = x * 0x27D4EB2D ^ z * 0x165667B1;
+        h ^= h >>> 15;
+        h *= 0x85EBCA6B;
+        h ^= h >>> 13;
+        return (h & 0xFFFF) / 65535.0;
+    }
+
+    /** A box blur either way, in place (edges clamped). */
+    private static void blur(float[] v, int side, int radius) {
+        float[] tmp = new float[v.length];
+        float norm = 1f / (2 * radius + 1);
+        for (int z = 0; z < side; z++) {
+            int row = z * side;
+            for (int x = 0; x < side; x++) {
+                float s = 0;
+                for (int d = -radius; d <= radius; d++) s += v[row + Math.clamp(x + d, 0, side - 1)];
+                tmp[row + x] = s * norm;
+            }
+        }
+        for (int z = 0; z < side; z++) {
+            for (int x = 0; x < side; x++) {
+                float s = 0;
+                for (int d = -radius; d <= radius; d++) s += tmp[Math.clamp(z + d, 0, side - 1) * side + x];
+                v[z * side + x] = s * norm;
+            }
+        }
+    }
+
+    private static float smooth(float e0, float e1, float x) {
+        float t = Math.clamp((x - e0) / (e1 - e0), 0f, 1f);
+        return t * t * (3 - 2 * t);
     }
 
     static int mix(int a, int b, float t) {

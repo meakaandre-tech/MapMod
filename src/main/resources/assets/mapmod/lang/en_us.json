@@ -1,7 +1,6 @@
 {
   "key.category.mapmod.map": "Map",
   "key.mapmod.open": "Open the map",
-  "key.mapmod.minimap": "Show or hide the minimap",
   "mapmod.map.title": "Map",
   "mapmod.map.filters": "Filters",
   "mapmod.map.filter.players": "Players",

@@ -141,7 +141,7 @@ public final class MapClientTests {
             case HIDE -> MapClient.HIDDEN.add(p.arg());
             case SHOW -> MapClient.HIDDEN.remove(p.arg());
             case UNFOLD -> MapScreen.unfold(p.arg());
-            case MINIMAP -> MapClient.minimapOn = p.arg().equals("on");
+            case MINIMAP -> { }
             case PIN_MARKER -> {
                 MapMarker m = named(p.arg());
                 if (m != null) MapClient.pin(MapClient.markerPin(m));

@@ -53,6 +53,8 @@ public final class ClientTiles {
         /** Bumped whenever the region's data or fog changes; a texture painted at an older count is stale. */
         int changes = 1;
         int closePainted, smallPainted;
+        /** A painting of it is under way; the close-up texture was asked for since the last one. */
+        boolean painting, wantsClose;
         long asked;
     }
 
@@ -68,8 +70,6 @@ public final class ClientTiles {
     private static final Set<Long> DIRTY = new HashSet<>();
     /** Bumped whenever every tile is let go (a new map), so a disk read that finishes afterwards is dropped. */
     private static int generation;
-    /** Pixels painted into, reused. */
-    private static final int[] PIXELS = new int[MapGrid.REGION_PX * MapGrid.REGION_PX];
 
     private ClientTiles() {
     }
@@ -300,37 +300,43 @@ public final class ClientTiles {
             want(region, s);
             return shown(region, s, close);
         }
-        if (!repaintAllowed()) return shown(region, s, close);
-        if (s.tile != null) TILE_USE.get(region);
-        paint(region, s.tile);
-        if (close || s.close != null) {
+        if (close) s.wantsClose = true;
+        if (!s.painting && painting < PAINTERS) paint(region, s);
+        return shown(region, s, close);
+    }
+
+    /** Puts a finished painting into the region's textures (on the client thread). */
+    private static void finish(long region, Slot s, int[] pixels, int at) {
+        int n = MapGrid.REGION_PX;
+        if (s.wantsClose || s.close != null) {
             if (s.close == null) {
                 keepRoom(CLOSE_USE, KEPT_CLOSE, true);
                 s.closeId = MapMod.id("map/tile_" + Long.toHexString(region));
-                s.close = new DynamicTexture(() -> MapMod.ID + " map tile", MapGrid.REGION_PX, MapGrid.REGION_PX, false);
+                s.close = new DynamicTexture(() -> MapMod.ID + " map tile", n, n, false);
                 Minecraft.getInstance().getTextureManager().register(s.closeId, s.close);
+                CLOSE_USE.put(region, true);
             }
             NativeImage image = s.close.getPixels();
             if (image != null) {
-                int n = MapGrid.REGION_PX;
-                for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) image.setPixel(x, z, 0xFF000000 | PIXELS[z * n + x]);
+                for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) image.setPixel(x, z, 0xFF000000 | pixels[z * n + x]);
                 s.close.upload();
             }
-            s.closePainted = s.changes;
+            s.closePainted = at;
+            s.wantsClose = false;
         }
         if (s.small == null) {
             keepRoom(SMALL_USE, KEPT_SMALL, false);
             s.smallId = MapMod.id("map/tile_" + Long.toHexString(region) + "_small");
             s.small = new DynamicTexture(() -> MapMod.ID + " map tile", SMALL, SMALL, false);
             Minecraft.getInstance().getTextureManager().register(s.smallId, s.small);
+            SMALL_USE.put(region, true);
         }
         NativeImage image = s.small.getPixels();
         if (image != null) {
-            shrink(image);
+            shrink(image, pixels);
             s.small.upload();
         }
-        s.smallPainted = s.changes;
-        return use(region, s, close);
+        s.smallPainted = at;
     }
 
     /** What a region shows while its texture is not up to date: whichever it has. */
@@ -373,41 +379,22 @@ public final class ClientTiles {
     }
 
     /** The painted pixels, 4 by 4 averaged into the small texture. */
-    private static void shrink(NativeImage image) {
+    private static void shrink(NativeImage image, int[] pixels) {
         int n = MapGrid.REGION_PX;
         for (int z = 0; z < SMALL; z++) {
             for (int x = 0; x < SMALL; x++) {
                 int r = 0, g = 0, b = 0;
-                boolean fog = true;
                 for (int dz = 0; dz < 4; dz++) {
                     for (int dx = 0; dx < 4; dx++) {
-                        int c = PIXELS[(z * 4 + dz) * n + x * 4 + dx];
-                        if (c != MapPainter.FOG && c != MapPainter.FOG_LINE) fog = false;
+                        int c = pixels[(z * 4 + dz) * n + x * 4 + dx];
                         r += c >> 16 & 255;
                         g += c >> 8 & 255;
                         b += c & 255;
                     }
                 }
-                // unexplored ground stays the plain fog colour, the same as the map's background
-                image.setPixel(x, z, 0xFF000000 | (fog ? MapPainter.FOG : (r / 16) << 16 | (g / 16) << 8 | (b / 16)));
+                image.setPixel(x, z, 0xFF000000 | (r / 16) << 16 | (g / 16) << 8 | (b / 16));
             }
         }
-    }
-
-    /** Regions painted in one go at most, and the stretch of time that counts as one go (ns): a frame's worth. */
-    private static final int REPAINTS = 2;
-    private static final long REPAINT_WINDOW = 16_000_000L;
-    private static long windowStart;
-    private static int repaints;
-
-    /** True if one more region may be painted now; the rest wait for a later frame and show as they were. */
-    private static boolean repaintAllowed() {
-        long now = System.nanoTime();
-        if (now - windowStart > REPAINT_WINDOW) {
-            windowStart = now;
-            repaints = 0;
-        }
-        return repaints++ < REPAINTS;
     }
 
     /** The height recorded at a block, or null. */
@@ -432,27 +419,62 @@ public final class ClientTiles {
         SMALL_USE.clear();
         TO_READ.clear();
         reading = 0;
+        painting = 0;
         generation++;
     }
 
     // ------------------------------------------------------------------------------------------------ painting
 
-    private static void paint(long region, @Nullable MapTile tile) {
+    /** Paintings running at once at most (each on a background thread). */
+    private static final int PAINTERS = 2;
+    private static int painting;
+
+    /** Paints a region on a background thread; its textures take the result on the client thread when it is done. */
+    private static void paint(long region, Slot s) {
         int rx = MapGrid.keyX(region), rz = MapGrid.keyZ(region);
         MapTile[] near = new MapTile[9];
+        int[][] palettes = new int[9][];
         long[][] fog = new long[9][];
+        MapPainter.Colours colours = (t, cell) -> {
+            int b = MapTile.blockOf(cell), bi = MapTile.biomeOf(cell);
+            String name = t.blocks.get(b);
+            int fallback = t.blockColours.get(b) & 0xFFFFFF;
+            if (name.isEmpty()) return fallback;
+            return BlockColours.colour(name, bi < t.biomes.size() ? t.biomes.get(bi) : null, fallback);
+        };
         for (int dz = -1; dz <= 1; dz++) {
             for (int dx = -1; dx <= 1; dx++) {
                 long key = MapGrid.key(rx + dx, rz + dz);
                 int k = (dz + 1) * 3 + dx + 1;
-                fog[k] = MapClient.FOG.get(key);
-                if (dx == 0 && dz == 0) near[k] = tile;
-                else {
-                    Slot s = SLOTS.get(key);
-                    near[k] = s == null ? null : s.tile;
-                }
+                long[] f = MapClient.FOG.get(key);
+                fog[k] = f == null ? null : f.clone();
+                Slot o = SLOTS.get(key);
+                near[k] = o == null ? null : o.tile;
+                if (near[k] != null) palettes[k] = MapPainter.palette(near[k], colours);
             }
         }
-        MapPainter.paint(PIXELS, tile, near, fog);
+        if (s.tile != null) TILE_USE.get(region);
+        int at = s.changes, gen = generation;
+        int x0 = rx * MapGrid.REGION_BLOCKS, z0 = rz * MapGrid.REGION_BLOCKS;
+        s.painting = true;
+        painting++;
+        Util.backgroundExecutor().execute(() -> {
+            int[] pixels = new int[MapGrid.REGION_PX * MapGrid.REGION_PX];
+            boolean done;
+            try {
+                MapPainter.paint(pixels, x0, z0, near, palettes, fog);
+                done = true;
+            } catch (RuntimeException e) {
+                MapMod.LOGGER.warn("could not paint a map region", e);
+                done = false;
+            }
+            boolean ok = done;
+            Minecraft.getInstance().execute(() -> {
+                if (gen != generation) return;
+                painting--;
+                s.painting = false;
+                if (ok && SLOTS.get(region) == s) finish(region, s, pixels, at);
+            });
+        });
     }
 }

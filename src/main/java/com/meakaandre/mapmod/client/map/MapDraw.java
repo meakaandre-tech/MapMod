@@ -1,5 +1,6 @@
 package com.meakaandre.mapmod.client.map;
 
+import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.api.MapGlyphs;
 import com.meakaandre.mapmod.api.MapModApi;
 import com.meakaandre.mapmod.api.MapPoi;
@@ -8,6 +9,7 @@ import com.meakaandre.mapmod.api.PoiKind;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
+import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.textures.GpuSampler;
@@ -17,9 +19,11 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.util.Util;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -33,7 +37,7 @@ import java.util.Map;
  */
 public final class MapDraw {
     private static final Map<Identifier, ItemStack> ITEMS = new HashMap<>();
-    public static final int PLAYER = 0xFFFFFFFF, MATE = 0xFF5FD4FF, FOG_BACK = 0xFF141A26;
+    public static final int PLAYER = 0xFFFFFFFF, MATE = 0xFF5FD4FF;
     /** Size an item is drawn at in a purity ring (pixels; items are 16). */
     private static final int ITEM_PX = 9;
     /** Height of the strips a round view is drawn in (pixels). */
@@ -88,19 +92,38 @@ public final class MapDraw {
         }
     }
 
-    /**
-     * The fog-coloured ground and every known tile in the view, clipped to it. Each tile's edges are put on whole pixels
-     * from the same rounding of the region's corners, so neighbouring tiles meet exactly: drawn at a fraction of a pixel,
-     * a zoomed-out map could leave a one-pixel line of the fog colour between two of them.
-     */
     /** From this zoom (screen pixels a block) up, the map is drawn as sharp pixels; below it, filtered so it does not shimmer. */
     private static final double SHARP_SCALE = 1;
     /** From this zoom up, the close-up textures (a texel a block) are drawn; below it, the small ones. */
     private static final double CLOSE_SCALE = 0.5;
+    /** Texels of the clouds' texture along a side (for {@link Clouds#PERIOD} blocks). */
+    private static final int CLOUD_TEXELS = 512;
+    private static final Identifier CLOUDS = MapMod.id("map/clouds");
+    private static @Nullable DynamicTexture clouds;
+    private static boolean cloudsStarted;
 
+    /**
+     * The clouds over everything unexplored, then every region the group has explored in the view, clipped to it. Each
+     * region's edges are put on whole pixels from the same rounding of its corners, so neighbouring regions meet
+     * exactly.
+     */
     public static void tiles(GuiGraphicsExtractor g, View v) {
-        g.fill(v.left, v.top, v.left + v.width, v.top + v.height, FOG_BACK);
-        GpuSampler sampler = RenderSystem.getSamplerCache().getClampToEdge(v.scale >= SHARP_SCALE ? FilterMode.NEAREST : FilterMode.LINEAR);
+        g.fill(v.left, v.top, v.left + v.width, v.top + v.height, 0xFF000000 | Clouds.SKY);
+        GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
+        DynamicTexture sky = clouds();
+        if (sky != null) {
+            int p = Clouds.PERIOD;
+            int i0 = (int) Math.floor((v.cx - (v.width / 2.0) / v.scale) / p), i1 = (int) Math.floor((v.cx + (v.width / 2.0) / v.scale) / p);
+            int j0 = (int) Math.floor((v.cz - (v.height / 2.0) / v.scale) / p), j1 = (int) Math.floor((v.cz + (v.height / 2.0) / v.scale) / p);
+            for (int j = j0; j <= j1; j++) {
+                for (int i = i0; i <= i1; i++) {
+                    int x0 = (int) Math.round(v.sx((double) i * p)), x1 = (int) Math.round(v.sx((double) (i + 1) * p));
+                    int y0 = (int) Math.round(v.sy((double) j * p)), y1 = (int) Math.round(v.sy((double) (j + 1) * p));
+                    g.blit(sky.getTextureView(), smooth, x0, y0, x1, y1, 0f, 1f, 0f, 1f);
+                }
+            }
+        }
+        GpuSampler sampler = v.scale >= SHARP_SCALE ? RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST) : smooth;
         boolean close = v.scale >= CLOSE_SCALE;
         for (long region : v.regions()) {
             DynamicTexture texture = ClientTiles.texture(region, close);
@@ -113,20 +136,23 @@ public final class MapDraw {
         }
     }
 
-    /**
-     * The tiles of a round view: drawn in thin horizontal strips, each clipped to the disc's width there, so the map is a
-     * circle and what lies outside it stays the game's own picture.
-     */
-    public static void roundTiles(GuiGraphicsExtractor g, View v) {
-        int r = v.width / 2, cx = v.left + r, cy = v.top + r;
-        for (int y = -r; y < r; y += ROUND_STRIP) {
-            double mid = y + ROUND_STRIP / 2.0;
-            int half = (int) Math.round(Math.sqrt(Math.max(0, r * r - mid * mid)));
-            if (half <= 0) continue;
-            g.enableScissor(cx - half, cy + y, cx + half, cy + y + ROUND_STRIP);
-            tiles(g, v);
-            g.disableScissor();
-        }
+    /** The clouds' texture, one period of them; made once on a background thread (null until it is). */
+    private static @Nullable DynamicTexture clouds() {
+        if (clouds != null || cloudsStarted) return clouds;
+        cloudsStarted = true;
+        Util.backgroundExecutor().execute(() -> {
+            int n = CLOUD_TEXELS;
+            double per = (double) Clouds.PERIOD / n;
+            int[] rgb = new int[n * n];
+            for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) rgb[z * n + x] = Clouds.at((x + 0.5) * per, (z + 0.5) * per);
+            Minecraft.getInstance().execute(() -> {
+                NativeImage image = new NativeImage(n, n, false);
+                for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) image.setPixel(x, z, 0xFF000000 | rgb[z * n + x]);
+                clouds = new DynamicTexture(() -> MapMod.ID + " map clouds", image);
+                Minecraft.getInstance().getTextureManager().register(CLOUDS, clouds);
+            });
+        });
+        return null;
     }
 
     // ------------------------------------------------------------------------------------------------ things

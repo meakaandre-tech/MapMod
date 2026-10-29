@@ -25,14 +25,10 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * The HUD: Satisfactory's compass strip across the top (always) and a small square minimap at the top right (once the
- * player has it unlocked; N hides it). The boss bars move down under the compass and the effect icons move left of the
- * minimap.
+ * The HUD: Satisfactory's compass strip across the top, and waypoints in the world ({@link Waypoints}). The boss bars
+ * move down under the compass.
  */
 public final class MapHud {
-    public static final int MINIMAP = 100;
-    /** Minimap scale: screen pixels a block. */
-    private static final double MINIMAP_SCALE = 1;
     private static final int BAND = 13, TOP = 3;
     private static final String[] POINTS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
     /** The compass strip's width: this share of the screen, within these bounds (pixels). */
@@ -58,10 +54,7 @@ public final class MapHud {
     public static void register() {
         HudElementRegistry.addLast(MapMod.id("waypoints"), Waypoints::draw);
         HudElementRegistry.addLast(MapMod.id("compass"), MapHud::compass);
-        HudElementRegistry.addLast(MapMod.id("minimap"), MapHud::minimap);
         HudElementRegistry.replaceElement(VanillaHudElements.BOSS_BAR, vanilla -> (g, delta) -> shifted(g, delta, vanilla, 0, BAND + 12));
-        HudElementRegistry.replaceElement(VanillaHudElements.MOB_EFFECTS, vanilla -> (g, delta) ->
-            shifted(g, delta, vanilla, minimapShown() ? -(MINIMAP + 8) : 0, 0));
     }
 
     private static void shifted(GuiGraphicsExtractor g, DeltaTracker delta, HudElement vanilla, int dx, int dy) {
@@ -73,11 +66,6 @@ public final class MapHud {
         g.pose().translate(dx, dy);
         vanilla.extractRenderState(g, delta);
         g.pose().popMatrix();
-    }
-
-    private static boolean minimapShown() {
-        Minecraft mc = Minecraft.getInstance();
-        return mc.player != null && MapClient.minimapOn && MapClient.unlocked(MapFeature.MINIMAP) && MapClient.mappedHere();
     }
 
     // ------------------------------------------------------------------------------------------------ compass
@@ -292,26 +280,6 @@ public final class MapHud {
         g.pose().scale(SMALL_TEXT, SMALL_TEXT);
         g.text(mc.font, text, -mc.font.width(text) / 2, 0, colour, true);
         g.pose().popMatrix();
-    }
-
-    // ------------------------------------------------------------------------------------------------ minimap
-
-    public static void minimap(GuiGraphicsExtractor g, DeltaTracker delta) {
-        Minecraft mc = Minecraft.getInstance();
-        LocalPlayer player = mc.player;
-        if (player == null || !minimapShown()) return;
-        int size = MINIMAP, left = g.guiWidth() - size - 5, top = 5;
-        float pt = delta.getGameTimeDeltaPartialTick(true);
-        double x = player.xo + (player.getX() - player.xo) * pt, z = player.zo + (player.getZ() - player.zo) * pt;
-        MapDraw.View v = new MapDraw.View(x, z, MINIMAP_SCALE, left, top, size, size, true);
-        // a round minimap: the map in a disc, then what is on it, then its ring
-        MapDraw.roundTiles(g, v);
-        things(g, v, false);
-        MobRadar.draw(g, v, false);
-        MapIcons.ring(g, left, top, size);
-        MapDraw.self(g, (float) v.sx(x), (float) v.sy(z));
-        g.centeredText(mc.font, "N", left + size / 2, top + 3, 0xFFFF6A4D);
-        small(g, "X " + player.getBlockX() + "   Z " + player.getBlockZ(), left + size / 2, top + size + 4, 0xFFE6E6E6);
     }
 
     /**

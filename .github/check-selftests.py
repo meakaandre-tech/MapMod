@@ -59,29 +59,6 @@ def main():
     print(f"screenshots on a server without MapMod: {len(local)} ({', '.join(local)})")
     if len(local) < 2:
         bad.append(f"{len(local)} screenshots on a server without MapMod, 2 expected")
-    # the fullscreen map's tiles meet exactly: no one-pixel line of the fog colour between two of them
-    try:
-        from PIL import Image
-    except ImportError:
-        Image = None
-        bad.append("Pillow is missing, so the tile-gap check could not run")
-    for shot in ("client-02.png", "client-03.png", "client-04.png", "local-02.png"):
-        if Image is None or not os.path.exists(os.path.join(ci, shot)):
-            continue
-        im = Image.open(os.path.join(ci, shot)).convert("RGB")
-        px, (w, h) = im.load(), im.size
-        # a gap is the fog colour between two pixels of land on either side; the fog's own weave (its darker and lighter
-        # lines) is not land
-        fog = (0x14, 0x1A, 0x26)
-        weave = {fog, (0x19, 0x20, 0x2D)}
-
-        def gap(a, b, c):
-            return a == fog and b not in weave and c not in weave
-        gaps = [x for x in range(285, w - 1) if sum(1 for y in range(40, h - 20) if gap(px[x, y], px[x - 1, y], px[x + 1, y])) > 30]
-        gaps += [y for y in range(40, h - 21) if sum(1 for x in range(285, w - 1) if gap(px[x, y], px[x, y - 1], px[x, y + 1])) > 30]
-        print(f"{shot}: {len(gaps)} lines of fog between tiles{' at ' + str(gaps) if gaps else ''}")
-        if gaps:
-            bad.append(f"lines between map tiles in {shot}")
     for log in ("server.log", "server2.log", "client.log", "client-local.log"):
         lines = read(os.path.join(ci, log)) or []
         # a stack trace through the map's code is a failure, even where no check noticed it

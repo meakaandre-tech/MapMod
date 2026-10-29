@@ -39,13 +39,12 @@ import java.util.Set;
 
 /**
  * The map on the client: what the server has sent (unlocks, fog, POIs, markers, the group's players, moving things),
- * what the player chose (pins, filters, minimap on or off, kept in the game folder's {@code mapmod} folder) and the keys:
- * M opens the map, N shows or hides the minimap (both changeable under "Map").
+ * what the player chose (pins and filters, kept in the game folder's {@code mapmod} folder) and the keys:
+ * M opens the map (changeable under "Map").
  */
 public final class MapClient {
     private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(MapMod.id("map"));
     public static final KeyMapping OPEN = new KeyMapping("key.mapmod.open", InputConstants.KEY_M, CATEGORY);
-    public static final KeyMapping MINIMAP = new KeyMapping("key.mapmod.minimap", InputConstants.KEY_N, CATEGORY);
 
     public static @Nullable String mapId;
     public static final Long2ObjectOpenHashMap<long[]> FOG = new Long2ObjectOpenHashMap<>();
@@ -62,7 +61,6 @@ public final class MapClient {
     public static final Map<String, Pin> PINS = new LinkedHashMap<>();
     /** Filter switches that are off (see {@link MapFilters}). */
     public static final Set<String> HIDDEN = new HashSet<>();
-    public static boolean minimapOn = true;
     /** Markers seen since joining, so a new death marker can be pinned at once. */
     private static final Set<String> SEEN = new HashSet<>();
     private static boolean firstMarkers = true;
@@ -85,7 +83,6 @@ public final class MapClient {
 
     public static void register() {
         KeyMappingHelper.registerKeyMapping(OPEN);
-        KeyMappingHelper.registerKeyMapping(MINIMAP);
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Hello.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> hello(p.mapId(), p.sharedKey())));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Unlocks.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> {
             unlocks = p.mask();
@@ -274,7 +271,6 @@ public final class MapClient {
         if (!Files.exists(file)) return;
         try {
             JsonObject o = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
-            if (o.has("minimap")) minimapOn = o.get("minimap").getAsBoolean();
             if (o.has("hidden")) for (JsonElement e : o.getAsJsonArray("hidden")) HIDDEN.add(e.getAsString());
         } catch (IOException | RuntimeException e) {
             MapMod.LOGGER.warn("unreadable map file {}", file, e);
@@ -283,7 +279,6 @@ public final class MapClient {
 
     public static void saveSettings() {
         JsonObject o = new JsonObject();
-        o.addProperty("minimap", minimapOn);
         JsonArray hidden = new JsonArray();
         for (String h : HIDDEN) hidden.add(h);
         o.add("hidden", hidden);
@@ -303,10 +298,6 @@ public final class MapClient {
         LocalMap.tick(mc);
         if (mc.gui.screen() == null) {
             while (OPEN.consumeClick()) open();
-            while (MINIMAP.consumeClick()) {
-                minimapOn = !minimapOn;
-                saveSettings();
-            }
         }
         if (++ticks % REQUEST_TICKS != 0 || !unlocked(MapFeature.TERRAIN) || !mappedHere() || !ClientPlayNetworking.canSend(MapPayloads.TileRequest.TYPE)) return;
         // ask for the tiles round the player and on the open map, each again at most every so often
