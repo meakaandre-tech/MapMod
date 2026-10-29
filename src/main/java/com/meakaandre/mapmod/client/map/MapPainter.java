@@ -24,7 +24,7 @@ final class MapPainter {
     /** Bare rock on steep slopes. */
     private static final int ROCK = 0x85837D;
     /** Water from the shallows by the shore to the deep. */
-    private static final int SHALLOW = 0x86BCC2, MID_WATER = 0x3F7E98, DEEP = 0x1F3C5A;
+    private static final int SHALLOW = 0x8DBDC0, MID_WATER = 0x4A7E93, DEEP = 0x253F58;
     /** Blocks of water at which it is fully deep. */
     private static final float DEEP_AT = 22f;
     /** Blocks between contour lines. */
@@ -146,7 +146,7 @@ final class MapPainter {
         // land: its blended colour, bare rock where steep, the relief and grain, soft contours
         int land = rgb(bilinear(f.r, f.side, wgx, wgz), bilinear(f.g, f.side, wgx, wgz), bilinear(f.b, f.side, wgx, wgz));
         land = mix(land, ROCK, 0.6f * smooth(0.7f, 1.8f, steep));
-        float landLight = Math.clamp(relief, 0.62f, 1.28f) * grain;
+        float landLight = Math.clamp(relief, 0.62f, 1.16f) * grain;
         float height = h[i];
         float off = Math.abs(height - Math.round(height / CONTOUR) * CONTOUR);
         float lineTexels = off / Math.max(steep, 0.08f) / bpt;
@@ -209,7 +209,7 @@ final class MapPainter {
             wide = wetRaw.clone();
             blur(wide, side, 2.4f);
             depth = grid.depth.clone();
-            blur(depth, side, 1.0f);
+            blur(depth, side, 1.8f);
             known = k;
             blur(known, side, 0.7f);
         }
