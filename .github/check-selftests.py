@@ -15,6 +15,8 @@ SUITES = {
     "SELFTEST smoke ": ("server.log", "SELFTEST smoke stamp done."),
     "SELFTEST client ": ("client.log", "SELFTEST client done locked"),
     "SELFTEST restart ": ("server2.log", "SELFTEST restart done"),
+    # the client on a server with no MapMod: it keeps its own map
+    "SELFTEST local ": ("client-local.log", "SELFTEST local done"),
 }
 
 
@@ -53,13 +55,17 @@ def main():
     print(f"screenshots: {len(shots)} ({', '.join(shots)})")
     if len(shots) < SCREENSHOTS:
         bad.append(f"{len(shots)} screenshots, {SCREENSHOTS} expected")
+    local = sorted(f for f in os.listdir(ci) if re.fullmatch(r"local-\d\d\.png", f)) if os.path.isdir(ci) else []
+    print(f"screenshots on a server without MapMod: {len(local)} ({', '.join(local)})")
+    if len(local) < 2:
+        bad.append(f"{len(local)} screenshots on a server without MapMod, 2 expected")
     # the fullscreen map's tiles meet exactly: no one-pixel line of the fog colour between two of them
     try:
         from PIL import Image
     except ImportError:
         Image = None
         bad.append("Pillow is missing, so the tile-gap check could not run")
-    for shot in ("client-02.png", "client-03.png", "client-04.png"):
+    for shot in ("client-02.png", "client-03.png", "client-04.png", "local-02.png"):
         if Image is None or not os.path.exists(os.path.join(ci, shot)):
             continue
         im = Image.open(os.path.join(ci, shot)).convert("RGB")
@@ -70,7 +76,7 @@ def main():
         print(f"{shot}: {len(gaps)} lines of fog between tiles{' at ' + str(gaps) if gaps else ''}")
         if gaps:
             bad.append(f"lines between map tiles in {shot}")
-    for log in ("server.log", "server2.log", "client.log"):
+    for log in ("server.log", "server2.log", "client.log", "client-local.log"):
         lines = read(os.path.join(ci, log)) or []
         # a stack trace through the map's code is a failure, even where no check noticed it
         traces = [i for i, l in enumerate(lines) if re.match(r"\s+at com\.meakaandre\.mapmod\.", l)]

@@ -102,13 +102,15 @@ public final class MapClient {
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Moving.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> moving = p.moving()));
         ClientTickEvents.END_CLIENT_TICK.register(MapClient::tick);
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(MapClient::reset));
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> client.execute(LocalMap::joined));
         loadSettings();
         MapHud.register();
     }
 
     /** True if the server says the player has this part of the map. */
     public static boolean unlocked(MapFeature feature) {
-        return (unlocks & feature.bit()) != 0;
+        // with no MapMod on the server the client keeps its own map, and all of it is open
+        return LocalMap.active() || (unlocks & feature.bit()) != 0;
     }
 
     /** True while the player is somewhere the map covers (the Overworld). */
@@ -123,6 +125,8 @@ public final class MapClient {
     }
 
     private static void reset() {
+        LocalMap.stop();
+        ClientTiles.clear();
         mapId = null;
         FOG.clear();
         POIS.clear();
@@ -138,7 +142,7 @@ public final class MapClient {
         ClientTiles.clear();
     }
 
-    private static void hello(String id, String shared) {
+    static void hello(String id, String shared) {
         sharedKey = shared;
         if (!id.equals(mapId)) {
             ClientTiles.clear();
@@ -160,7 +164,7 @@ public final class MapClient {
         }
     }
 
-    private static void fogDelta(long[] chunks) {
+    static void fogDelta(long[] chunks) {
         for (long c : chunks) {
             int cx = MapGrid.keyX(c), cz = MapGrid.keyZ(c);
             long region = MapGrid.regionOfChunk(cx, cz);
@@ -170,7 +174,7 @@ public final class MapClient {
         }
     }
 
-    private static void markers(List<MapMarker> list) {
+    static void markers(List<MapMarker> list) {
         Minecraft mc = Minecraft.getInstance();
         String me = mc.player == null ? "" : mc.player.getUUID().toString();
         for (MapMarker m : list) {
@@ -297,6 +301,7 @@ public final class MapClient {
 
     private static void tick(Minecraft mc) {
         if (mc.player == null || mc.level == null) return;
+        LocalMap.tick(mc);
         if (mc.gui.screen() == null) {
             while (OPEN.consumeClick()) open();
             while (MINIMAP.consumeClick()) {
