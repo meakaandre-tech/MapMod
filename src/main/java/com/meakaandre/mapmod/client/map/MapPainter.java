@@ -11,22 +11,27 @@ import org.jspecify.annotations.Nullable;
  * colours, where the water is and how deep are each blended and interpolated with smooth curves, so coastlines curve,
  * colours run into each other and hills are lit softly from the north-west at any zoom. A noise in world coordinates
  * bends the borders between colours and the coastlines a little and gives the ground a faint painted grain; steep slopes
- * turn to bare rock; water is light near the shore and darker the deeper it is; contour lines are thin and soft. Every
+ * turn to dark rock with an ink outline; rivers, shallows and coasts are bright turquoise with a pale sand rim, the open
+ * sea a flat slate teal; contour lines are thin and soft. Every
  * field is read across the region's edges from its neighbours, so tiles join without a seam.
  */
 final class MapPainter {
     /** Fog: a dark blue-grey with a faint diagonal weave (the same colours the selftests look for). */
-    static final int FOG = 0x2A3440, FOG_LINE = 0x313C4A;
+    static final int FOG = 0x141A26, FOG_LINE = 0x19202D;
     /** Explored but not recorded yet. */
-    static final int UNKNOWN = 0x5A626A;
+    static final int UNKNOWN = 0x3A424C;
     /** Data pixels between the fog weave's diagonal lines. */
     private static final int FOG_WEAVE = 6;
-    /** Bare rock on steep slopes. */
-    private static final int ROCK = 0x85837D;
-    /** Water from the shallows by the shore to the deep. */
-    private static final int SHALLOW = 0x8DBDC0, MID_WATER = 0x4A7E93, DEEP = 0x253F58;
-    /** Blocks of water at which it is fully deep. */
-    private static final float DEEP_AT = 22f;
+    /** Bare rock on steep slopes, and the dark ink line round it. */
+    private static final int ROCK = 0x5E5E62, INK = 0x24252A;
+    /** Bright turquoise shallows, rivers and coasts; the open sea's flat slate teal. */
+    private static final int SHALLOW = 0x5DC0D2, OPEN_WATER = 0x4A757B;
+    /** The pale sand rim along the shore. */
+    private static final int SAND = 0xE3D7BE;
+    /** Blocks of water at which it is open water. */
+    private static final float DEEP_AT = 9f;
+    /** Slope (blocks of rise a block) at which ground turns to cliff. */
+    private static final float CLIFF = 0.95f;
     /** Blocks between contour lines. */
     private static final float CONTOUR = 32f;
     /** Data pixels of padding read from the neighbours round a region: enough for every blur, warp and curve. */
@@ -34,9 +39,9 @@ final class MapPainter {
     /** How far (blocks) and how broadly (blocks) the noise bends coastlines and the borders between colours. */
     private static final float WARP = 5f, WARP_SCALE = 40f;
     /** The painted grain's strength and sizes (blocks). */
-    private static final float GRAIN = 0.05f, GRAIN_SCALE = 22f, FINE_GRAIN_SCALE = 7f;
+    private static final float GRAIN = 0.09f, GRAIN_SCALE = 22f, FINE_GRAIN_SCALE = 7f;
     /** Height exaggeration for the hill shading, and its strength. */
-    private static final float RELIEF = 1.6f, RELIEF_LIGHT = 0.85f;
+    private static final float RELIEF = 1.4f, RELIEF_LIGHT = 0.5f;
 
     private MapPainter() {
     }
@@ -143,25 +148,27 @@ final class MapPainter {
         float relief = 1f + (lambert - ly) * RELIEF_LIGHT;
         float grain = 1f + GRAIN * ((Noise.fbm(wx / GRAIN_SCALE, wz / GRAIN_SCALE, 3) - 0.5f) * 1.4f + (Noise.value(wx / FINE_GRAIN_SCALE, wz / FINE_GRAIN_SCALE, 4) - 0.5f) * 0.6f);
 
-        // land: its blended colour, bare rock where steep, the relief and grain, soft contours
+        // land: its blended colour; cliffs as flat dark rock with an ink outline; relief and grain; faint contours
         int land = rgb(bilinear(f.r, f.side, wgx, wgz), bilinear(f.g, f.side, wgx, wgz), bilinear(f.b, f.side, wgx, wgz));
-        land = mix(land, ROCK, 0.6f * smooth(0.7f, 1.8f, steep));
-        float landLight = Math.clamp(relief, 0.62f, 1.16f) * grain;
+        float cliffEdge = 0.08f + 0.1f * bpt / MapGrid.PX_BLOCKS;
+        land = mix(land, ROCK, smooth(CLIFF - cliffEdge, CLIFF + cliffEdge, steep));
+        float ink = 1f - smooth(cliffEdge, cliffEdge * 3f, Math.abs(steep - CLIFF - cliffEdge * 2f));
+        float landLight = Math.clamp(relief, 0.75f, 1.12f) * grain;
         float height = h[i];
         float off = Math.abs(height - Math.round(height / CONTOUR) * CONTOUR);
         float lineTexels = off / Math.max(steep, 0.08f) / bpt;
-        landLight *= 1f - 0.09f * (1f - smooth(0.25f, 1.1f, lineTexels));
+        landLight *= 1f - 0.07f * (1f - smooth(0.25f, 1.1f, lineTexels));
         land = scale(land, landLight);
+        land = mix(land, INK, 0.75f * ink);
+        // the pale sand rim along the shore
+        land = mix(land, SAND, 0.85f * smooth(0.3f, 0.45f, wet) * (1f - smooth(CLIFF * 0.6f, CLIFF, steep)));
 
-        // water: light in the shallows and by the shore, darker as it deepens, the floor's shape faintly through it
+        // water: bright turquoise in rivers, shallows and along the coast, flat slate teal out at sea
         float depth = bilinear(f.depth, f.side, wgx, wgz);
-        float open = smooth(0.55f, 0.97f, bilinear(f.wide, f.side, gx, gz));
-        float deep = Math.min(Math.clamp(depth / DEEP_AT, 0f, 1f), open);
-        int water = deep < 0.45f ? mix(SHALLOW, MID_WATER, deep / 0.45f) : mix(MID_WATER, DEEP, (deep - 0.45f) / 0.55f);
-        float waterLight = (1f + (Math.clamp(relief, 0.7f, 1.2f) - 1f) * 0.3f) * (1f + (grain - 1f) * 0.5f);
-        // a light rim where the water meets the land
-        waterLight *= 1f + 0.10f * (1f - smooth(0.5f, 0.62f, wet));
-        water = scale(water, waterLight);
+        float open = smooth(0.6f, 0.95f, bilinear(f.wide, f.side, gx, gz));
+        float deep = smooth(0f, 1f, Math.min(Math.clamp(depth / DEEP_AT, 0f, 1f), open));
+        int water = mix(SHALLOW, OPEN_WATER, deep);
+        water = scale(water, 1f + (grain - 1f) * 0.4f);
 
         // the coast: a smooth step over about one texel
         float edge = 0.2f / up;
