@@ -34,6 +34,8 @@ cmd mapmod worldtest close
 sleep 2
 cmd mapmod worldtest check all
 wait 30 SELFTEST client done all
+cmd mapmod worldtest stamp
+wait 40 SELFTEST smoke stamp done.
 cmd mapmod worldtest lock
 sleep 3
 cmd mapmod worldtest check locked

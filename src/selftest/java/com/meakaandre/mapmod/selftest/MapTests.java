@@ -114,6 +114,7 @@ public final class MapTests {
                     .then(Commands.literal("restart").executes(MapTests::restart)))
                 .then(Commands.literal("worldtest")
                     .then(Commands.literal("setup").executes(MapTests::setup))
+                    .then(Commands.literal("stamp").executes(MapTests::stamp))
                     .then(Commands.literal("lock").executes(context -> lock(context, true)))
                     .then(Commands.literal("unlock").executes(context -> lock(context, false)))
                     .then(Commands.literal("open").then(Commands.argument("zoom", FloatArgumentType.floatArg(0.01f, 4))
@@ -259,12 +260,15 @@ public final class MapTests {
             List<MapPoi> now = MapServer.poisFor(A, region);
             expect(source, "a POI source's POIs show where the group explored (a camp)", kinds(now, TestPois.CAMP.key()) == 1, TestPois.counts(now).toString());
             expect(source, "sub-types the group may not see yet stay off its map", kinds(now, TestPois.ORE.key()) == 0, "");
+            // nobody of the group is online, so its stamp is not watched (worldtest stamp checks that, with the smoke
+            // run's player): a mod says so itself
             TestPois.LOCKED.remove(A);
-            when(source, level, () -> kinds(MapServer.poisFor(A, region), TestPois.ORE.key()) >= expected.size(), 200, "a stamp change", () -> {
+            MapModApi.refreshPois(server, A);
+            when(source, level, () -> kinds(MapServer.poisFor(A, region), TestPois.ORE.key()) >= expected.size(), 200, "a refresh", () -> {
                 List<MapPoi> after = MapServer.poisFor(A, region);
                 boolean right = !expected.isEmpty();
                 for (MapPoi p : expected) right &= after.contains(p);
-                expect(source, "once the source's stamp moves, the group's POIs are worked out again (ores with their purity)", right,
+                expect(source, "refreshPois works the group's POIs out again (ores with their purity)", right,
                     kinds(after, TestPois.ORE.key()) + " ores, " + expected.size() + " expected");
             });
         });
@@ -434,6 +438,35 @@ public final class MapTests {
             SMOKE_REPORT.report(source, "map set up round " + at.toShortString() + " for " + player.getGameProfile().name());
         }
         SMOKE_REPORT.report(source, "setup done.");
+        return 1;
+    }
+
+    /**
+     * The source's stamp, with the smoke group's player online: locking the ores takes them off the group's map within
+     * a couple of seconds, and unlocking brings them back, with no call but the stamp moving.
+     */
+    private static int stamp(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        MinecraftServer server = source.getServer();
+        ServerLevel level = server.overworld();
+        ServerPlayer player = null;
+        for (ServerPlayer p : server.getPlayerList().getPlayers()) if (!(p instanceof FakePlayer)) player = p;
+        if (player == null) {
+            SMOKE_REPORT.expect(source, "a player is online for the stamp check", false, "");
+            SMOKE_REPORT.report(source, "stamp done.");
+            return 0;
+        }
+        long region = MapGrid.regionOfBlock(player.getBlockX(), player.getBlockZ());
+        int before = kinds(MapServer.poisFor(SMOKE, region), TestPois.ORE.key());
+        TestPois.LOCKED.put(SMOKE, Set.of(TestPois.SUBS));
+        LATER.when(level.getGameTime(), () -> kinds(MapServer.poisFor(SMOKE, region), TestPois.ORE.key()) == 0, 300, gone -> {
+            SMOKE_REPORT.expect(source, "a source's stamp moving takes what the group may no longer see off its map", before > 0 && gone, before + " ores before");
+            TestPois.LOCKED.remove(SMOKE);
+            LATER.when(level.getGameTime(), () -> kinds(MapServer.poisFor(SMOKE, region), TestPois.ORE.key()) == before, 300, back -> {
+                SMOKE_REPORT.expect(source, "and moving back brings it again", back, kinds(MapServer.poisFor(SMOKE, region), TestPois.ORE.key()) + " ores");
+                SMOKE_REPORT.report(source, "stamp done.");
+            });
+        });
         return 1;
     }
 

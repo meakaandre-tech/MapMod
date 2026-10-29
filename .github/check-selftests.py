@@ -12,7 +12,7 @@ SCREENSHOTS = 6
 # suite prefix -> (log file, the line that says it ran to its end)
 SUITES = {
     "SELFTEST map ": ("server.log", "SELFTEST map done (later checks)"),
-    "SELFTEST smoke ": ("server.log", "SELFTEST smoke setup done."),
+    "SELFTEST smoke ": ("server.log", "SELFTEST smoke stamp done."),
     "SELFTEST client ": ("client.log", "SELFTEST client done locked"),
     "SELFTEST restart ": ("server2.log", "SELFTEST restart done"),
 }
