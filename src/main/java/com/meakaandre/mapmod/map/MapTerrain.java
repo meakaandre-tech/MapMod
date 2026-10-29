@@ -30,7 +30,7 @@ import java.util.List;
 
 /**
  * The Overworld's map terrain on the server, kept low-resolution and on disk ({@code data/mapmod/terrain}). A chunk is
- * recorded (16 samples: height, the top block's colour, the biome) when it loads and again a few seconds after a block
+ * recorded (a pixel a block: the top block, its biome and height) when it loads and again a few seconds after a block
  * in it changes, and nowhere else: there is no scanning of the world. A reveal with a guess fills land nobody has loaded
  * with the world generator's guess, which real recording replaces.
  * <p>
@@ -374,8 +374,8 @@ public final class MapTerrain {
 
     // ------------------------------------------------------------------------------------------------ guesses
 
-    /** A chunk of generator guesses: 2 by 2 samples, each covering 2 by 2 pixels. */
-    public record Guess(long chunk, int[] colour, short[] height) {
+    /** A chunk of generator guesses: 2 by 2 samples, each covering 8 by 8 pixels (a colour, flags, depth and height). */
+    public record Guess(long chunk, int[] colour, int[] flags, short[] height) {
     }
 
     /** True if the chunk has nothing recorded or only a guess (so a guess may fill it). */
@@ -388,23 +388,25 @@ public final class MapTerrain {
 
     /** Off the server thread: the generator's ground for a chunk, at 2 by 2 points. */
     public static Guess guess(ServerLevel level, int cx, int cz, int seaLevel) {
-        int[] colour = new int[GUESS_POINTS];
+        int[] colour = new int[GUESS_POINTS], flags = new int[GUESS_POINTS];
         short[] height = new short[GUESS_POINTS];
         for (int s = 0; s < GUESS_POINTS; s++) {
             int x = (cx << 4) + (s & 1) * GUESS_SPACING + GUESS_INSET, z = (cz << 4) + (s >> 1) * GUESS_SPACING + GUESS_INSET;
             MapGuess.Column col = MapGuess.column(level, x, z);
+            flags[s] = MapTile.KNOWN | MapTile.GUESSED;
             if (col == null) {
-                colour[s] = MapRecorder.VOID_COLOUR | MapTile.KNOWN | MapTile.GUESSED;
+                colour[s] = MapRecorder.VOID_COLOUR;
                 height[s] = (short) level.getMinY();
             } else if (col.y() < seaLevel - 1) {
-                colour[s] = MapPalette.water(seaLevel - 1 - col.y()) | MapTile.withDepth(seaLevel - 1 - col.y()) | MapTile.KNOWN | MapTile.GUESSED | MapTile.WATER;
+                colour[s] = MapPalette.water(seaLevel - 1 - col.y());
+                flags[s] |= MapTile.WATER;
                 height[s] = (short) (seaLevel - 1);
             } else {
-                colour[s] = MapPalette.guess(col.biome()) | MapTile.KNOWN | MapTile.GUESSED;
+                colour[s] = MapPalette.guess(col.biome());
                 height[s] = (short) col.y();
             }
         }
-        return new Guess(MapGrid.key(cx, cz), colour, height);
+        return new Guess(MapGrid.key(cx, cz), colour, flags, height);
     }
 
     /** On the server thread: puts guesses in where nothing real has been recorded. Returns the regions changed. */
@@ -422,7 +424,7 @@ public final class MapTerrain {
                     int i = MapTile.index(baseX + px, baseZ + pz);
                     if (tile.known(i) && !tile.guessed(i)) continue;
                     int s = (pz >= MapGrid.CHUNK_PX / 2 ? 2 : 0) + (px >= MapGrid.CHUNK_PX / 2 ? 1 : 0);
-                    tile.colour[i] = g.colour()[s];
+                    tile.cell[i] = MapTile.cell(tile.block("", g.colour()[s]), 0, g.flags()[s], 0);
                     tile.height[i] = g.height()[s];
                     any = true;
                 }

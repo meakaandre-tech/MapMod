@@ -32,7 +32,7 @@ import java.util.Map;
 public final class MapHud {
     public static final int MINIMAP = 100;
     /** Minimap scale: screen pixels a block. */
-    private static final double MINIMAP_SCALE = 0.5;
+    private static final double MINIMAP_SCALE = 1;
     private static final int BAND = 13, TOP = 3;
     private static final String[] POINTS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
     /** The compass strip's width: this share of the screen, within these bounds (pixels). */
@@ -308,7 +308,7 @@ public final class MapHud {
         things(g, v, false);
         MobRadar.draw(g, v, false);
         MapIcons.ring(g, left, top, size);
-        MapDraw.self(g, (float) v.sx(x, z), (float) v.sy(x, z));
+        MapDraw.self(g, (float) v.sx(x), (float) v.sy(z));
         g.centeredText(mc.font, "N", left + size / 2, top + 3, 0xFFFF6A4D);
         small(g, "X " + player.getBlockX() + "   Z " + player.getBlockZ(), left + size / 2, top + size + 4, 0xFFE6E6E6);
     }
@@ -321,7 +321,7 @@ public final class MapHud {
         for (MapPoi poi : MapClient.poisIn(v.regions())) {
             if (!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) continue;
             if (!MapClient.explored(poi.x(), poi.z())) continue;
-            double sx = v.sx(poi.x() + 0.5, poi.z() + 0.5), sy = v.sy(poi.x() + 0.5, poi.z() + 0.5);
+            double sx = v.sx(poi.x() + 0.5), sy = v.sy(poi.z() + 0.5);
             if (!v.inside(sx, sy, ICON_MARGIN)) continue;
             // far out, the minimap and the zoomed-out map show only the bigger things
             if (!big && v.scale() < NODE_MIN_SCALE) {
@@ -332,21 +332,21 @@ public final class MapHud {
         }
         for (MapMarker m : MapClient.markers) {
             if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
-            double sx = v.sx(m.x + 0.5, m.z + 0.5), sy = v.sy(m.x + 0.5, m.z + 0.5);
+            double sx = v.sx(m.x + 0.5), sy = v.sy(m.z + 0.5);
             if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.marker(g, m, (int) Math.round(sx), (int) Math.round(sy));
         }
         for (MapClient.Pin pin : MapClient.PINS.values()) {
             if (!pin.key().startsWith("poi:")) continue;
-            double sx = v.sx(pin.x() + 0.5, pin.z() + 0.5), sy = v.sy(pin.x() + 0.5, pin.z() + 0.5);
+            double sx = v.sx(pin.x() + 0.5), sy = v.sy(pin.z() + 0.5);
             if (v.inside(sx, sy, ICON_MARGIN)) MapIcons.centred(g, MapGlyphs.PIN, (int) Math.round(sx), (int) Math.round(sy) - 7, 0xFFFFA530);
         }
         for (MovingPoi m : MapClient.moving) {
-            double sx = v.sx(m.x(), m.z()), sy = v.sy(m.x(), m.z());
+            double sx = v.sx(m.x()), sy = v.sy(m.z());
             if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.moving(g, m, (float) sx, (float) sy);
         }
         if (MapFilters.showsPlayers()) {
             for (MapPayloads.Mate mate : MapClient.mates) {
-                double sx = v.sx(mate.x(), mate.z()), sy = v.sy(mate.x(), mate.z());
+                double sx = v.sx(mate.x()), sy = v.sy(mate.z());
                 if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.mate(g, mate, (float) sx, (float) sy);
             }
         }

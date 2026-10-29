@@ -78,7 +78,7 @@ public final class MobRadar {
             boolean hostile = hostile(e);
             if (hostile ? !hostiles : !passives) continue;
             double x = e.xo + (e.getX() - e.xo) * pt, z = e.zo + (e.getZ() - e.zo) * pt;
-            double sx = v.sx(x, z), sy = v.sy(x, z);
+            double sx = v.sx(x), sy = v.sy(z);
             if (!v.inside(sx, sy, size)) continue;
             int x0 = (int) Math.round(sx) - size / 2, y0 = (int) Math.round(sy) - size / 2;
             face(g, mc, living, x0, y0, size, hostile, now);

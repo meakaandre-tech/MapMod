@@ -1,10 +1,6 @@
 package com.meakaandre.mapmod.map;
 
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
-import net.minecraft.world.level.BlockGetter;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.material.MapColor;
 import net.minecraft.tags.BiomeTags;
 import net.minecraft.world.level.biome.Biome;
 
@@ -16,8 +12,6 @@ import net.minecraft.world.level.biome.Biome;
 public final class MapPalette {
     /** Water this deep (blocks) or deeper is drawn in the deepest blue. */
     private static final float DEEPEST_WATER = 20f;
-    /** How much of the top block's map colour is mixed into the biome's ground colour. */
-    private static final float BLOCK_MIX = 0.25f;
 
     private MapPalette() {
     }
@@ -54,22 +48,6 @@ public final class MapPalette {
         float t = Math.min(1f, Math.max(0, depth) / DEEPEST_WATER);
         return mix(0x5DC0D2, 0x4A757B, t);
     }
-
-    /**
-     * Ground as the map shows it: the colour of what it is made of (stone grey, sand, snow, terracotta, gravel, a
-     * mod's own blocks by their map colour), and for grass and other plant-covered ground its biome's green, so forests,
-     * plains and jungles still differ. Softened toward grey so it reads as a painted map, not as blocks.
-     */
-    public static int ground(BlockState state, BlockGetter level, BlockPos pos, Holder<Biome> biome) {
-        MapColor map = state.getMapColor(level, pos);
-        int biomeColour = biome(biome);
-        if (map == null || map == MapColor.NONE || map == MapColor.GRASS || map == MapColor.PLANT) return soften(biomeColour);
-        // the biome tints the ground a little, so neighbouring biomes on the same stone still differ faintly
-        return soften(mix(map.col, biomeColour, BIOME_TINT));
-    }
-
-    /** How much of the biome's colour tints ground that is not grass. */
-    private static final float BIOME_TINT = 0.15f;
 
     /** Land as the map shows it: just its biome's soft colour, whatever stands on it (the same as a guess). */
     public static int land(Holder<Biome> biome) {

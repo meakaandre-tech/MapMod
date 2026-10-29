@@ -8,7 +8,7 @@
   "mapmod.map.filter.markers": "Map markers",
   "mapmod.map.filter.placed": "Placed markers",
   "mapmod.map.filter.deaths": "Death markers",
-  "mapmod.map.help": "Drag to move, right-drag to turn and tilt, scroll to zoom, C: centre, N: face north. Left click: pin. Right click: marker",
+  "mapmod.map.help": "Drag to move, scroll to zoom, C: centre on you. Left click: pin to the compass. Right click: place or change a marker",
   "mapmod.map.click_pin": "Left click: pin to the compass",
   "mapmod.map.click_unpin": "Left click: unpin",
   "mapmod.map.click_edit": "Right click: change or remove",

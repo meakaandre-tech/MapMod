@@ -33,14 +33,7 @@ import java.util.Set;
 public class MapScreen extends Screen {
     private static final int PANEL = 140, BAR = 16, FOOT = 14, ROW = 12;
     /** Zoomed out no further than about a hundred regions on screen, so the tiles drawn stay few and cached. */
-    private static final double MIN_SCALE = 0.3, MAX_SCALE = 4;
-    /** The 3D map's tilt: degrees down from the horizon, its least and most, and how it opens. */
-    private static final double MIN_PITCH = 30, MAX_PITCH = 89, START_PITCH = 55;
-    /** Degrees the 3D map turns and tilts for a pixel of right-dragging. */
-    private static final double TURN_SPEED = 0.4, TILT_SPEED = 0.3;
-    /** Pixels the mouse must move with the right button down before it turns the map rather than placing a marker. */
-    private static final double TURN_THRESHOLD = 4;
-    private static double lastYaw, lastPitch = START_PITCH;
+    private static final double MIN_SCALE = 0.3, MAX_SCALE = 8;
     /** Zoom factor of one scroll step in and out. */
     private static final double ZOOM_IN = 1.25, ZOOM_OUT = 0.8;
     /** Length of the scale bar (pixels). */
@@ -51,16 +44,11 @@ public class MapScreen extends Screen {
     private static final int DEFAULT_MARKER_Y = 64;
     /** Categories whose kinds are folded out in the panel. */
     private static final Set<String> OPEN = new HashSet<>();
-    private static double lastScale = 0.5;
+    private static double lastScale = 1;
 
     private double cx, cz, scale = lastScale;
     private boolean placed;
     private boolean dragging;
-    /** The 3D map's turn (degrees clockwise from north) and tilt. */
-    private double yaw = lastYaw, pitch = lastPitch;
-    /** Right button: where it went down, and whether it has turned the map since. */
-    private double rightX, rightY;
-    private boolean rightDown, turning;
     private @Nullable Hover hover;
 
     // the marker form
@@ -114,23 +102,7 @@ public class MapScreen extends Screen {
     }
 
     private MapDraw.View view() {
-        int w = width - PANEL, h = height - BAR - FOOT;
-        return new MapDraw.View(cx, cz, scale, PANEL, BAR, w, h, false, Map3D.cam(cx, cz, yaw, pitch, scale, PANEL, BAR, w, h));
-    }
-
-    /** A small compass in the map's top right corner: where north is on the turned map. */
-    private void compass(GuiGraphicsExtractor g, MapDraw.View v) {
-        int r = 11, x = v.left() + v.width() - r - 8, y = v.top() + r + 8;
-        g.fill(x - r, y - r, x + r + 1, y + r + 1, 0x90101418);
-        double a = Math.toRadians(-v.yaw());
-        int nx = x + (int) Math.round(Math.sin(a) * (r - 5)), ny = y - (int) Math.round(Math.cos(a) * (r - 5));
-        g.centeredText(font, "N", nx, ny - 4, 0xFFFF6A4D);
-    }
-
-    @Override
-    public void removed() {
-        Map3D.release();
-        super.removed();
+        return new MapDraw.View(cx, cz, scale, PANEL, BAR, width - PANEL, height - BAR - FOOT);
     }
 
     /** The regions on screen, for the tile requests. */
@@ -149,8 +121,7 @@ public class MapScreen extends Screen {
         MapHud.things(g, v, true);
         MobRadar.draw(g, v, true);
         Minecraft mc = Minecraft.getInstance();
-        compass(g, v);
-        if (mc.player != null) MapDraw.self(g, (float) v.sx(mc.player.getX(), mc.player.getZ()), (float) v.sy(mc.player.getX(), mc.player.getZ()), v.yaw());
+        if (mc.player != null) MapDraw.self(g, (float) v.sx(mc.player.getX()), (float) v.sy(mc.player.getZ()));
         g.disableScissor();
         panel(g, mouseX, mouseY);
         // the top bar: title, the scale, and the world position under the mouse
@@ -160,7 +131,7 @@ public class MapScreen extends Screen {
         g.fill(width - 96, 10, width - 16, 11, 0xFFE6E6E6);
         g.text(font, scaleText, width - 96, 1, 0xFFE6E6E6, false);
         if (inMap(mouseX, mouseY)) {
-            String at = String.format(Locale.ROOT, "X %d   Z %d", (int) Math.floor(v.wx(mouseX, mouseY)), (int) Math.floor(v.wz(mouseX, mouseY)));
+            String at = String.format(Locale.ROOT, "X %d   Z %d", (int) Math.floor(v.wx(mouseX)), (int) Math.floor(v.wz(mouseY)));
             g.text(font, at, PANEL + 6, 4, 0xFFB0B8C0, false);
         }
         g.fill(0, height - FOOT, width, height, 0xF0101418);
@@ -245,7 +216,7 @@ public class MapScreen extends Screen {
         Hover found = null;
         for (MapMarker m : MapClient.markers) {
             if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
-            double d = sq(v.sx(m.x + 0.5, m.z + 0.5) - mx, v.sy(m.x + 0.5, m.z + 0.5) - my);
+            double d = sq(v.sx(m.x + 0.5) - mx, v.sy(m.z + 0.5) - my);
             if (d >= best) continue;
             best = d;
             List<Component> lines = new ArrayList<>();
@@ -261,7 +232,7 @@ public class MapScreen extends Screen {
         }
         for (MapPoi poi : MapClient.poisIn(v.regions())) {
             if ((!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) || !MapClient.explored(poi.x(), poi.z())) continue;
-            double d = sq(v.sx(poi.x() + 0.5, poi.z() + 0.5) - mx, v.sy(poi.x() + 0.5, poi.z() + 0.5) - my);
+            double d = sq(v.sx(poi.x() + 0.5) - mx, v.sy(poi.z() + 0.5) - my);
             if (d >= best) continue;
             best = d;
             List<Component> lines = new ArrayList<>();
@@ -271,7 +242,7 @@ public class MapScreen extends Screen {
             found = new Hover(lines, new MapClient.Pin(poi.pinKey(), MapDraw.label(poi).getString(), poi.x(), poi.y(), poi.z(), MapDraw.icon(poi), MapDraw.colour(poi)), null);
         }
         for (MovingPoi m : MapClient.moving) {
-            double d = sq(v.sx(m.x(), m.z()) - mx, v.sy(m.x(), m.z()) - my);
+            double d = sq(v.sx(m.x()) - mx, v.sy(m.z()) - my);
             if (d >= best) continue;
             best = d;
             List<Component> lines = new ArrayList<>();
@@ -282,7 +253,7 @@ public class MapScreen extends Screen {
         }
         if (MapFilters.showsPlayers()) {
             for (MapPayloads.Mate mate : MapClient.mates) {
-                double d = sq(v.sx(mate.x(), mate.z()) - mx, v.sy(mate.x(), mate.z()) - my);
+                double d = sq(v.sx(mate.x()) - mx, v.sy(mate.z()) - my);
                 if (d >= best) continue;
                 best = d;
                 List<Component> lines = new ArrayList<>();
@@ -326,11 +297,12 @@ public class MapScreen extends Screen {
             return true;
         }
         if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
-            // a click places or changes a marker when the button comes up; a drag turns the map instead
-            rightDown = true;
-            turning = false;
-            rightX = mx;
-            rightY = my;
+            if (h != null && h.marker != null) {
+                editMarker(h.marker);
+            } else if (h == null) {
+                MapDraw.View v = view();
+                newMarker((int) Math.floor(v.wx(mx)), (int) Math.floor(v.wz(my)));
+            }
             return true;
         }
         return false;
@@ -339,42 +311,14 @@ public class MapScreen extends Screen {
     @Override
     public boolean mouseReleased(MouseButtonEvent event) {
         dragging = false;
-        if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT && rightDown) {
-            rightDown = false;
-            if (!turning && !editing && inMap(rightX, rightY)) {
-                Hover h = findHover((int) rightX, (int) rightY);
-                if (h != null && h.marker != null) {
-                    editMarker(h.marker);
-                } else if (h == null) {
-                    MapDraw.View v = view();
-                    newMarker((int) Math.floor(v.wx(rightX, rightY)), (int) Math.floor(v.wz(rightX, rightY)));
-                }
-            }
-            turning = false;
-            return true;
-        }
         return super.mouseReleased(event);
     }
 
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
-        if (editing) return super.mouseDragged(event, dx, dy);
-        if (dragging) {
-            // the ground follows the mouse: across the screen along the map's turn, up and down foreshortened by its tilt
-            double r = Math.toRadians(yaw), down = Math.max(0.3, Math.sin(Math.toRadians(pitch)));
-            double ax = dx / scale, ay = dy / (scale * down);
-            cx -= ax * Math.cos(r) - ay * Math.sin(r);
-            cz -= ax * Math.sin(r) + ay * Math.cos(r);
-            return true;
-        }
-        if (rightDown) {
-            if (!turning && Math.hypot(event.x() - rightX, event.y() - rightY) >= TURN_THRESHOLD) turning = true;
-            if (turning) {
-                yaw = (yaw + dx * TURN_SPEED) % 360;
-                pitch = Math.clamp(pitch - dy * TILT_SPEED, MIN_PITCH, MAX_PITCH);
-                lastYaw = yaw;
-                lastPitch = pitch;
-            }
+        if (dragging && !editing) {
+            cx -= dx / scale;
+            cz -= dy / scale;
             return true;
         }
         return super.mouseDragged(event, dx, dy);
@@ -383,16 +327,14 @@ public class MapScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mx, double my, double sx, double sy) {
         if (editing || !inMap(mx, my) || sy == 0) return super.mouseScrolled(mx, my, sx, sy);
-        double before = scale;
+        MapDraw.View v = view();
+        double wx = v.wx(mx), wz = v.wz(my);
         scale = Math.clamp(scale * (sy > 0 ? ZOOM_IN : ZOOM_OUT), MIN_SCALE, MAX_SCALE);
         lastScale = scale;
-        // zooming in moves toward the spot under the mouse
-        MapDraw.View v = view();
-        double wx = v.wx(mx, my), wz = v.wz(mx, my), t = 1 - before / scale;
-        if (Double.isFinite(wx) && Double.isFinite(wz)) {
-            cx += (wx - cx) * t;
-            cz += (wz - cz) * t;
-        }
+        // keep the spot under the mouse where it is
+        MapDraw.View after = view();
+        cx += wx - after.wx(mx);
+        cz += wz - after.wz(my);
         return true;
     }
 
@@ -419,12 +361,6 @@ public class MapScreen extends Screen {
                 cx = mc.player.getX();
                 cz = mc.player.getZ();
             }
-            return true;
-        }
-        if (event.key() == InputConstants.KEY_N) {
-            // facing north again, at the usual tilt
-            yaw = lastYaw = 0;
-            pitch = lastPitch = START_PITCH;
             return true;
         }
         return super.keyPressed(event);
