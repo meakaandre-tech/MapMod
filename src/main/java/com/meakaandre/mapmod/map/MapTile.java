@@ -21,7 +21,7 @@ import java.util.zip.InflaterInputStream;
 public final class MapTile {
     public static final int KNOWN = 1 << 24, GUESSED = 1 << 25, WATER = 1 << 26;
     /** 2: natural ground and biome colours (1 held the top block and its colour; such tiles are recorded again). */
-    private static final int FORMAT = 2;
+    private static final int FORMAT = 3;
     /** Starting size of the buffer a tile is packed into (bytes). */
     private static final int PACK_BUFFER = 16384;
     /** Deflate level used to pack a tile. */
