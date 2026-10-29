@@ -169,8 +169,7 @@ public final class MapClient {
             int cx = MapGrid.keyX(c), cz = MapGrid.keyZ(c);
             long region = MapGrid.regionOfChunk(cx, cz);
             long[] bits = FOG.computeIfAbsent(region, k -> new long[MapGrid.FOG_LONGS]);
-            MapGrid.set(bits, MapGrid.fogBit(cx, cz));
-            ClientTiles.fogChanged(region);
+            if (MapGrid.set(bits, MapGrid.fogBit(cx, cz))) ClientTiles.fogChanged(cx, cz);
         }
     }
 

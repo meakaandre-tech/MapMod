@@ -121,7 +121,7 @@ public final class LocalMap {
                     break;
                 }
                 LevelChunk chunk = level.getChunk(cx, cz);
-                if (MapRecorder.record(level, chunk, tile, false)) ClientTiles.edited(region);
+                if (MapRecorder.record(level, chunk, tile, false)) ClientTiles.edited(region, chunk.getPos().x(), chunk.getPos().z());
                 RECORDED.put(key, ticks);
             }
         }

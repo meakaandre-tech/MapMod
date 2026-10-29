@@ -21,31 +21,14 @@ import java.util.Set;
 
 /**
  * The client's map tiles: kept on disk per map ({@code mapmod/<map id>/} in the game folder) so a world's map is
- * there at once on the next visit and only changed tiles are sent again, and turned into textures for the screen in
- * the manner of Satisfactory's map: each biome's soft colour blended into its neighbours', soft light from the
- * north-west on the land's smoothed shape, sparse contour lines every 32 blocks (darker every 128), drawn smoothly, and
- * the fog of war over what the group has not explored.
+ * there at once on the next visit and only changed tiles are sent again, and turned into textures for the screen by
+ * {@link MapPainter}: an overview texture per region (a texel for 4 by 4 blocks) and, for regions shown zoomed in, a
+ * close-up one (a texel a block).
  * <p>
  * Cached tiles are read from disk on a background thread, never while drawing; only regions the group has explored
  * are read at all; and only the {@link #KEPT} regions used most recently keep their tile and texture.
  */
 public final class ClientTiles {
-    /** Fog: a dark blue-grey with a faint diagonal weave. */
-    private static final int FOG = 0x2A3440, FOG_LINE = 0x313C4A;
-    /** Explored but not recorded yet. */
-    private static final int UNKNOWN = 0x5A626A;
-    /** Pixels between the fog weave's diagonal lines. */
-    private static final int FOG_WEAVE = 6;
-    /** Hill shading: light per block of rise toward the north-west, and its most either way. */
-    private static final float SLOPE_LIGHT = 0.04f, MAX_SLOPE_LIGHT = 0.22f;
-    /** Blocks between contour lines, and between the darker major ones. */
-    private static final int CONTOUR_STEP = 32, MAJOR_CONTOUR_STEP = 128;
-    /** Light on a major contour, a contour and the shore. */
-    private static final float MAJOR_CONTOUR_LIGHT = 0.84f, CONTOUR_LIGHT = 0.93f, SHORE_LIGHT = 0.86f;
-
-    /** Pixels either way a colour is blended over. */
-    private static final int BLUR = 2;
-
     /** Regions whose tile and texture are kept in memory; the least recently used beyond this are let go. */
     private static final int KEPT = 192;
 
@@ -54,6 +37,11 @@ public final class ClientTiles {
         @Nullable DynamicTexture texture;
         @Nullable Identifier id;
         boolean stale = true;
+        /** The close-up texture, when the map was zoomed in on this region lately. */
+        @Nullable DynamicTexture detail;
+        @Nullable Identifier detailId;
+        boolean detailStale = true, detailReady;
+        long detailUsed;
         long asked;
         boolean fromDisk;
         /** True while its cached tile is being read from disk: no tile asked for yet, so the disk copy's version counts. */
@@ -86,6 +74,7 @@ public final class ClientTiles {
     }
 
     private static void release(Slot e) {
+        releaseDetail(e);
         if (e.id != null) Minecraft.getInstance().getTextureManager().release(e.id);
         e.texture = null;
         e.id = null;
@@ -161,9 +150,10 @@ public final class ClientTiles {
     }
 
     /** The client recorded into a region's tile: drawn again, and written to the disk cache with the next save. */
-    public static void edited(long region) {
+    public static void edited(long region, int chunkX, int chunkZ) {
         Slot e = TILES.get(region);
         if (e == null || e.tile == null) return;
+        nearEdge(region, chunkX, chunkZ);
         e.tile.version = Math.max(e.tile.version + 1, System.currentTimeMillis());
         e.stale = true;
         DIRTY.add(region);
@@ -223,10 +213,44 @@ public final class ClientTiles {
     public static void fogChanged(long region) {
         Slot e = TILES.get(region);
         if (e != null) e.stale = true;
+        // the fog's soft edge runs over into the regions round it
+        neighboursChanged(region);
+    }
+
+    /** One chunk was explored: its region is drawn again, and its neighbours too where the chunk is by their edge. */
+    public static void fogChanged(int chunkX, int chunkZ) {
+        long region = MapGrid.regionOfChunk(chunkX, chunkZ);
+        Slot e = TILES.get(region);
+        if (e != null) e.stale = true;
+        nearEdge(region, chunkX, chunkZ);
+    }
+
+    /** Marks the neighbouring regions a chunk's change reaches into (it blends over a couple of chunks). */
+    private static void nearEdge(long region, int chunkX, int chunkZ) {
+        int lx = Math.floorMod(chunkX, MapGrid.REGION_CHUNKS), lz = Math.floorMod(chunkZ, MapGrid.REGION_CHUNKS);
+        int reach = MapPainter.PAD / MapGrid.CHUNK_PX + 1;
+        int dx = lx < reach ? -1 : lx >= MapGrid.REGION_CHUNKS - reach ? 1 : 0;
+        int dz = lz < reach ? -1 : lz >= MapGrid.REGION_CHUNKS - reach ? 1 : 0;
+        if (dx == 0 && dz == 0) return;
+        int rx = MapGrid.keyX(region), rz = MapGrid.keyZ(region);
+        for (int[] o : new int[][]{{dx, 0}, {0, dz}, {dx, dz}}) {
+            if (o[0] == 0 && o[1] == 0) continue;
+            Slot n = TILES.get(MapGrid.key(rx + o[0], rz + o[1]));
+            if (n != null) n.stale = true;
+        }
     }
 
     /** The region's texture, drawn or redrawn as needed; null when nothing is known there. */
     public static @Nullable DynamicTexture texture(long region) {
+        return texture(region, false);
+    }
+
+    /**
+     * The region's texture, drawn or redrawn as needed; null when nothing is known there. {@code detailed} asks for the
+     * close-up one (a texel a block) where it is ready, for a map zoomed in; otherwise, or until it is, the overview one
+     * (a texel for 4 by 4 blocks).
+     */
+    public static @Nullable DynamicTexture texture(long region, boolean detailed) {
         // a region the group has not explored at all is plain fog: nothing is read or kept for it
         long[] fog = MapClient.FOG.get(region);
         if (fog == null) return null;
@@ -237,31 +261,87 @@ public final class ClientTiles {
             Minecraft.getInstance().getTextureManager().register(e.id, e.texture);
             e.stale = true;
         }
-        if (e.stale && repaintAllowed()) {
+        if (e.stale && repaintAllowed(1)) {
             NativeImage image = e.texture.getPixels();
             if (image != null) {
-                paint(image, region, e.tile, fog);
+                paint(image, 1, region, e.tile);
                 e.texture.upload();
             }
             e.stale = false;
+            e.detailStale = true;
         }
-        return e.texture;
+        if (!detailed) return e.texture;
+        e.detailUsed = ++detailClock;
+        if (e.detail == null) {
+            if (!repaintAllowed(DETAIL_COST)) return e.texture;
+            keepDetailRoom();
+            e.detailId = MapMod.id("map/tile_" + Long.toHexString(region) + "_detail");
+            e.detail = new DynamicTexture(() -> MapMod.ID + " map tile detail", MapGrid.REGION_PX * DETAIL, MapGrid.REGION_PX * DETAIL, false);
+            Minecraft.getInstance().getTextureManager().register(e.detailId, e.detail);
+            e.detailStale = true;
+            e.detailReady = false;
+            details++;
+        } else if (!e.detailStale || !repaintAllowed(DETAIL_COST)) {
+            return e.detailReady ? e.detail : e.texture;
+        }
+        NativeImage image = e.detail.getPixels();
+        if (image != null) {
+            paint(image, DETAIL, region, e.tile);
+            e.detail.upload();
+            e.detailReady = true;
+        }
+        e.detailStale = false;
+        return e.detail;
     }
 
-    /** Tiles painted again in one go at most, and the stretch of time that counts as one go (ns): a frame's worth. */
+    /** Close-up texels a data pixel, and the close-up textures kept at most (each a megabyte). */
+    private static final int DETAIL = 4, DETAILS_KEPT = 40;
+    /** A close-up texture costs as much painting as this many overview ones. */
+    private static final int DETAIL_COST = 3;
+    private static int details;
+    private static long detailClock;
+
+    /** Lets go of the close-up texture used longest ago while too many are kept. */
+    private static void keepDetailRoom() {
+        while (details >= DETAILS_KEPT) {
+            Slot oldest = null;
+            for (Slot s : TILES.values()) {
+                if (s.detail != null && (oldest == null || s.detailUsed < oldest.detailUsed)) oldest = s;
+            }
+            if (oldest == null) {
+                details = 0;
+                return;
+            }
+            releaseDetail(oldest);
+        }
+    }
+
+    private static void releaseDetail(Slot e) {
+        if (e.detail == null) return;
+        if (e.detailId != null) Minecraft.getInstance().getTextureManager().release(e.detailId);
+        e.detail = null;
+        e.detailId = null;
+        e.detailReady = false;
+        details--;
+    }
+
+    /** Overview tiles' worth of painting done in one go at most, and the stretch of time that counts as one go (ns): a frame's worth. */
     private static final int REPAINTS = 3;
     private static final long REPAINT_WINDOW = 16_000_000L;
     private static long windowStart;
     private static int repaints;
 
     /** True if one more tile may be painted again now; the rest wait for a later frame and show as they were. */
-    private static boolean repaintAllowed() {
+    private static boolean repaintAllowed(int cost) {
         long now = System.nanoTime();
         if (now - windowStart > REPAINT_WINDOW) {
             windowStart = now;
             repaints = 0;
         }
-        return repaints++ < REPAINTS;
+        // one go may always paint one thing, however costly
+        if (repaints > 0 && repaints + cost > REPAINTS) return false;
+        repaints += cost;
+        return true;
     }
 
     /** The height recorded at a block, or null. */
@@ -283,153 +363,22 @@ public final class ClientTiles {
 
     // ------------------------------------------------------------------------------------------------ drawing
 
-    /** Pixels of the neighbouring tiles read round a tile while painting it, so blends and shading run on across edges. */
-    private static final int PAD = BLUR + 2;
-
-    /**
-     * The tile with a border of its neighbours' pixels round it: colours, heights and what is known, in one grid of
-     * {@code REGION_PX + 2 * PAD} pixels a side (a neighbour that is not loaded counts as unknown).
-     */
-    private static final class Grid {
-        final int side = MapGrid.REGION_PX + 2 * PAD;
-        final int[] colour = new int[side * side];
-        final float[] height = new float[side * side];
-        final boolean[] known = new boolean[side * side];
-        final boolean[] wet = new boolean[side * side];
-
-        Grid(long region, MapTile tile) {
-            int rx = MapGrid.keyX(region), rz = MapGrid.keyZ(region), n = MapGrid.REGION_PX;
-            MapTile[] near = new MapTile[9];
-            for (int dz = -1; dz <= 1; dz++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    if (dx == 0 && dz == 0) near[4] = tile;
-                    else {
-                        Slot e = TILES.get(MapGrid.key(rx + dx, rz + dz));
-                        near[(dz + 1) * 3 + dx + 1] = e == null ? null : e.tile;
-                    }
-                }
-            }
-            for (int gz = 0; gz < side; gz++) {
-                for (int gx = 0; gx < side; gx++) {
-                    int px = gx - PAD, pz = gz - PAD;
-                    int tx = px < 0 ? -1 : px >= n ? 1 : 0, tz = pz < 0 ? -1 : pz >= n ? 1 : 0;
-                    MapTile t = near[(tz + 1) * 3 + tx + 1];
-                    int g = gz * side + gx;
-                    if (t == null) continue;
-                    int i = MapTile.index(Math.floorMod(px, n), Math.floorMod(pz, n));
-                    if (!t.known(i)) continue;
-                    known[g] = true;
-                    colour[g] = t.colour[i] & 0xFFFFFF;
-                    height[g] = t.height[i];
-                    wet[g] = (t.colour[i] & MapTile.WATER) != 0;
+    private static void paint(NativeImage image, int up, long region, @Nullable MapTile tile) {
+        int rx = MapGrid.keyX(region), rz = MapGrid.keyZ(region);
+        MapTile[] near = new MapTile[9];
+        long[][] fog = new long[9][];
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                long key = MapGrid.key(rx + dx, rz + dz);
+                int k = (dz + 1) * 3 + dx + 1;
+                fog[k] = MapClient.FOG.get(key);
+                if (dx == 0 && dz == 0) near[k] = tile;
+                else {
+                    Slot e = TILES.get(key);
+                    near[k] = e == null ? null : e.tile;
                 }
             }
         }
-
-        int at(int px, int pz) {
-            return (pz + PAD) * side + px + PAD;
-        }
-    }
-
-    private static void paint(NativeImage image, long region, @Nullable MapTile tile, long[] fog) {
-        int n = MapGrid.REGION_PX;
-        Grid grid = tile == null ? null : new Grid(region, tile);
-        int[] base = grid == null ? null : smoothColours(grid);
-        float[] heights = grid == null ? null : smoothHeights(grid);
-        for (int pz = 0; pz < n; pz++) {
-            for (int px = 0; px < n; px++) {
-                int chunkBit = (pz / MapGrid.CHUNK_PX) * MapGrid.REGION_CHUNKS + px / MapGrid.CHUNK_PX;
-                int rgb;
-                if (!MapGrid.get(fog, chunkBit)) {
-                    rgb = ((px + pz) % FOG_WEAVE == 0) ? FOG_LINE : FOG;
-                } else if (grid == null || !grid.known[grid.at(px, pz)]) {
-                    rgb = UNKNOWN;
-                } else {
-                    rgb = shade(grid, base, heights, px, pz);
-                }
-                image.setPixel(px, pz, 0xFF000000 | rgb);
-            }
-        }
-    }
-
-    /** A weighted blend over the pixels round each one, land with land and water with water. */
-    private static int[] smoothColours(Grid g) {
-        int[] out = new int[g.side * g.side];
-        for (int z = BLUR; z < g.side - BLUR; z++) {
-            for (int x = BLUR; x < g.side - BLUR; x++) {
-                int i = z * g.side + x;
-                if (!g.known[i]) continue;
-                int r = 0, gr = 0, b = 0, w = 0;
-                for (int dz = -BLUR; dz <= BLUR; dz++) {
-                    for (int dx = -BLUR; dx <= BLUR; dx++) {
-                        int j = (z + dz) * g.side + x + dx;
-                        if (!g.known[j] || g.wet[j] != g.wet[i]) continue;
-                        // nearer pixels count more
-                        int weight = BLUR + 1 - Math.max(Math.abs(dx), Math.abs(dz));
-                        int c = g.colour[j];
-                        r += (c >> 16 & 255) * weight;
-                        gr += (c >> 8 & 255) * weight;
-                        b += (c & 255) * weight;
-                        w += weight;
-                    }
-                }
-                out[i] = (r / w) << 16 | (gr / w) << 8 | (b / w);
-            }
-        }
-        return out;
-    }
-
-    /** Heights blended the same way, so the shading and contour lines follow the land's shape, not its blocks. */
-    private static float[] smoothHeights(Grid g) {
-        float[] out = new float[g.side * g.side];
-        for (int z = 0; z < g.side; z++) {
-            for (int x = 0; x < g.side; x++) {
-                int i = z * g.side + x;
-                if (!g.known[i]) continue;
-                float sum = 0, w = 0;
-                for (int dz = -BLUR; dz <= BLUR; dz++) {
-                    for (int dx = -BLUR; dx <= BLUR; dx++) {
-                        int xx = x + dx, zz = z + dz;
-                        if (xx < 0 || zz < 0 || xx >= g.side || zz >= g.side) continue;
-                        int j = zz * g.side + xx;
-                        if (!g.known[j] || g.wet[j] != g.wet[i]) continue;
-                        float weight = BLUR + 1 - Math.max(Math.abs(dx), Math.abs(dz));
-                        sum += g.height[j] * weight;
-                        w += weight;
-                    }
-                }
-                out[i] = sum / w;
-            }
-        }
-        return out;
-    }
-
-    /** One pixel: its blended colour, lit softly from the north-west, with sparse contour lines and shore lines. */
-    private static int shade(Grid g, int[] base, float[] h, int px, int pz) {
-        int i = g.at(px, pz);
-        int c = base[i];
-        float light = 1f;
-        if (!g.wet[i]) {
-            int nw = g.at(px - 1, pz - 1), se = g.at(px + 1, pz + 1);
-            if (g.known[nw] && g.known[se] && !g.wet[nw] && !g.wet[se]) {
-                light += Math.clamp((h[se] - h[nw]) * -SLOPE_LIGHT, -MAX_SLOPE_LIGHT, MAX_SLOPE_LIGHT);
-            }
-            boolean contour = false, major = false;
-            for (int o : new int[]{g.at(px + 1, pz), g.at(px, pz + 1)}) {
-                if (!g.known[o] || g.wet[o]) continue;
-                if (Math.floor(h[o] / CONTOUR_STEP) != Math.floor(h[i] / CONTOUR_STEP)) contour = true;
-                if (Math.floor(h[o] / MAJOR_CONTOUR_STEP) != Math.floor(h[i] / MAJOR_CONTOUR_STEP)) major = true;
-            }
-            if (major) light *= MAJOR_CONTOUR_LIGHT;
-            else if (contour) light *= CONTOUR_LIGHT;
-        } else {
-            for (int o : new int[]{g.at(px + 1, pz), g.at(px, pz + 1), g.at(px - 1, pz), g.at(px, pz - 1)}) {
-                if (g.known[o] && !g.wet[o]) light = SHORE_LIGHT;
-            }
-        }
-        int r = Math.clamp((int) ((c >> 16 & 255) * light), 0, 255);
-        int gr = Math.clamp((int) ((c >> 8 & 255) * light), 0, 255);
-        int b = Math.clamp((int) ((c & 255) * light), 0, 255);
-        return r << 16 | gr << 8 | b;
+        MapPainter.paint(image, up, region, tile == null ? null : new MapPainter.Grid(near), fog);
     }
 }
