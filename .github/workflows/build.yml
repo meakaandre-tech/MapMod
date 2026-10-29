@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "waypoints-zoom"]
   workflow_dispatch:
 
 permissions:
