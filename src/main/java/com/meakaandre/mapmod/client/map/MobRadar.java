@@ -30,6 +30,8 @@ import java.util.Map;
 public final class MobRadar {
     /** Size a face is drawn at on the minimap, and on the fullscreen map (pixels). */
     private static final int SMALL = 7, BIG = 9;
+    /** Blocks above or below the player a mob may be and still show. */
+    private static final int HEIGHT_RANGE = 24;
     /** A mob's texture is looked up again this often (ticks): it may change (a sheared sheep, a converting zombie). */
     private static final int TEXTURE_TICKS = 40;
     /** A dark outline round each face, so it stands out on any ground. */
@@ -71,6 +73,8 @@ public final class MobRadar {
         float pt = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
         for (Entity e : mc.level.entitiesForRendering()) {
             if (!(e instanceof LivingEntity living) || e instanceof Player || e.isRemoved() || e.isInvisible() || !living.isAlive()) continue;
+            // mobs far above or below (in caves under the player) are left off, as on the surface map they are not
+            if (Math.abs(e.getY() - mc.player.getY()) > HEIGHT_RANGE) continue;
             boolean hostile = hostile(e);
             if (hostile ? !hostiles : !passives) continue;
             double x = e.xo + (e.getX() - e.xo) * pt, z = e.zo + (e.getZ() - e.zo) * pt;
