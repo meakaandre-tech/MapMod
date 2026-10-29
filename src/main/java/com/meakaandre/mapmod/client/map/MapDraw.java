@@ -93,11 +93,14 @@ public final class MapDraw {
      * from the same rounding of the region's corners, so neighbouring tiles meet exactly: drawn at a fraction of a pixel,
      * a zoomed-out map could leave a one-pixel line of the fog colour between two of them.
      */
+    /** From this zoom (screen pixels a block) the close-up tiles are drawn, a texel a block. */
+    private static final double DETAIL_SCALE = 0.45;
+
     public static void tiles(GuiGraphicsExtractor g, View v) {
         g.fill(v.left, v.top, v.left + v.width, v.top + v.height, FOG_BACK);
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
         for (long region : v.regions()) {
-            DynamicTexture texture = ClientTiles.texture(region);
+            DynamicTexture texture = ClientTiles.texture(region, v.scale >= DETAIL_SCALE);
             if (texture == null) continue;
             double rx = (double) MapGrid.keyX(region) * MapGrid.REGION_BLOCKS, rz = (double) MapGrid.keyZ(region) * MapGrid.REGION_BLOCKS;
             int x0 = (int) Math.round(v.sx(rx)), x1 = (int) Math.round(v.sx(rx + MapGrid.REGION_BLOCKS));

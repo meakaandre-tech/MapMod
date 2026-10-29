@@ -86,7 +86,7 @@ public final class MapRecorder {
                     pos.set(x, found, z);
                     if (water) {
                         int floor = floor(chunk, pos, found, min);
-                        colour = MapPalette.water(found - floor) | MapTile.KNOWN | MapTile.WATER;
+                        colour = MapPalette.water(found - floor) | MapTile.withDepth(found - floor) | MapTile.KNOWN | MapTile.WATER;
                     } else if (lava) {
                         colour = LAVA_COLOUR | MapTile.KNOWN;
                     } else {

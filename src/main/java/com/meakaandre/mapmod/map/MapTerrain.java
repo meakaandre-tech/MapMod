@@ -397,7 +397,7 @@ public final class MapTerrain {
                 colour[s] = MapRecorder.VOID_COLOUR | MapTile.KNOWN | MapTile.GUESSED;
                 height[s] = (short) level.getMinY();
             } else if (col.y() < seaLevel - 1) {
-                colour[s] = MapPalette.water(seaLevel - 1 - col.y()) | MapTile.KNOWN | MapTile.GUESSED | MapTile.WATER;
+                colour[s] = MapPalette.water(seaLevel - 1 - col.y()) | MapTile.withDepth(seaLevel - 1 - col.y()) | MapTile.KNOWN | MapTile.GUESSED | MapTile.WATER;
                 height[s] = (short) (seaLevel - 1);
             } else {
                 colour[s] = MapPalette.guess(col.biome()) | MapTile.KNOWN | MapTile.GUESSED;

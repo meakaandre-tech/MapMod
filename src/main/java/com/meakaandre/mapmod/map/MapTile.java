@@ -20,8 +20,11 @@ import java.util.zip.InflaterInputStream;
  */
 public final class MapTile {
     public static final int KNOWN = 1 << 24, GUESSED = 1 << 25, WATER = 1 << 26;
-    /** 2: natural ground and biome colours (1 held the top block and its colour; such tiles are recorded again). */
-    private static final int FORMAT = 3;
+    /** A water pixel's depth (blocks to the floor, at most {@link #MAX_DEPTH}) is kept in the colour's top 5 bits. */
+    private static final int DEPTH_SHIFT = 27;
+    public static final int MAX_DEPTH = 31;
+    /** 4: water keeps its depth (older tiles are recorded again). */
+    private static final int FORMAT = 4;
     /** Starting size of the buffer a tile is packed into (bytes). */
     private static final int PACK_BUFFER = 16384;
     /** Deflate level used to pack a tile. */
@@ -35,6 +38,16 @@ public final class MapTile {
 
     public static int index(int px, int pz) {
         return pz * MapGrid.REGION_PX + px;
+    }
+
+    /** The depth bits of a water pixel's colour. */
+    public static int withDepth(int depth) {
+        return Math.clamp(depth, 0, MAX_DEPTH) << DEPTH_SHIFT;
+    }
+
+    /** A water pixel's depth, from its colour. */
+    public static int depth(int colour) {
+        return colour >>> DEPTH_SHIFT;
     }
 
     public boolean known(int i) {
