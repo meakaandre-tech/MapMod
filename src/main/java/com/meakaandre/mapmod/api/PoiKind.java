@@ -181,9 +181,11 @@ public final class PoiKind {
         return this.purity ? PURITY[Math.clamp(purity, 0, 2)] : colour(sub);
     }
 
-    public @Nullable Identifier item(String sub) {
+    /** The items to draw in the purity ring for a POI of this kind, first choice first: its sub-type's, else the kind's. */
+    public List<Identifier> items(String sub) {
         PoiSubType s = subTypes.get(sub);
-        return s != null && s.item() != null ? s.item() : item;
+        if (s != null && !s.items().isEmpty()) return s.items();
+        return item == null ? List.of() : List.of(item);
     }
 
     @Override

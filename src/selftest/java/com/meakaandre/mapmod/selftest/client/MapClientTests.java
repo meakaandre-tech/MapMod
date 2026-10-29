@@ -7,6 +7,7 @@ import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
 import com.meakaandre.mapmod.client.map.ClientTiles;
 import com.meakaandre.mapmod.client.map.MapClient;
+import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapFilters;
 import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.map.MapGrid;
@@ -16,6 +17,7 @@ import com.meakaandre.mapmod.selftest.TestPois;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.item.Items;
 
 import java.util.HashSet;
 import java.util.List;
@@ -112,6 +114,10 @@ public final class MapClientTests {
                     && !filters.contains(TestPois.ORE.filterKey()) && !filters.contains(TestPois.CART.filterKey())
                     && filters.contains("cat:mapmod:players") && filters.contains(MapFilters.DEATHS), filters.size() + " switches");
             expect("a registered glyph joins the stock set", TestPois.TENT >= 28 && MapGlyphs.count() > TestPois.TENT, Integer.toString(MapGlyphs.count()));
+            MapPoi tin = MapPoi.of(TestPois.ORE, "tin", 2, 0, 64, 0);
+            MapPoi gold = MapPoi.of(TestPois.ORE, "gold", 2, 0, 64, 0);
+            expect("a sub-type's item falls back to the next one the game has", MapDraw.item(tin).is(Items.RAW_GOLD) && MapDraw.item(gold).isEmpty(),
+                MapDraw.item(tin).toString());
             expect("a pinned marker is kept", !MapClient.PINS.isEmpty(), MapClient.PINS.size() + " pins");
             expect("the map runs next to Quicksilver", FabricLoader.getInstance().isModLoaded("quicksilver"), "");
         }
