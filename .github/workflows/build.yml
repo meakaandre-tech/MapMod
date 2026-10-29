@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "subtype-items"]
   workflow_dispatch:
 
 permissions:
