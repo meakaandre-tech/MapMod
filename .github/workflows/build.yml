@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "mm-2-painted"]
   workflow_dispatch:
 
 permissions:
@@ -61,6 +61,12 @@ jobs:
             ls -R /tmp/ci/textures | head -5 || true
           fi
           if [ -f .github/dump-signatures ]; then
+            # the game's own shaders, to write ours the same way
+            for j in $(find ~/.gradle/caches/fabric-loom .gradle/loom-cache -name '*.jar' 2>/dev/null | grep -iE 'minecraft' | grep -v sources); do
+              if unzip -Z1 "$j" 2>/dev/null | grep -q '^assets/minecraft/shaders/core/'; then
+                mkdir -p /tmp/ci/shaders && unzip -o -q "$j" 'assets/minecraft/shaders/*' -d /tmp/ci/shaders && break
+              fi
+            done
             mcjars=$(find ~/.gradle/caches/fabric-loom .gradle/loom-cache -name '*.jar' 2>/dev/null | grep -iE 'minecraft' | grep -v sources || true)
             ./gradlew dumpCompileClasspath --no-daemon -q -I /tmp/maxerrs.gradle >/dev/null 2>&1 || true
             fabricjars=$(grep -E '/fabric-[^/]*\.jar$' /tmp/compile-cp.txt 2>/dev/null | grep -v sources | tr '\n' ' ')
