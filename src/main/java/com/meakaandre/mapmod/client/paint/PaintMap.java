@@ -305,6 +305,15 @@ public final class PaintMap {
         return p == null ? -1 : p.masks.valueAt(x, z, PaintPalette.current().fogEdge());
     }
 
+    /**
+     * Whether this client captured a block, as the fog knows it: kept while in the world, unlike the tiles' data, which
+     * the open map lets go once it has baked them.
+     */
+    public static boolean captured(int x, int z) {
+        MapPainter p = painter;
+        return p != null && p.masks.captured(x, z);
+    }
+
     /** For the selftests: whether the fog the masks are made from counts a block's chunk as explored. */
     public static boolean fogSourceExplores(int x, int z) {
         long[] bits = mayShow(com.meakaandre.mapmod.map.MapGrid.regionOfBlock(x, z));

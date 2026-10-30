@@ -81,7 +81,7 @@ public final class MobRadar {
             if (hostile ? !hostiles : !passives) continue;
             double x = e.xo + (e.getX() - e.xo) * pt, z = e.zo + (e.getZ() - e.zo) * pt;
             // under the fog: where the map has nothing captured
-            if (PaintMap.height((int) Math.floor(x), (int) Math.floor(z)) == null) continue;
+            if (!PaintMap.captured((int) Math.floor(x), (int) Math.floor(z))) continue;
             double sx = v.sx(x), sy = v.sy(z);
             if (!v.inside(sx, sy, size)) continue;
             int x0 = (int) Math.round(sx) - size / 2, y0 = (int) Math.round(sy) - size / 2;
