@@ -64,7 +64,9 @@ final class MapPainter implements AutoCloseable {
     private final Long2LongOpenHashMap preparing = new Long2LongOpenHashMap();
     private final ConcurrentHashMap<Long, Prepared> prepared = new ConcurrentHashMap<>();
     private volatile int generation;
-    private MapGpu.@Nullable Target picture;
+    /** The pictures painted, a few in turn: a frame never draws into the one the screen read the frame before. */
+    private final MapGpu.@Nullable Target[] pictures = new MapGpu.Target[MapGpu.FRAMES];
+    private int pictureSlot;
     private long frame;
     private int lookVersion = Integer.MIN_VALUE;
     private boolean lookContours;
@@ -165,7 +167,8 @@ final class MapPainter implements AutoCloseable {
         lastBakes = (int) (cache.leafBakes - bakes0);
         lastMips = (int) (cache.mipBuilds - mips0);
 
-        picture = sized(picture, "map picture", f.width(), f.height());
+        pictureSlot = (pictureSlot + 1) % pictures.length;
+        MapGpu.Target picture = pictures[pictureSlot] = sized(pictures[pictureSlot], "map picture " + pictureSlot, f.width(), f.height());
         List<MapGpu.TexQuad> quads = new ArrayList<>();
         // paper first, under everything: where no tile lies, unexplored land
         quads.add(MapGpu.TexQuad.paper(picture));
@@ -406,15 +409,17 @@ final class MapPainter implements AutoCloseable {
     /** The screen closed: the pictures, the tiles' textures and their data go; the baked tiles stay. */
     void release() {
         closeTextures();
-        if (picture != null) picture.close();
-        picture = null;
+        for (int i = 0; i < pictures.length; i++) {
+            if (pictures[i] != null) pictures[i].close();
+            pictures[i] = null;
+        }
         gpu.close();
         data = null;
     }
 
     /** True while the GPU holds a picture (the map is open and painted). */
     boolean painting() {
-        return picture != null;
+        return pictures[pictureSlot] != null;
     }
 
     @Override

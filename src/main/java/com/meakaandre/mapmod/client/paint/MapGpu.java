@@ -137,12 +137,20 @@ final class MapGpu implements AutoCloseable {
 
     /** One projection per target size used: a tile's 512 and the screen's. */
     private final List<Projected> projections = new ArrayList<>();
+    /**
+     * Frames whose draw buffers are kept apart: a frame never writes a buffer the last few frames' draws read, which
+     * would make the driver wait for them.
+     */
+    static final int FRAMES = 3;
     private @Nullable GpuBuffer palette, blocks;
-    private int paletteVersion = -1, capacity, cursor;
+    private final @Nullable GpuBuffer[] ring = new GpuBuffer[FRAMES];
+    private final int[] capacities = new int[FRAMES];
+    private int paletteVersion = -1, capacity, cursor, slot;
     /** Bound as the source of a paper quad, which reads none. */
     private @Nullable DynamicTexture blank;
-    /** Draw buffers outgrown this frame, let go at the start of the next (their draws may still be in flight). */
-    private final List<GpuBuffer> retired = new ArrayList<>();
+    /** Draw buffers outgrown, per frame slot, let go when that slot comes round again. */
+    @SuppressWarnings("unchecked")
+    private final List<GpuBuffer>[] retired = new List[]{new ArrayList<>(), new ArrayList<>(), new ArrayList<>()};
     /** Passes and draws this frame (for the stats). */
     int passes, draws;
 
@@ -161,17 +169,22 @@ final class MapGpu implements AutoCloseable {
 
     /** Starts a frame: the draw blocks are written from the start again, with room for {@code expected} draws. */
     void beginFrame(int expected) {
+        ring[slot] = blocks;
+        capacities[slot] = capacity;
+        slot = (slot + 1) % FRAMES;
+        blocks = ring[slot];
+        capacity = capacities[slot];
         cursor = 0;
         passes = draws = 0;
-        for (GpuBuffer b : retired) b.close();
-        retired.clear();
+        for (GpuBuffer b : retired[slot]) b.close();
+        retired[slot].clear();
         reserve(expected);
     }
 
     private void reserve(int n) {
         if (blocks != null && capacity >= cursor + n) return;
         // a buffer already drawn from this frame stays as it is until the next: the next draws go to a new, bigger one
-        if (blocks != null) retired.add(blocks);
+        if (blocks != null) retired[slot].add(blocks);
         capacity = Math.max(64, Integer.highestOneBit(Math.max(1, cursor + n) - 1) << 2);
         cursor = 0;
         blocks = RenderSystem.getDevice().createBuffer(() -> MapMod.ID + " map draws", GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_COPY_DST,
@@ -330,9 +343,15 @@ final class MapGpu implements AutoCloseable {
     @Override
     public void close() {
         if (palette != null) palette.close();
-        if (blocks != null) blocks.close();
-        for (GpuBuffer b : retired) b.close();
-        retired.clear();
+        ring[slot] = blocks;
+        for (int i = 0; i < FRAMES; i++) {
+            if (ring[i] != null) ring[i].close();
+            ring[i] = null;
+            capacities[i] = 0;
+            for (GpuBuffer b : retired[i]) b.close();
+            retired[i].clear();
+        }
+        capacity = 0;
         if (blank != null) blank.close();
         blank = null;
         for (Projected p : projections) p.buffer.close();
