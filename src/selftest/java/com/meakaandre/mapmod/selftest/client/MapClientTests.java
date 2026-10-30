@@ -491,13 +491,13 @@ public final class MapClientTests {
             for (int dz = -r; dz <= r; dz++) {
                 for (int dx = -r; dx <= r; dx++) {
                     int bx = (pcx + dx) * 16 + 8, bz = (pcz + dz) * 16 + 8;
-                    if (PaintMap.height(bx, bz) == null) continue;
+                    if (!PaintMap.captured(bx, bz)) continue;
                     captured++;
                     if (dx * dx + dz * dz > MapServer.VISIT_RADIUS * MapServer.VISIT_RADIUS) beyondVisit++;
                     if (!PaintMap.fogSourceExplores(bx, bz)) unexplored++;
                     boolean deep = true;
                     for (int k = -rim; k <= rim && deep; k++) {
-                        for (int j = -rim; j <= rim && deep; j++) deep = PaintMap.height(bx + j * 16, bz + k * 16) != null;
+                        for (int j = -rim; j <= rim && deep; j++) deep = PaintMap.captured(bx + j * 16, bz + k * 16);
                     }
                     if (!deep) continue;
                     inner++;

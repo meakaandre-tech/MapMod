@@ -271,6 +271,14 @@ final class FogMasks implements AutoCloseable {
         return (float) (((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) / 255);
     }
 
+    /** Whether this client captured the sample at a block, as the fog knows it (from the tiles prepared so far). */
+    boolean captured(int x, int z) {
+        long[] c = coverage.get(TileIndex.key(Math.floorDiv(x, BakeCache.SIDE), Math.floorDiv(z, BakeCache.SIDE)));
+        if (c == null) return false;
+        int i = com.meakaandre.mapmod.client.capture.SurfaceTile.indexOfBlock(x, z);
+        return (c[i >>> 6] & 1L << i) != 0;
+    }
+
     /** For the selftests: the explored samples kept for a tile, or null. */
     long @Nullable [] coverageOf(int tx, int tz) {
         return coverage.get(TileIndex.key(tx, tz));
