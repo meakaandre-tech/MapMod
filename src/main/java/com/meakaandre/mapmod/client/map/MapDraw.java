@@ -8,12 +8,8 @@ import com.meakaandre.mapmod.api.PoiKind;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.renderpearl.api.textures.FilterMode;
-import com.mojang.renderpearl.api.textures.GpuSampler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -28,31 +24,22 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Drawing shared by the minimap and the fullscreen map: a view (a centre in the world, a scale and a rectangle on
- * screen), the terrain tiles under it, and the icons of everything on it.
+ * Drawing for the fullscreen map's overlays: a view (a centre in the world, a scale and a rectangle on screen) and the
+ * icons of everything on it. The terrain under them is painted by {@code client.paint}.
  */
 public final class MapDraw {
     private static final Map<Identifier, ItemStack> ITEMS = new HashMap<>();
-    public static final int PLAYER = 0xFFFFFFFF, MATE = 0xFF5FD4FF, FOG_BACK = 0xFF141A26;
+    public static final int PLAYER = 0xFFFFFFFF, MATE = 0xFF5FD4FF;
     /** Size an item is drawn at in a purity ring (pixels; items are 16). */
     private static final int ITEM_PX = 9;
-    /** Height of the strips a round view is drawn in (pixels). */
-    private static final int ROUND_STRIP = 2;
     /** Blocks in a kilometre: distances from this on are given in km. */
     private static final int BLOCKS_PER_KM = 1000;
 
     private MapDraw() {
     }
 
-    /**
-     * A view of the map: world (cx, cz) at the centre of the screen rectangle, {@code scale} screen pixels a block;
-     * {@code round} for the round minimap, which shows only the disc inside the rectangle.
-     */
-    public record View(double cx, double cz, double scale, int left, int top, int width, int height, boolean round) {
-        public View(double cx, double cz, double scale, int left, int top, int width, int height) {
-            this(cx, cz, scale, left, top, width, height, false);
-        }
-
+    /** A view of the map: world (cx, cz) at the centre of the screen rectangle, {@code scale} screen pixels a block. */
+    public record View(double cx, double cz, double scale, int left, int top, int width, int height) {
         public double sx(double x) {
             return left + width / 2.0 + (x - cx) * scale;
         }
@@ -70,11 +57,6 @@ public final class MapDraw {
         }
 
         public boolean inside(double sx, double sy, int margin) {
-            if (round) {
-                // a round view: inside the disc, a little in from its edge so an icon is not cut off by the ring
-                double dx = sx - (left + width / 2.0), dy = sy - (top + height / 2.0), r = width / 2.0 - 3;
-                return dx * dx + dy * dy <= r * r;
-            }
             return sx >= left - margin && sx < left + width + margin && sy >= top - margin && sy < top + height + margin;
         }
 
@@ -85,44 +67,6 @@ public final class MapDraw {
             int z0 = Math.floorDiv((int) Math.floor(wz(top)), MapGrid.REGION_BLOCKS), z1 = Math.floorDiv((int) Math.ceil(wz(top + height)), MapGrid.REGION_BLOCKS);
             for (int rz = z0; rz <= z1; rz++) for (int rx = x0; rx <= x1; rx++) out.add(MapGrid.key(rx, rz));
             return out;
-        }
-    }
-
-    /**
-     * The fog-coloured ground and every known tile in the view, clipped to it. Each tile's edges are put on whole pixels
-     * from the same rounding of the region's corners, so neighbouring tiles meet exactly: drawn at a fraction of a pixel,
-     * a zoomed-out map could leave a one-pixel line of the fog colour between two of them.
-     */
-    /** From this zoom (screen pixels a block) up, the map is drawn as sharp pixels; below it, filtered so it does not shimmer. */
-    private static final double SHARP_SCALE = 1;
-
-    public static void tiles(GuiGraphicsExtractor g, View v) {
-        g.fill(v.left, v.top, v.left + v.width, v.top + v.height, FOG_BACK);
-        GpuSampler sampler = RenderSystem.getSamplerCache().getClampToEdge(v.scale >= SHARP_SCALE ? FilterMode.NEAREST : FilterMode.LINEAR);
-        for (long region : v.regions()) {
-            DynamicTexture texture = ClientTiles.texture(region);
-            if (texture == null) continue;
-            double rx = (double) MapGrid.keyX(region) * MapGrid.REGION_BLOCKS, rz = (double) MapGrid.keyZ(region) * MapGrid.REGION_BLOCKS;
-            int x0 = (int) Math.round(v.sx(rx)), x1 = (int) Math.round(v.sx(rx + MapGrid.REGION_BLOCKS));
-            int y0 = (int) Math.round(v.sy(rz)), y1 = (int) Math.round(v.sy(rz + MapGrid.REGION_BLOCKS));
-            if (x1 <= x0 || y1 <= y0) continue;
-            g.blit(texture.getTextureView(), sampler, x0, y0, x1, y1, 0f, 1f, 0f, 1f);
-        }
-    }
-
-    /**
-     * The tiles of a round view: drawn in thin horizontal strips, each clipped to the disc's width there, so the map is a
-     * circle and what lies outside it stays the game's own picture.
-     */
-    public static void roundTiles(GuiGraphicsExtractor g, View v) {
-        int r = v.width / 2, cx = v.left + r, cy = v.top + r;
-        for (int y = -r; y < r; y += ROUND_STRIP) {
-            double mid = y + ROUND_STRIP / 2.0;
-            int half = (int) Math.round(Math.sqrt(Math.max(0, r * r - mid * mid)));
-            if (half <= 0) continue;
-            g.enableScissor(cx - half, cy + y, cx + half, cy + y + ROUND_STRIP);
-            tiles(g, v);
-            g.disableScissor();
         }
     }
 

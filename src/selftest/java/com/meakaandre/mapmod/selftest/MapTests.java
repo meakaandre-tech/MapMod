@@ -70,7 +70,7 @@ public final class MapTests {
 
     /** What the map's remote control does on the client. */
     public enum Action {
-        OPEN, CLOSE, HIDE, SHOW, UNFOLD, MINIMAP, PIN_MARKER, EDIT, CHECK
+        OPEN, CLOSE, HIDE, SHOW, UNFOLD, PIN_MARKER, EDIT, CHECK
     }
 
     /**
@@ -117,7 +117,7 @@ public final class MapTests {
                     .then(Commands.literal("stamp").executes(MapTests::stamp))
                     .then(Commands.literal("lock").executes(context -> lock(context, true)))
                     .then(Commands.literal("unlock").executes(context -> lock(context, false)))
-                    .then(Commands.literal("open").then(Commands.argument("zoom", FloatArgumentType.floatArg(0.01f, 4))
+                    .then(Commands.literal("open").then(Commands.argument("zoom", FloatArgumentType.floatArg(0.01f, 8))
                         .executes(context -> control(context, Action.OPEN, "", FloatArgumentType.getFloat(context, "zoom")))
                         .then(Commands.argument("marker", StringArgumentType.greedyString())
                             .executes(context -> control(context, Action.OPEN, StringArgumentType.getString(context, "marker"), FloatArgumentType.getFloat(context, "zoom"))))))
@@ -125,8 +125,6 @@ public final class MapTests {
                     .then(Commands.literal("edit").executes(context -> control(context, Action.EDIT, "", 0)))
                     .then(Commands.literal("check").then(Commands.argument("what", StringArgumentType.greedyString())
                         .executes(context -> control(context, Action.CHECK, StringArgumentType.getString(context, "what"), 0))))
-                    .then(Commands.literal("minimap").then(Commands.argument("on", StringArgumentType.word())
-                        .executes(context -> control(context, Action.MINIMAP, StringArgumentType.getString(context, "on"), 0))))
                     .then(Commands.literal("pin").then(Commands.argument("marker", StringArgumentType.greedyString())
                         .executes(context -> control(context, Action.PIN_MARKER, StringArgumentType.getString(context, "marker"), 0))))
                     .then(Commands.literal("unfold").then(Commands.argument("filter", StringArgumentType.greedyString())

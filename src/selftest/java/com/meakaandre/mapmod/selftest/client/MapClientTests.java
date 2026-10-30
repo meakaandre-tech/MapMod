@@ -1,17 +1,20 @@
 package com.meakaandre.mapmod.selftest.client;
 
+import com.google.gson.JsonParser;
 import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.api.MapFeature;
 import com.meakaandre.mapmod.api.MapGlyphs;
 import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
-import com.meakaandre.mapmod.client.map.ClientTiles;
+import com.meakaandre.mapmod.client.capture.Capture;
 import com.meakaandre.mapmod.client.map.LocalMap;
 import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapFilters;
 import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.client.map.MobRadar;
+import com.meakaandre.mapmod.client.paint.PaintMap;
+import com.meakaandre.mapmod.client.paint.PaintPalette;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
@@ -41,6 +44,7 @@ import java.util.Set;
  */
 public final class MapClientTests {
     private static int passed, failed;
+    private static int palettesBeforeReload = Integer.MAX_VALUE;
 
     private MapClientTests() {
     }
@@ -65,16 +69,14 @@ public final class MapClientTests {
         int pass = 0, fail = 0;
         int px = mc.player.getBlockX(), pz = mc.player.getBlockZ();
         boolean[] checks = {
-            MapClient.unlocked(MapFeature.TERRAIN) && MapClient.unlocked(MapFeature.MINIMAP) && MapClient.unlocked(MapFeature.FULLSCREEN),
+            MapClient.unlocked(MapFeature.TERRAIN) && MapClient.unlocked(MapFeature.FULLSCREEN),
             MapClient.mapId != null && MapClient.mapId.startsWith("server-"),
             MapClient.explored(px, pz) && MapClient.explored(px + 80, pz) && !MapClient.explored(px + 200, pz),
-            ClientTiles.height(px, pz) != null && ClientTiles.height(px + 40, pz - 40) != null,
         };
         String[] what = {
             "with no MapMod on the server the whole map is open",
             "the client keeps its own map for this server (" + MapClient.mapId + ")",
             "the client clears its own fog round the player",
-            "the client records the terrain it has loaded",
         };
         for (int i = 0; i < checks.length; i++) {
             MapMod.LOGGER.info("SELFTEST local {} {}", checks[i] ? "PASS" : "FAIL", what[i]);
@@ -104,10 +106,8 @@ public final class MapClientTests {
         else fail++;
         LocalMap.save();
         Path dir = mc.gameDirectory.toPath().resolve(MapMod.ID).resolve(MapClient.mapId == null ? "none" : MapClient.mapId);
-        long region = MapGrid.regionOfBlock(px, pz);
-        boolean saved = Files.exists(dir.resolve("fog.bin")) && Files.exists(dir.resolve("markers.json"))
-            && Files.exists(dir.resolve("r." + MapGrid.keyX(region) + "." + MapGrid.keyZ(region) + ".bin"));
-        MapMod.LOGGER.info("SELFTEST local {} its tiles, fog and markers are saved in the game folder ({})", saved ? "PASS" : "FAIL", dir);
+        boolean saved = Files.exists(dir.resolve("fog.bin")) && Files.exists(dir.resolve("markers.json"));
+        MapMod.LOGGER.info("SELFTEST local {} its fog and markers are saved in the game folder ({})", saved ? "PASS" : "FAIL", dir);
         if (saved) pass++;
         else fail++;
         for (CaptureClientTests.Check c : CaptureClientTests.run(true)) {
@@ -145,7 +145,6 @@ public final class MapClientTests {
             case HIDE -> MapClient.HIDDEN.add(p.arg());
             case SHOW -> MapClient.HIDDEN.remove(p.arg());
             case UNFOLD -> MapScreen.unfold(p.arg());
-            case MINIMAP -> MapClient.minimapOn = p.arg().equals("on");
             case PIN_MARKER -> {
                 MapMarker m = named(p.arg());
                 if (m != null) MapClient.pin(MapClient.markerPin(m));
@@ -157,6 +156,21 @@ public final class MapClientTests {
             default -> {
             }
         }
+    }
+
+    /** The painted map's shader and palette, before the map has been opened. */
+    private static void painted() {
+        String compiled = PaintMap.compileCheck();
+        expect("the painted map's shader compiles", compiled == null, compiled == null ? "" : compiled);
+        PaintPalette pal = PaintPalette.current();
+        expect("map_palette.json is read from the resources", PaintPalette.loads() > 0 && PaintPalette.lastError().isEmpty()
+            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == 0xB2BD8C && pal.snowAbove() == 190 && pal.hillshade() == 0.4f,
+            PaintPalette.loads() + " loads " + PaintPalette.lastError());
+        PaintPalette broken = PaintPalette.parse(JsonParser.parseString(
+            "{\"classes\": {\"2\": {\"colour\": \"#123456\"}, \"3\": {\"colour\": \"not a colour\"}}, \"snow\": {\"above\": 150}}").getAsJsonObject());
+        expect("a palette keeps the built-in value for whatever it leaves out or gets wrong",
+            broken.classColour()[2] == 0x123456 && broken.classColour()[3] == PaintPalette.DEFAULT.classColour()[3]
+                && broken.snowAbove() == 150 && broken.paper() == PaintPalette.DEFAULT.paper(), "");
     }
 
     private static void expect(String what, boolean ok, String detail) {
@@ -175,7 +189,10 @@ public final class MapClientTests {
             MapClient.open();
             expect("on joining, M opens the fullscreen map", mc.gui.screen() instanceof MapScreen, "");
             if (mc.gui.screen() instanceof MapScreen) mc.gui.setScreen(null);
+            painted();
         } else if (what.equals("locked")) {
+            expect("F3+T reloads the map palette", PaintPalette.loads() > palettesBeforeReload && PaintPalette.lastError().isEmpty(),
+                palettesBeforeReload + " -> " + PaintPalette.loads() + " loads " + PaintPalette.lastError());
             expect("the provider's lock reaches the client: terrain on, minimap and fullscreen map off",
                 MapClient.unlocked(MapFeature.TERRAIN) && !MapClient.unlocked(MapFeature.MINIMAP) && !MapClient.unlocked(MapFeature.FULLSCREEN), Integer.toString(MapClient.unlocks));
             MapClient.open();
@@ -196,7 +213,7 @@ public final class MapClientTests {
             expect("ores arrive with their purity", purities != 0, Integer.toBinaryString(purities));
             expect("the chunk hook's POIs arrive: one for everyone and one the group owns", kinds.contains(TestPois.BEACON.key()) && kinds.contains(TestPois.CACHE.key()), kinds.toString());
             long here = mc.player == null ? 0 : MapGrid.regionOfBlock(mc.player.getBlockX(), mc.player.getBlockZ());
-            expect("the group's fog and the terrain round the player arrive", MapClient.FOG.containsKey(here) && ClientTiles.version(here) > 0, "");
+            expect("the group's fog round the player arrives", MapClient.FOG.containsKey(here), "");
             expect("a shared marker from the group's other player and the player's own marker arrive",
                 named("Placed by a group mate") != null && named("My marker") != null && MapClient.markers.stream().anyMatch(m -> m.death), MapClient.markers.size() + " markers");
             List<MovingPoi> moving = MapClient.moving;
@@ -225,6 +242,18 @@ public final class MapClientTests {
             expect("a pinned marker is kept", !MapClient.PINS.isEmpty(), MapClient.PINS.size() + " pins");
             expect("the map runs next to Quicksilver", FabricLoader.getInstance().isModLoaded("quicksilver"), "");
             for (CaptureClientTests.Check c : CaptureClientTests.run(false)) expect(c.what(), c.ok(), c.detail());
+            // the map was opened, zoomed and closed by the script before this
+            expect("the painted map painted frames and uploaded tiles while open", PaintMap.frames() > 0 && PaintMap.uploads() > 0,
+                PaintMap.frames() + " frames, " + PaintMap.uploads() + " uploads, " + PaintMap.tilesPainted() + " tiles in the last");
+            expect("the painted map uploads at most " + PaintMap.UPLOADS_PER_FRAME + " tiles a frame",
+                PaintMap.maxUploadsPerFrame() <= PaintMap.UPLOADS_PER_FRAME, PaintMap.maxUploadsPerFrame() + " at most");
+            expect("the painted map lets its tiles go when it closes", !PaintMap.open(), "");
+            List<String> stats = Capture.statsLines();
+            expect("/mapmod stats shows render time and uploads per frame",
+                stats.stream().anyMatch(l -> l.contains("us/frame")) && stats.stream().anyMatch(l -> l.contains("uploads")), String.join(" | ", stats));
+            // F3+T: the reload runs while the next checks are made, and the "locked" check sees the palette read again
+            palettesBeforeReload = PaintPalette.loads();
+            mc.reloadResourcePacks();
         }
         MapMod.LOGGER.info("SELFTEST client done {}: {} passed, {} failed", what, passed, failed);
     }

@@ -11,19 +11,13 @@ import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapMarkers;
 import com.meakaandre.mapmod.map.MapPayloads;
-import com.meakaandre.mapmod.map.MapRecorder;
 import com.meakaandre.mapmod.map.MapServer;
-import com.meakaandre.mapmod.map.MapTile;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
-import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.world.level.chunk.LevelChunk;
 import org.jspecify.annotations.Nullable;
 
 import java.io.ByteArrayOutputStream;
@@ -40,22 +34,16 @@ import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterInputStream;
 
 /**
- * The map on a server that has no MapMod: the client keeps it by itself. It records the chunks it has loaded into its
- * tiles, clears its own fog round the player, keeps its own markers and death markers, and opens the whole map (there
- * are no unlocks to wait for, and no POIs, mates or moving things, which only a server can supply). Everything is kept
- * per server in the game folder ({@code mapmod/server-<address>/}).
+ * The map on a server that has no MapMod: the client keeps it by itself. It clears its own fog round the player, keeps
+ * its own markers and death markers, and opens the whole map (there are no unlocks to wait for, and no POIs, mates or
+ * moving things, which only a server can supply). These are kept per server in the game folder
+ * ({@code mapmod/server-<address>/}); the terrain itself is the client's own surface capture, on any server.
  */
 public final class LocalMap {
     /** Ticks after joining before a server that has not shown MapMod is taken as one without it. */
     private static final int GRACE_TICKS = 40;
-    /** Chunks recorded per tick at most. */
-    private static final int PER_TICK = 6;
-    /** Ticks between looking for loaded chunks to record, and between fog updates. */
-    private static final int LOOK_TICKS = 10, FOG_TICKS = 20;
-    /** A chunk is recorded again after this long (ticks); near the player sooner, so building shows. */
-    private static final int AGAIN_TICKS = 1200, AGAIN_NEAR_TICKS = 100;
-    /** Chunks round the player that count as near, and the farthest it looks. */
-    private static final int NEAR = 2, FARTHEST = 16;
+    /** Ticks between fog updates. */
+    private static final int FOG_TICKS = 20;
     /** Ticks between saves (half a minute). */
     private static final int SAVE_TICKS = 600;
     /** Fog file format. */
@@ -66,9 +54,6 @@ public final class LocalMap {
     private static int joinedTicks = -1;
     private static int ticks;
     private static boolean wasDead;
-    private static final LongLinkedOpenHashSet QUEUE = new LongLinkedOpenHashSet();
-    /** When each chunk was last recorded (ticks since this map started). */
-    private static final Long2LongOpenHashMap RECORDED = new Long2LongOpenHashMap();
     private static final List<MapMarker> MARKERS = new ArrayList<>();
 
     private LocalMap() {
@@ -94,8 +79,7 @@ public final class LocalMap {
 
     static void tick(Minecraft mc) {
         LocalPlayer player = mc.player;
-        ClientLevel level = mc.level;
-        if (player == null || level == null) return;
+        if (player == null || mc.level == null) return;
         if (!active) {
             if (joinedTicks < 0 || serverHasMap()) return;
             if (++joinedTicks < GRACE_TICKS) return;
@@ -106,25 +90,7 @@ public final class LocalMap {
         boolean dead = player.isDeadOrDying();
         if (dead && !wasDead && MapClient.mappedHere()) death(player);
         wasDead = dead;
-        if (MapClient.mappedHere()) {
-            if (ticks % FOG_TICKS == 0) fog(player);
-            if (ticks % LOOK_TICKS == 0) look(mc, player);
-            for (int n = 0; n < PER_TICK && !QUEUE.isEmpty(); n++) {
-                long key = QUEUE.removeFirstLong();
-                int cx = MapGrid.keyX(key), cz = MapGrid.keyZ(key);
-                if (!level.getChunkSource().hasChunk(cx, cz)) continue;
-                long region = MapGrid.regionOfChunk(cx, cz);
-                MapTile tile = ClientTiles.editable(region);
-                if (tile == null) {
-                    // its disk copy is still being read: later
-                    QUEUE.add(key);
-                    break;
-                }
-                LevelChunk chunk = level.getChunk(cx, cz);
-                if (MapRecorder.record(level, chunk, tile, false)) ClientTiles.edited(region, chunk.getPos().x(), chunk.getPos().z());
-                RECORDED.put(key, ticks);
-            }
-        }
+        if (MapClient.mappedHere() && ticks % FOG_TICKS == 0) fog(player);
         if (ticks % SAVE_TICKS == 0) save();
     }
 
@@ -133,8 +99,6 @@ public final class LocalMap {
         active = true;
         ticks = 0;
         wasDead = false;
-        QUEUE.clear();
-        RECORDED.clear();
         ServerData server = mc.getCurrentServer();
         String address = server == null ? "unknown" : server.ip;
         String id = "server-" + address.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]", "_");
@@ -151,8 +115,6 @@ public final class LocalMap {
         if (active) save();
         active = false;
         joinedTicks = -1;
-        QUEUE.clear();
-        RECORDED.clear();
         MARKERS.clear();
     }
 
@@ -170,24 +132,6 @@ public final class LocalMap {
             }
         }
         if (!fresh.isEmpty()) MapClient.fogDelta(fresh.toLongArray());
-    }
-
-    /** Queues the loaded chunks round the player that are due to be recorded. */
-    private static void look(Minecraft mc, LocalPlayer player) {
-        ClientLevel level = mc.level;
-        if (level == null) return;
-        int r = Math.min(FARTHEST, mc.options.getEffectiveRenderDistance());
-        int ccx = player.blockPosition().getX() >> 4, ccz = player.blockPosition().getZ() >> 4;
-        for (int dz = -r; dz <= r; dz++) {
-            for (int dx = -r; dx <= r; dx++) {
-                int cx = ccx + dx, cz = ccz + dz;
-                if (!level.getChunkSource().hasChunk(cx, cz)) continue;
-                long key = MapGrid.key(cx, cz);
-                long last = RECORDED.getOrDefault(key, Long.MIN_VALUE);
-                boolean near = Math.abs(dx) <= NEAR && Math.abs(dz) <= NEAR;
-                if (last == Long.MIN_VALUE || ticks - last >= (near ? AGAIN_NEAR_TICKS : AGAIN_TICKS)) QUEUE.add(key);
-            }
-        }
     }
 
     // ------------------------------------------------------------------------------------------------ markers
@@ -261,10 +205,9 @@ public final class LocalMap {
         return id == null ? null : Minecraft.getInstance().gameDirectory.toPath().resolve(MapMod.ID).resolve(id);
     }
 
-    /** Writes the tiles, the fog and the markers out. */
+    /** Writes the fog and the markers out. */
     public static void save() {
         if (!active) return;
-        ClientTiles.saveDirty();
         saveFog();
         saveMarkers();
     }
@@ -307,7 +250,6 @@ public final class LocalMap {
             return;
         }
         MapClient.FOG.putAll(fog);
-        for (long region : fog.keySet()) ClientTiles.fogChanged(region);
     }
 
     private static void saveMarkers() {

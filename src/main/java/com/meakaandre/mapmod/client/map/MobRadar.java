@@ -23,13 +23,13 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * The mob radar: the mobs round the player on the minimap and the fullscreen map, each drawn as its own face (read off
+ * The mob radar: the mobs round the player on the fullscreen map, each drawn as its own face (read off
  * its model's head and its texture, so it works for any mob a mod adds too), with no names. Hostile and passive mobs
  * each have a filter switch (under "Mobs").
  */
 public final class MobRadar {
-    /** Size a face is drawn at on the minimap, and on the fullscreen map (pixels). */
-    private static final int SMALL = 7, BIG = 9;
+    /** Size a face is drawn at on the fullscreen map (pixels). */
+    private static final int SIZE = 9;
     /** Blocks above or below the player a mob may be and still show. */
     private static final int HEIGHT_RANGE = 24;
     /** A mob's texture is looked up again this often (ticks): it may change (a sheared sheep, a converting zombie). */
@@ -62,13 +62,13 @@ public final class MobRadar {
     }
 
     /** Draws the mobs in a view, as the filters allow. */
-    public static void draw(GuiGraphicsExtractor g, MapDraw.View v, boolean big) {
+    public static void draw(GuiGraphicsExtractor g, MapDraw.View v) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null || !MapClient.mappedHere()) return;
         if (!MapFilters.on(MapFilters.MOBS)) return;
         boolean hostiles = MapFilters.on(MapFilters.HOSTILE), passives = MapFilters.on(MapFilters.PASSIVE);
         if (!hostiles && !passives) return;
-        int size = big ? BIG : SMALL;
+        int size = SIZE;
         long now = mc.level.getGameTime();
         float pt = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
         for (Entity e : mc.level.entitiesForRendering()) {
