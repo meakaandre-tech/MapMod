@@ -266,18 +266,17 @@ public final class TilePrep {
         return Math.max(1, Math.round(edge / maskTexel(level)));
     }
 
-    /** How far the edge wanders (blocks), and whether it is worth it at a level (texels no bigger than twice that). */
+    /**
+     * How far the edge wanders at level 0 (blocks). Each level reads the same noise 2^level times coarser and wanders
+     * 2^level times as far, so the edge wanders alike on screen at every zoom and never runs straight for long.
+     */
     static float maskWarp(float edge) {
         return edge / 6;
     }
 
-    static boolean maskWarps(int level, float edge) {
-        return maskTexel(level) <= 2 * maskWarp(edge);
-    }
-
     /** Texels beyond the mask's apron its coverage is read from: the blur, the warp and one for the bilinear look-up. */
     static int maskPad(int level, float edge) {
-        int warp = maskWarps(level, edge) ? (int) Math.ceil(maskWarp(edge) / maskTexel(level)) + 1 : 0;
+        int warp = (int) Math.ceil(maskWarp(edge) * (1 << level) / maskTexel(level)) + 1;
         return maskBlur(level, edge) + warp + 1;
     }
 
@@ -293,7 +292,8 @@ public final class TilePrep {
      * explored samples, by tile) and cleared of the group's fog ({@code fog}: a region's chunk bits, by region; a region
      * is a tile), blurred with a tent {@code edge} blocks wide so neither chunk corners nor sample steps show at any zoom,
      * then read at a position warped by the same world-space noise as the painted region edges, repeating every 8192
-     * blocks, so the edge never runs straight. Every cell works out the same value at the same world position, so masks
+     * blocks (at level 0; read coarser and stronger at each level up, see {@link #maskWarp}), so the edge never runs
+     * straight. Every cell works out the same value at the same world position, so masks
      * meet without a seam.
      */
     public static byte[] fogMask(int level, int cellX, int cellZ, float edge, Long2ObjectMap<long[]> coverage, Long2ObjectMap<long[]> fog) {
@@ -323,19 +323,16 @@ public final class TilePrep {
             }
         }
         float[] blurred = blur(grid, n, maskBlur(level, edge));
-        boolean warps = maskWarps(level, edge);
-        float amp = maskWarp(edge);
+        double scale = 1 << level, amp = maskWarp(edge) * scale;
         byte[] out = new byte[MASK_SIZE * MASK_SIZE];
         for (int j = 0; j < MASK_SIZE; j++) {
             for (int i = 0; i < MASK_SIZE; i++) {
                 double px = cellX * (double) cellBlocks + (i - 0.5) * t, pz = cellZ * (double) cellBlocks + (j - 0.5) * t;
-                double wx = 0, wz = 0;
-                if (warps) {
-                    double ws = Math.floorMod((long) Math.floor(px), NOISE_BLOCKS) + (px - Math.floor(px));
-                    double wt = Math.floorMod((long) Math.floor(pz), NOISE_BLOCKS) + (pz - Math.floor(pz));
-                    wx = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 0) * amp;
-                    wz = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 1) * amp;
-                }
+                // the noise at the position scaled down to level 0's, wrapped to its period
+                double qx = px / scale, qz = pz / scale;
+                double ws = qx - NOISE_BLOCKS * Math.floor(qx / NOISE_BLOCKS), wt = qz - NOISE_BLOCKS * Math.floor(qz / NOISE_BLOCKS);
+                double wx = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 0) * amp;
+                double wz = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 1) * amp;
                 float v = bilinear(blurred, n, (float) ((px + wx - gx0) / t - 0.5), (float) ((pz + wz - gz0) / t - 0.5));
                 out[i + j * MASK_SIZE] = (byte) Math.round(Math.clamp(v, 0f, 1f) * 255);
             }

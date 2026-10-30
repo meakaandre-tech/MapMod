@@ -207,11 +207,10 @@ public final class MapClientTests {
         MapMod.LOGGER.info("SELFTEST client far fog revealed: {} chunks round chunk {},{}", chunks.size(), cx, cz);
     }
 
-    /** Where the captured land ends east of the player, in blocks (the close screenshot is centred on it). */
+    /** About where the captured land ends east of the player, in blocks: the chunks loaded round them (the close screenshot is centred on it). */
     private static int capturedEdge(Minecraft mc) {
-        int pcx = mc.player.getBlockX() >> 4, pcz = mc.player.getBlockZ() >> 4, cx = pcx;
-        while (cx - pcx < 64 && mc.level.hasChunk(cx + 1, pcz)) cx++;
-        return (cx + 1) * 16;
+        int pcx = mc.player.getBlockX() >> 4;
+        return (pcx + mc.options.getEffectiveRenderDistance() + 1) * 16;
     }
 
     private static void watch(Minecraft mc) {
