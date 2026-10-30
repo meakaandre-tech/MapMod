@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "mm-5-captured-probe"]
   workflow_dispatch:
 
 permissions:
