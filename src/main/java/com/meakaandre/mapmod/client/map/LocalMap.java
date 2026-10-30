@@ -102,10 +102,9 @@ public final class LocalMap {
         ServerData server = mc.getCurrentServer();
         String address = server == null ? "unknown" : server.ip;
         String id = "server-" + address.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]", "_");
-        MapClient.hello(id, "mapmod.map.shared", false);
+        MapClient.hello(id, "mapmod.map.shared");
         MapClient.FOG.clear();
         loadFog();
-        MapClient.fogReplaced();
         loadMarkers();
         MapClient.markers(List.copyOf(MARKERS));
         MapMod.LOGGER.info("the server has no {}: this client keeps its own map ({})", MapMod.NAME, id);

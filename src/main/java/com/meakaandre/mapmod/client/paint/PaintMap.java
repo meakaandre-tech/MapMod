@@ -34,8 +34,10 @@ import java.util.concurrent.Executors;
  * icons on top. Closing the screen lets the data, textures and pictures go and keeps the baked tiles; leaving the world
  * lets everything go, and so does going to another dimension (MM-5), at once.
  * <p>
- * The fog over unexplored land (MM-5) is the group's fog ({@link MapClient#FOG}) over what the client has captured, in
- * masks the painter keeps ({@link FogMasks}); a change to the fog makes those masks again and bakes nothing.
+ * The fog over unexplored land (MM-5) is exactly what this client has captured, on every server and in every group: the
+ * group's fog of war decides POIs, never terrain, so nothing the player has seen is fogged (but for the soft rim of the
+ * fog's edge). The painter keeps it as masks ({@link FogMasks}), made from the captured samples and what may show
+ * ({@link #mayShow}: everything for now; MM-6's MapLock is what may hide land on purpose).
  */
 public final class PaintMap {
     /** Uploads, bakes and mip copies in one frame at most, together. */
@@ -87,12 +89,6 @@ public final class PaintMap {
             if (i != null) i.set(tx, tz, revision);
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(PaintMap::unload));
-        MapClient.onFogChanged((region, all) -> {
-            MapPainter p = painter;
-            if (p == null) return;
-            if (all) p.masks.reset();
-            else p.masks.changed((int) (region >> 32), (int) region);
-        });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             Object now = client.level == null ? null : client.level.dimension();
             if (now != null && dimension != null && !now.equals(dimension)) dimensionChanged();
@@ -118,7 +114,7 @@ public final class PaintMap {
             if (q != null) q.cache.tileChanged(tx, tz);
         });
         index = i;
-        painter = p = new MapPainter(i, (long) MapClient.cacheMB * 1024 * 1024, PREP, PaintMap::fogBits);
+        painter = p = new MapPainter(i, (long) MapClient.cacheMB * 1024 * 1024, PREP, PaintMap::mayShow);
         return p;
     }
 
@@ -284,7 +280,7 @@ public final class PaintMap {
         return p == null ? 0 : p.cache.bytes();
     }
 
-    /** Every chunk of a region explored: the fog source when the map shows all that was captured. */
+    /** Every chunk of a region may show. */
     private static final long[] ALL_EXPLORED = new long[com.meakaandre.mapmod.map.MapGrid.FOG_LONGS];
 
     static {
@@ -292,11 +288,12 @@ public final class PaintMap {
     }
 
     /**
-     * The fog the masks are made from, by region: the group's when it decides ({@link MapClient#groupFog}), else every
-     * chunk explored, so the mask is exactly what this client captured and nothing it has seen is fogged.
+     * What of a region may show over what was captured, by chunk: every chunk, so the fog is exactly what this client
+     * captured (the group's fog or its own capture, which comes to the same). The one place MM-6's MapLock is meant to
+     * hide land on purpose.
      */
-    static long @Nullable [] fogBits(long region) {
-        return MapClient.fogFromCapture() ? ALL_EXPLORED : MapClient.FOG.get(region);
+    static long @Nullable [] mayShow(long region) {
+        return ALL_EXPLORED;
     }
 
     /**
@@ -310,7 +307,7 @@ public final class PaintMap {
 
     /** For the selftests: whether the fog the masks are made from counts a block's chunk as explored. */
     public static boolean fogSourceExplores(int x, int z) {
-        long[] bits = fogBits(com.meakaandre.mapmod.map.MapGrid.regionOfBlock(x, z));
+        long[] bits = mayShow(com.meakaandre.mapmod.map.MapGrid.regionOfBlock(x, z));
         return bits != null && com.meakaandre.mapmod.map.MapGrid.get(bits, com.meakaandre.mapmod.map.MapGrid.fogBit(x >> 4, z >> 4));
     }
 

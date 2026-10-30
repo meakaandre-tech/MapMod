@@ -48,11 +48,6 @@ public final class MapClient {
 
     public static @Nullable String mapId;
     public static final Long2ObjectOpenHashMap<long[]> FOG = new Long2ObjectOpenHashMap<>();
-    /**
-     * Whether the server says the player's group fog decides what of the captured terrain shows (MM-5): only in a real
-     * group on a server with MapMod. Until it says, and on a server without MapMod, it is false.
-     */
-    public static boolean groupFog;
     public static final Long2ObjectOpenHashMap<List<MapPoi>> POIS = new Long2ObjectOpenHashMap<>();
     public static List<MapMarker> markers = List.of();
     public static List<MapPayloads.Mate> mates = List.of();
@@ -76,27 +71,6 @@ public final class MapClient {
     private static final Set<String> SEEN = new HashSet<>();
     private static boolean firstMarkers = true;
 
-    /** Told when the group's fog changes (MM-5): a region (a tile), or all of it at once. */
-    public interface FogListener {
-        void changed(long region, boolean all);
-    }
-
-    private static final List<FogListener> FOG_LISTENERS = new ArrayList<>();
-
-    /** Hears every change to {@link #FOG} from now on (the painted map's fog masks). */
-    public static void onFogChanged(FogListener l) {
-        FOG_LISTENERS.add(l);
-    }
-
-    /** All of {@link #FOG} was replaced (also by the client's own map when it loads its fog). */
-    public static void fogReplaced() {
-        for (FogListener l : FOG_LISTENERS) l.changed(0, true);
-    }
-
-    private static void fogChanged(long region) {
-        for (FogListener l : FOG_LISTENERS) l.changed(region, false);
-    }
-
     /** A pinned thing: shown on the compass with its distance. */
     public record Pin(String key, String label, int x, int y, int z, int icon, int argb) {
     }
@@ -108,7 +82,7 @@ public final class MapClient {
 
     public static void register() {
         KeyMappingHelper.registerKeyMapping(OPEN);
-        ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Hello.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> hello(p.mapId(), p.sharedKey(), p.groupFog())));
+        ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Hello.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> hello(p.mapId(), p.sharedKey())));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Unlocks.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> {
             unlocks = p.mask();
             lockedKey = p.lockedKey();
@@ -140,15 +114,6 @@ public final class MapClient {
         return mc.level != null && mc.level.dimension() == Level.OVERWORLD;
     }
 
-    /**
-     * True when the painted map shows everything this client captured, fogging only what it never captured: on a server
-     * without MapMod, alone (the default group provider, singleplayer included) or in no group. Otherwise the group's
-     * fog also decides.
-     */
-    public static boolean fogFromCapture() {
-        return LocalMap.active() || !groupFog;
-    }
-
     public static boolean explored(int x, int z) {
         long[] bits = FOG.get(MapGrid.regionOfBlock(x, z));
         return bits != null && MapGrid.get(bits, MapGrid.fogBit(x >> 4, z >> 4));
@@ -158,8 +123,6 @@ public final class MapClient {
         LocalMap.stop();
         mapId = null;
         FOG.clear();
-        groupFog = false;
-        fogReplaced();
         POIS.clear();
         markers = List.of();
         mates = List.of();
@@ -172,12 +135,8 @@ public final class MapClient {
         firstMarkers = true;
     }
 
-    static void hello(String id, String shared, boolean fog) {
+    static void hello(String id, String shared) {
         sharedKey = shared;
-        if (fog != groupFog) {
-            groupFog = fog;
-            fogReplaced();
-        }
         if (!id.equals(mapId)) PINS.clear();
         mapId = id;
         loadPins();
@@ -189,24 +148,15 @@ public final class MapClient {
             POIS.clear();
         }
         for (MapPayloads.FogRegion r : p.regions()) FOG.put(r.region(), r.bits());
-        if (p.replace()) fogReplaced();
-        else for (MapPayloads.FogRegion r : p.regions()) fogChanged(r.region());
     }
 
-    /** Clears the fog over chunks (as the server says, or the client's own map); the regions changed are told once each. */
-    public static void fogDelta(long[] chunks) {
-        long last = Long.MIN_VALUE;
-        java.util.Set<Long> changed = new java.util.HashSet<>();
+    static void fogDelta(long[] chunks) {
         for (long c : chunks) {
             int cx = MapGrid.keyX(c), cz = MapGrid.keyZ(c);
             long region = MapGrid.regionOfChunk(cx, cz);
             long[] bits = FOG.computeIfAbsent(region, k -> new long[MapGrid.FOG_LONGS]);
-            if (MapGrid.set(bits, MapGrid.fogBit(cx, cz)) && region != last) {
-                changed.add(region);
-                last = region;
-            }
+            MapGrid.set(bits, MapGrid.fogBit(cx, cz));
         }
-        for (long region : changed) fogChanged(region);
     }
 
     static void markers(List<MapMarker> list) {

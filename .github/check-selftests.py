@@ -55,7 +55,8 @@ def main():
     client = [l for l in (read(os.path.join(ci, "client.log")) or []) if "System chat:" not in l]
     # and MM-5's
     for end in ("SELFTEST client done bake", "SELFTEST client done far", "SELFTEST client done unload",
-                "SELFTEST client done fog", "SELFTEST client done overlays", "SELFTEST client done dimension"):
+                "SELFTEST client done fog", "SELFTEST client done overlays", "SELFTEST client done dimension",
+                "SELFTEST client done ownfog"):
         if not any(end in l for l in client):
             print(f"client: {end!r} missing, DID NOT FINISH")
             bad.append(f"{end!r} not in client.log")

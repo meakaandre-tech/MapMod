@@ -32,18 +32,12 @@ public final class MapPayloads {
      * Server to client on joining: which map this is, so the client's disk cache keeps each world's tiles apart, and the
      * group provider's word for a shared marker.
      */
-    /**
-     * Server to client: the map's id, the word for a shared marker, and (MM-5) whether the player is in a real group whose
-     * shared fog decides what of the client's captured terrain shows. When it is false the client shows everything it
-     * captured: alone (the default provider) or in no group, nothing the player has seen is fogged.
-     */
-    public record Hello(String mapId, String sharedKey, boolean groupFog) implements CustomPacketPayload {
+    public record Hello(String mapId, String sharedKey) implements CustomPacketPayload {
         public static final Type<Hello> TYPE = typeOf("hello");
         public static final StreamCodec<RegistryFriendlyByteBuf, Hello> CODEC = StreamCodec.of((buf, p) -> {
             buf.writeUtf(p.mapId);
             buf.writeUtf(p.sharedKey);
-            buf.writeBoolean(p.groupFog);
-        }, buf -> new Hello(buf.readUtf(MAX_MAP_ID), buf.readUtf(MAX_KEY), buf.readBoolean()));
+        }, buf -> new Hello(buf.readUtf(MAX_MAP_ID), buf.readUtf(MAX_KEY)));
 
         @Override
         public Type<? extends CustomPacketPayload> type() {

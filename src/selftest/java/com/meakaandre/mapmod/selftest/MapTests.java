@@ -178,9 +178,6 @@ public final class MapTests {
         expect(source, "by default every player is a group of their own, and nothing is shared",
             GroupProvider.ALONE.groupOf(server, someone).equals(someone.toString()) && MapModApi.groups().groupOf(server, someone).equals(someone.toString())
                 && !GroupProvider.ALONE.same("", ""), "");
-        GroupProvider teams = (srv, uuid) -> "team";
-        expect(source, "alone (the default provider) or in no group, a client shows all it captured; in a real group the group's fog decides",
-            !MapServer.groupFog(GroupProvider.ALONE, someone.toString()) && !MapServer.groupFog(teams, "") && MapServer.groupFog(teams, "team"), "");
         FakePlayer fake = FakePlayer.get(level);
         boolean all = true;
         for (MapFeature f : MapFeature.values()) all &= UnlockProvider.ALWAYS.unlocked(fake, f) && MapModApi.unlocked(fake, f);
