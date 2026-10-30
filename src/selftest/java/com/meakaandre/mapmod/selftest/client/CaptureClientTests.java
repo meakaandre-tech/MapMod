@@ -7,6 +7,7 @@ import com.meakaandre.mapmod.client.capture.SurfaceTile;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -60,8 +61,13 @@ final class CaptureClientTests {
                 + ", " + SurfaceClass.name(tile.surface[i]) + ", canopy " + (tile.canopy[i] & 0xFF) + ", " + tile.exploredCount() + " explored";
             boolean classes = true;
             for (byte c : tile.surface) classes &= c >= 0 && c < SurfaceClass.COUNT;
-            out.add(new Check("capture: the sample under the player is explored and near their feet", underPlayer
-                && Math.abs(tile.height[i] - (mc.player.getBlockY() - 1)) <= 24, detail));
+            // the sample stands for its cell's middle column: its height is that column's top block, or below it
+            // where leaves, logs, plants or water were looked past
+            int mx = (px & ~3) + 2, mz = (pz & ~3) + 2;
+            int top = mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, mx, mz) - 1;
+            detail += ", top block of its middle column at y " + top;
+            out.add(new Check("capture: the sample under the player is explored and at its column's surface", underPlayer
+                && tile.height[i] <= top && tile.height[i] >= top - 40, detail));
             out.add(new Check("capture: every surface class is one of the eight", classes, ""));
         } else {
             out.add(new Check("capture: the tile the player is in is held", false, detail));
