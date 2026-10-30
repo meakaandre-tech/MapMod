@@ -11,8 +11,8 @@ import net.minecraft.world.level.material.FluidState;
  * Turns a {@link ChunkSnapshot} into the chunk's 4x4 samples, one per 4x4 block cell, on the capture worker.
  * <p>
  * Each column is read top down: air, plants, snow layers, leaves and logs are looked past (leaves and logs count as
- * canopy, so tree trunks do not poke up through the terrain), water is looked through, and the first other block that
- * blocks motion is the ground. A sample takes its height, water depth, class and tint from its cell's middle column
+ * canopy, so tree trunks do not poke up through the terrain), water is looked through, and the first other solid block (one
+ * that blocks motion) is the ground. A sample takes its height, water depth, class and tint from its cell's middle column
  * (block 2,2 of the cell) and its canopy from all sixteen.
  */
 final class SurfaceSampler {
@@ -86,14 +86,16 @@ final class SurfaceSampler {
                 if (dry) canopy[i] = true;
                 continue;
             }
-            if (state.blocksMotion()) {
+            boolean solid = state.isSolid();
+            if (fluid.is(FluidTags.WATER) && !solid) {
+                // water, and plants in it (kelp, seagrass)
+                if (dry) waterTop[i] = y;
+                continue;
+            }
+            if (solid) {
                 ground[i] = y;
                 cls[i] = SurfaceClass.cached(state);
                 return;
-            }
-            if (fluid.is(FluidTags.WATER)) {
-                if (dry) waterTop[i] = y;
-                continue;
             }
             // plants, torches and the like; a snow layer whitens what is under it
             if (dry && state.is(BlockTags.SNOW)) snowed[i] = true;
