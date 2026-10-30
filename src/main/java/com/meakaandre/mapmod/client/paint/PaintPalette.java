@@ -14,19 +14,23 @@ import java.util.Optional;
 
 /**
  * The painted map's colours, from {@code assets/mapmod/map_palette.json} (resource packs can replace it; F3+T reloads
- * it): one colour and tint strength per surface class, water by depth, the paper of unexplored land, the height tint
- * and the snow line, and the hillshade's share. Anything missing or unreadable keeps the built-in value. Colours are
- * 0xRRGGBB.
+ * it): one colour and tint strength per surface class, water by depth and distance from the shore with a pale shore
+ * band, the paper of unexplored land, the height tint and the snow line, the hillshade's share, how soft and wavy class
+ * borders are, the forests' darkening and brush, contour lines, and the paper grain and vignette. Each value that is
+ * missing or unreadable keeps its built-in one on its own. Colours are 0xRRGGBB; distances are in blocks.
  */
 public record PaintPalette(int[] classColour, float[] classTint, int waterShallow, int waterDeep, float deepAt, int paper,
                            float lowHeight, float highHeight, float lowShade, float highLight, float snowAbove,
-                           float snowBlend, int snow, float hillshade) {
+                           float snowBlend, int snow, float hillshade, float deepDist, int shore, float shoreWidth,
+                           float edgeSoftness, float edgeWarp, float forestDarken, float forestStipple,
+                           float contourInterval, float contourStrength, float grain, float vignette) {
     public static final Identifier FILE = MapMod.id("map_palette.json");
     /** The built-in palette: the same values as the mod's own map_palette.json. */
     public static final PaintPalette DEFAULT = new PaintPalette(
         new int[]{0xAAB38E, 0x879471, 0xDCCB9E, 0x9C978D, 0xECEEEC, 0x93805F, 0xBCD3DE, 0xC8642C},
         new float[]{0.4f, 0.4f, 0, 0, 0, 0.15f, 0, 0},
-        0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.4f);
+        0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.4f,
+        40, 0xD2E2DC, 6, 0.12f, 5, 0.28f, 0.18f, 16, 0.3f, 0.035f, 0.18f);
 
     private static volatile PaintPalette current = DEFAULT;
     /** Bumped on every load, so the renderer knows to upload the palette again. */
@@ -87,12 +91,22 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
         JsonObject water = object(o, "water");
         JsonObject tint = object(o, "height_tint");
         JsonObject snow = object(o, "snow");
+        JsonObject edges = object(o, "edges");
+        JsonObject forest = object(o, "forest");
+        JsonObject contours = object(o, "contours");
+        JsonObject finish = object(o, "finish");
         return new PaintPalette(colours, tints,
             colour(water, "shallow", d.waterShallow), colour(water, "deep", d.waterDeep), Math.max(1, number(water, "deep_at", d.deepAt)),
             colour(o, "paper", d.paper),
             number(tint, "low", d.lowHeight), number(tint, "high", d.highHeight), number(tint, "low_shade", d.lowShade), number(tint, "high_light", d.highLight),
             number(snow, "above", d.snowAbove), Math.max(0.5f, number(snow, "blend", d.snowBlend)), colour(snow, "colour", d.snow),
-            Math.clamp(number(o, "hillshade", d.hillshade), 0f, 1f));
+            Math.clamp(number(o, "hillshade", d.hillshade), 0f, 1f),
+            Math.max(1, number(water, "deep_dist", d.deepDist)), colour(water, "shore", d.shore),
+            Math.clamp(number(water, "shore_width", d.shoreWidth), 0f, 32f),
+            Math.clamp(number(edges, "softness", d.edgeSoftness), 0.01f, 1f), Math.clamp(number(edges, "warp", d.edgeWarp), 0f, 8f),
+            Math.clamp(number(forest, "darken", d.forestDarken), 0f, 1f), Math.clamp(number(forest, "stipple", d.forestStipple), 0f, 1f),
+            Math.max(1, number(contours, "interval", d.contourInterval)), Math.clamp(number(contours, "strength", d.contourStrength), 0f, 1f),
+            Math.clamp(number(finish, "grain", d.grain), 0f, 0.5f), Math.clamp(number(finish, "vignette", d.vignette), 0f, 1f));
     }
 
     private static JsonObject object(JsonObject o, String key) {

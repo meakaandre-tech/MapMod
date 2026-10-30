@@ -70,11 +70,18 @@ def main():
             continue
         im = Image.open(os.path.join(ci, shot)).convert("RGB")
         px, (w, h) = im.load(), im.size
-        # a gap is the paper colour (unexplored land, and what shows where no tile is drawn) between two pixels of land
+        # a gap is a line of paper (unexplored land, and the background where no tile is drawn) between two pixels of
+        # land. The paper carries a grain and a vignette that scale it evenly (MM-3), so "paper" is any pixel that is the
+        # paper colour times one brightness, within rounding; no land colour is (sand and snow differ in hue)
         paper = (0xE6, 0xDC, 0xC6)
+        psum = sum(paper)
+
+        def papery(p):
+            k = sum(p) / psum
+            return 0.7 <= k <= 1.15 and all(abs(p[i] - k * paper[i]) <= 6 for i in range(3))
 
         def gap(a, b, c):
-            return a == paper and b != paper and c != paper
+            return papery(a) and not papery(b) and not papery(c)
         gaps = [x for x in range(285, w - 1) if sum(1 for y in range(40, h - 20) if gap(px[x, y], px[x - 1, y], px[x + 1, y])) > 30]
         gaps += [y for y in range(40, h - 21) if sum(1 for x in range(285, w - 1) if gap(px[x, y], px[x, y - 1], px[x, y + 1])) > 30]
         print(f"{shot}: {len(gaps)} lines of paper between tiles{' at ' + str(gaps) if gaps else ''}")

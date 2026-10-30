@@ -15,6 +15,7 @@ import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.client.map.MobRadar;
 import com.meakaandre.mapmod.client.paint.PaintMap;
 import com.meakaandre.mapmod.client.paint.PaintPalette;
+import com.meakaandre.mapmod.client.paint.TilePrep;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
@@ -65,6 +66,7 @@ public final class MapClientTests {
         if (!LocalMap.active() || mc.player == null) return;
         int t = LocalMap.ticks();
         if (t == LOCAL_READY) MapMod.LOGGER.info("SELFTEST local ready.");
+        if (t == LOCAL_CHECK + 60) localLater();
         if (t != LOCAL_CHECK) return;
         int pass = 0, fail = 0;
         int px = mc.player.getBlockX(), pz = mc.player.getBlockZ();
@@ -115,6 +117,8 @@ public final class MapClientTests {
             if (c.ok()) pass++;
             else fail++;
         }
+        // the local screenshot shows contours: switched on here, checked once the map has painted for a while
+        MapClient.setContours(true);
         MapScreen screen = new MapScreen();
         screen.centre(px, pz, 0.5f);
         MapClient.show(screen);
@@ -122,7 +126,22 @@ public final class MapClientTests {
         MapMod.LOGGER.info("SELFTEST local {} M opens the fullscreen map", open ? "PASS" : "FAIL");
         if (open) pass++;
         else fail++;
-        MapMod.LOGGER.info("SELFTEST local done: {} passed, {} failed", pass, fail);
+        localPass = pass;
+        localFail = fail;
+        framesAtOpen = PaintMap.frames();
+    }
+
+    private static int localPass, localFail;
+    private static long framesAtOpen;
+
+    /** A few seconds after the local map opened with contours on: they were painted. */
+    private static void localLater() {
+        boolean painted = PaintMap.frames() > framesAtOpen && PaintMap.contoursPainted();
+        MapMod.LOGGER.info("SELFTEST local {} the map paints contour lines once they are switched on ({} frames)", painted ? "PASS" : "FAIL",
+            PaintMap.frames() - framesAtOpen);
+        if (painted) localPass++;
+        else localFail++;
+        MapMod.LOGGER.info("SELFTEST local done: {} passed, {} failed", localPass, localFail);
     }
 
     private static MapMarker named(String name) {
@@ -171,6 +190,72 @@ public final class MapClientTests {
         expect("a palette keeps the built-in value for whatever it leaves out or gets wrong",
             broken.classColour()[2] == 0x123456 && broken.classColour()[3] == PaintPalette.DEFAULT.classColour()[3]
                 && broken.snowAbove() == 150 && broken.paper() == PaintPalette.DEFAULT.paper(), "");
+        expect("map_palette.json carries the MM-3 values (shore, edges, forest, contours, finish)",
+            pal.shore() == 0xD2E2DC && pal.shoreWidth() == 6 && pal.deepDist() == 40 && pal.edgeWarp() == 5 && pal.forestDarken() == 0.28f
+                && pal.contourInterval() == 16 && pal.grain() == 0.035f && pal.vignette() == 0.18f, pal.toString());
+        PaintPalette partial = PaintPalette.parse(JsonParser.parseString(
+            "{\"water\": {\"shore\": \"#102030\", \"shore_width\": \"wide\"}, \"forest\": {\"stipple\": 0.5}, \"contours\": {\"interval\": 8},"
+                + " \"finish\": {\"vignette\": null}, \"edges\": 3}").getAsJsonObject());
+        PaintPalette d = PaintPalette.DEFAULT;
+        expect("each new palette value falls back on its own",
+            partial.shore() == 0x102030 && partial.shoreWidth() == d.shoreWidth() && partial.deepDist() == d.deepDist()
+                && partial.forestStipple() == 0.5f && partial.forestDarken() == d.forestDarken() && partial.contourInterval() == 8
+                && partial.contourStrength() == d.contourStrength() && partial.vignette() == d.vignette() && partial.grain() == d.grain()
+                && partial.edgeSoftness() == d.edgeSoftness() && partial.edgeWarp() == d.edgeWarp()
+                && partial.waterShallow() == d.waterShallow(), partial.toString());
+        distanceField();
+        String canopy = PaintMap.canopyCheck();
+        expect("canopy is prepared and uploaded as the surface texture's alpha", canopy == null, canopy == null ? "" : canopy);
+        contourToggle();
+    }
+
+    /** The shore distance field on a small grid: a straight coast, a one-sample river, open land and the cap. */
+    private static void distanceField() {
+        int w = 40, h = 30;
+        boolean[] wet = new boolean[w * h];
+        // sea on the left (x < 10), a river one sample wide at x = 25
+        for (int z = 0; z < h; z++) {
+            for (int x = 0; x < 10; x++) wet[x + z * w] = true;
+            wet[25 + z * w] = true;
+        }
+        float[] d = TilePrep.signedDistance(wet, w, h, 16);
+        boolean coast = Math.abs(d[9 + 15 * w] - 0.5f) < 1e-3 && Math.abs(d[10 + 15 * w] + 0.5f) < 1e-3;
+        boolean deep = Math.abs(d[2 + 15 * w] - 7.5f) < 1e-3 && Math.abs(d[17 + 15 * w] + 7.5f) < 1e-3;
+        boolean river = Math.abs(d[25 + 15 * w] - 0.5f) < 1e-3 && Math.abs(d[24 + 15 * w] + 0.5f) < 1e-3 && Math.abs(d[27 + 15 * w] + 1.5f) < 1e-3;
+        boolean[] dry = new boolean[w * h];
+        float[] none = TilePrep.signedDistance(dry, w, h, 16);
+        boolean capped = none[0] == -16f && none[w * h - 1] == -16f;
+        boolean[] diag = new boolean[w * h];
+        diag[0] = true;
+        float[] dd = TilePrep.signedDistance(diag, w, h, 16);
+        boolean euclid = Math.abs(dd[3 + 4 * w] + 4.5f) < 1e-3;
+        expect("the shore distance field: half a sample either side of the coast, exact inland and at sea, rivers, the cap",
+            coast && deep && river && capped && euclid,
+            "coast " + coast + " deep " + deep + " river " + river + " cap " + capped + " euclid " + euclid);
+    }
+
+    /** Contours are off by default; the map's switch turns them on and off and the setting is saved. */
+    private static void contourToggle() {
+        boolean before = MapClient.contours;
+        MapScreen.toggleContours();
+        boolean on = MapClient.contours;
+        String saved = "";
+        try {
+            saved = Files.readString(MapClient.settingsPath());
+        } catch (Exception e) {
+            saved = e.toString();
+        }
+        boolean savedOn = saved.replace(" ", "").contains("\"contours\":true");
+        MapScreen.toggleContours();
+        boolean off = !MapClient.contours;
+        try {
+            saved = Files.readString(MapClient.settingsPath());
+        } catch (Exception e) {
+            saved = e.toString();
+        }
+        boolean savedOff = saved.replace(" ", "").contains("\"contours\":false");
+        expect("contours are off by default, and the map's switch turns them on and off and saves it",
+            !before && on && savedOn && off && savedOff, "before " + before + " on " + on + " saved " + savedOn + " off " + off + " saved " + savedOff);
     }
 
     private static void expect(String what, boolean ok, String detail) {
@@ -248,6 +333,8 @@ public final class MapClientTests {
             expect("the painted map uploads at most " + PaintMap.UPLOADS_PER_FRAME + " tiles a frame",
                 PaintMap.maxUploadsPerFrame() <= PaintMap.UPLOADS_PER_FRAME, PaintMap.maxUploadsPerFrame() + " at most");
             expect("the painted map lets its tiles go when it closes", !PaintMap.open(), "");
+            expect("tiles are prepared off the render thread before they are uploaded", PaintMap.prepared() >= PaintMap.uploads(),
+                PaintMap.prepared() + " prepared, " + PaintMap.uploads() + " uploaded");
             List<String> stats = Capture.statsLines();
             expect("/mapmod stats shows render time and uploads per frame",
                 stats.stream().anyMatch(l -> l.contains("us/frame")) && stats.stream().anyMatch(l -> l.contains("uploads")), String.join(" | ", stats));

@@ -27,15 +27,21 @@ RGB565, canopy density). Samples go into 512x512-block tiles, zstd-compressed, i
 `mapmod/<server address or world folder>/<dimension>/<x>_<z>.mmt` in the game folder; the layout is documented in
 `SurfaceTile`.
 
-The fullscreen map reads the saved tiles it shows on a background thread (and takes newer ones from the capture), lets
-them go when it closes, uploads one or two a frame to the GPU and paints them with one fragment shader per tile
-(`assets/mapmod/shaders/core/map_paint.*`): bicubic height, a hillshade lit from the northwest, one muted colour per
-surface class tinted by the biome, darker lowlands and paler peaks, snow above a height, water blue by depth, and paper
-where nothing is explored. Resource packs restyle it through `assets/mapmod/map_palette.json` (colours per class 0-7,
-water, paper, height tint, snow line, hillshade share); F3+T reloads it.
+The fullscreen map reads the saved tiles it shows on a background thread (and takes newer ones from the capture), works
+out each tile's textures on another (class weights blurred five samples wide, a signed distance to the shore, canopy),
+lets them go when it closes, uploads one or two a frame to the GPU and paints them with one fragment shader per tile
+(`assets/mapmod/shaders/core/map_paint.*`): bicubic height, a hillshade lit from the northwest, soft class borders that
+wander with low-frequency noise in world space (no straight runs, no chunk edges, the same across tiles and at any
+zoom), one muted colour per surface class tinted by the biome, darker lowlands and paler peaks, snow above a height,
+forests darkened by canopy with a soft brush, water deep to shallow by depth and distance from the shore with a pale
+band along it (coasts and rivers as smooth curves), optional contour lines (off by default; the switch is in the map's
+top bar and kept in `mapmod/settings.json` as `contours`), paper where nothing is explored, and a light paper grain and
+vignette over it all. Resource packs restyle it through `assets/mapmod/map_palette.json` (colours per class 0-7, water,
+shore band, paper, height tint, snow line, hillshade share, `edges`, `forest`, `contours`, `finish`); every value is
+optional and falls back on its own; F3+T reloads it.
 
 `/mapmod stats` shows tiles cached, dirty tiles, the worker queue, samples per second, and with the map open its render
-time and uploads per frame.
+time, uploads per frame and the off-thread preparation time per tile.
 
 ## For other mods: `com.meakaandre.mapmod.api`
 

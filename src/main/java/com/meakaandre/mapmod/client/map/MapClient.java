@@ -60,6 +60,8 @@ public final class MapClient {
     public static final Map<String, Pin> PINS = new LinkedHashMap<>();
     /** Filter switches that are off (see {@link MapFilters}). */
     public static final Set<String> HIDDEN = new HashSet<>();
+    /** Contour lines on the painted map: off by default, switched in the map screen, kept in settings.json. */
+    public static boolean contours;
     /** Markers seen since joining, so a new death marker can be pinned at once. */
     private static final Set<String> SEEN = new HashSet<>();
     private static boolean firstMarkers = true;
@@ -254,9 +256,21 @@ public final class MapClient {
         try {
             JsonObject o = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
             if (o.has("hidden")) for (JsonElement e : o.getAsJsonArray("hidden")) HIDDEN.add(e.getAsString());
+            if (o.has("contours")) contours = o.get("contours").getAsBoolean();
         } catch (IOException | RuntimeException e) {
             MapMod.LOGGER.warn("unreadable map file {}", file, e);
         }
+    }
+
+    /** Switches contour lines on or off and saves the setting. */
+    public static void setContours(boolean on) {
+        contours = on;
+        saveSettings();
+    }
+
+    /** Where the map's settings are kept (for the selftests). */
+    public static Path settingsPath() {
+        return settingsFile();
     }
 
     public static void saveSettings() {
@@ -264,6 +278,7 @@ public final class MapClient {
         JsonArray hidden = new JsonArray();
         for (String h : HIDDEN) hidden.add(h);
         o.add("hidden", hidden);
+        o.addProperty("contours", contours);
         try {
             Path file = settingsFile();
             Files.createDirectories(file.getParent());

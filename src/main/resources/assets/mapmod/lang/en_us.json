@@ -31,5 +31,7 @@
   "mapmod.map.purity.2": "pure",
   "mapmod.map.filter.mobs": "Mobs",
   "mapmod.map.filter.hostile": "Hostile mobs",
-  "mapmod.map.filter.passive": "Passive mobs"
+  "mapmod.map.filter.passive": "Passive mobs",
+  "mapmod.map.contours_on": "Contours: on",
+  "mapmod.map.contours_off": "Contours: off"
 }

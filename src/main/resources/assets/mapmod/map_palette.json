@@ -1,5 +1,5 @@
 {
-  "_comment": "The painted map's colours. Resource packs can replace this file; F3+T reloads it. Classes are the surface classes 0-7: grass, forest floor, sand, rock, snow, dirt/mud, ice, lava. 'tint' is how much the biome's grass or foliage colour tints the class (0 none, 1 fully).",
+  "_comment": "The painted map's colours. Resource packs can replace this file; F3+T reloads it. Every value is optional: one left out or unreadable keeps the built-in value. Classes are the surface classes 0-7: grass, forest floor, sand, rock, snow, dirt/mud, ice, lava. 'tint' is how much the biome's grass or foliage colour tints the class (0 none, 1 fully). Distances are in blocks.",
   "classes": {
     "0": { "colour": "#aab38e", "tint": 0.4 },
     "1": { "colour": "#879471", "tint": 0.4 },
@@ -10,9 +10,18 @@
     "6": { "colour": "#bcd3de", "tint": 0.0 },
     "7": { "colour": "#c8642c", "tint": 0.0 }
   },
-  "water": { "shallow": "#8db6c2", "deep": "#3e6f8e", "deep_at": 20 },
+  "_water": "deep_at: depth at which water is fully deep; deep_dist: distance from the shore at which it is; shore: the pale band along the shore, shore_width blocks wide",
+  "water": { "shallow": "#8db6c2", "deep": "#3e6f8e", "deep_at": 20, "deep_dist": 40, "shore": "#d2e2dc", "shore_width": 6 },
   "paper": "#e6dcc6",
   "height_tint": { "low": 50, "high": 220, "low_shade": 0.88, "high_light": 1.12 },
   "snow": { "above": 190, "blend": 20, "colour": "#f0f1ef" },
-  "hillshade": 0.4
+  "hillshade": 0.4,
+  "_edges": "softness: how soft the border between two surface classes is (0.01 sharp, 1 a wide blend); warp: how far, in blocks, borders and coasts wander from the data",
+  "edges": { "softness": 0.12, "warp": 5 },
+  "_forest": "darken: how much full canopy darkens the ground; stipple: strength of the soft brush texture over forests",
+  "forest": { "darken": 0.28, "stipple": 0.18 },
+  "_contours": "only drawn when contours are switched on in the map (off by default); interval in blocks of height",
+  "contours": { "interval": 16, "strength": 0.3 },
+  "_finish": "grain: paper grain over the whole map; vignette: how much the corners of the fullscreen map darken",
+  "finish": { "grain": 0.035, "vignette": 0.18 }
 }
