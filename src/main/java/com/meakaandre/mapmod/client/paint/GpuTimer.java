@@ -9,9 +9,10 @@ import java.util.OptionalLong;
 
 /**
  * GPU time of the map's own passes each frame (MM-4): a pair of the game's timestamp queries around them (they work on
- * any of its backends), read back a few frames later so nothing waits on the GPU. Where a pool cannot be made, the
- * queries fail, or no value ever comes back, it says it is unsupported and {@code /mapmod stats} shows "n/a". Render
- * thread only.
+ * any of its backends), read back a few frames later so nothing waits on the GPU. A query can make some drivers flush,
+ * so it only runs for {@link #AWAKE_MS} after {@code /mapmod stats} asks ({@link #wake}): normal play pays nothing for
+ * it. Where a pool cannot be made, the queries fail, or no value ever comes back, it says it is unsupported and
+ * {@code /mapmod stats} shows "n/a". Render thread only.
  */
 public final class GpuTimer {
     /** Frames in flight: a pair is read back this many frames after it was written, at the earliest. */
@@ -25,6 +26,24 @@ public final class GpuTimer {
     /** null: not tried yet. */
     private @Nullable Boolean supported;
     private boolean forcedOff;
+    private long awakeUntil;
+    /** How long timings run after they are asked for. */
+    public static final long AWAKE_MS = 30_000;
+
+    /** Starts timing for {@link #AWAKE_MS} (from now). */
+    public void wake() {
+        awakeUntil = System.currentTimeMillis() + AWAKE_MS;
+    }
+
+    /** Stops timing until woken again (for the selftests: a frame's CPU time without the queries). */
+    public void sleep() {
+        awakeUntil = 0;
+    }
+
+    /** True while timings are running. */
+    public boolean awake() {
+        return System.currentTimeMillis() < awakeUntil;
+    }
 
     /** True if timings can be had (a pool is made on first use). */
     public boolean supported() {
@@ -47,11 +66,11 @@ public final class GpuTimer {
     }
 
     void begin() {
-        write(slot * 2);
+        if (awake()) write(slot * 2);
     }
 
     void end() {
-        if (write(slot * 2 + 1)) {
+        if (awake() && write(slot * 2 + 1)) {
             pending[slot] = true;
             slot = (slot + 1) % RING;
         }
@@ -70,7 +89,7 @@ public final class GpuTimer {
 
     /** The oldest finished pair's time in nanoseconds, or -1 if none has finished (or timings are unsupported). */
     long poll() {
-        if (!supported() || pool == null) return -1;
+        if (pool == null || !supported()) return -1;
         try {
             // oldest first: the slot to be written next holds the oldest pair
             for (int i = 0; i < RING; i++) {

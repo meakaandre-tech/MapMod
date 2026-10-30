@@ -163,7 +163,8 @@ public final class PaintMap {
             s.avgMicros = s.windowFrames == 0 ? 0 : (double) s.windowMicros / s.windowFrames;
             s.avgOps = s.windowFrames == 0 ? 0 : (double) s.windowOps / s.windowFrames;
             s.avgBakes = s.windowFrames == 0 ? 0 : (double) s.windowBakes / s.windowFrames;
-            s.avgGpuMicros = s.windowGpuFrames == 0 ? -1 : s.windowGpuNanos / 1000.0 / s.windowGpuFrames;
+            if (s.windowGpuFrames > 0) s.avgGpuMicros = s.windowGpuNanos / 1000.0 / s.windowGpuFrames;
+            else if (!TIMER.awake()) s.avgGpuMicros = -1;
             s.lastMaxMicros = s.windowMaxMicros;
             s.lastMaxOps = s.windowMaxOps;
             s.lastMaxBakes = s.windowMaxBakes;
@@ -320,7 +321,10 @@ public final class PaintMap {
         PaintTiles held = tiles;
         List<String> lines = new ArrayList<>();
         lines.add(MapMod.NAME + " painted map" + (held == null ? " (closed)" : " (open)"));
-        String gpu = !TIMER.supported() ? "n/a" : s.avgGpuMicros < 0 ? "waiting" : String.format(Locale.ROOT, "%.0f us/frame avg", s.avgGpuMicros);
+        boolean was = TIMER.awake();
+        TIMER.wake();
+        String gpu = !TIMER.supported() ? "n/a" : !was || s.avgGpuMicros < 0 ? "measuring for " + GpuTimer.AWAKE_MS / 1000 + " s, ask again"
+            : String.format(Locale.ROOT, "%.0f us/frame avg", s.avgGpuMicros);
         lines.add(String.format(Locale.ROOT, "  render %.0f us/frame avg, %d us max (last second); GPU %s", s.avgMicros, s.lastMaxMicros, gpu));
         lines.add(String.format(Locale.ROOT, "  steps %.2f/frame avg, %d max (budget %d); bakes %.2f/frame avg, %d max; %d uploads, %d bakes, %d mip copies in %d frames",
             s.avgOps, s.lastMaxOps, UPLOADS_PER_FRAME, s.avgBakes, s.lastMaxBakes, s.uploads, s.bakes, s.mips, s.frames));

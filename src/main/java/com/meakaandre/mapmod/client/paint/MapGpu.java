@@ -146,6 +146,8 @@ final class MapGpu implements AutoCloseable {
     private final @Nullable GpuBuffer[] ring = new GpuBuffer[FRAMES];
     private final int[] capacities = new int[FRAMES];
     private int paletteVersion = -1, capacity, cursor, slot;
+    /** Where draw blocks are put together before they are written (reused: allocating one each pass costs). */
+    private @Nullable ByteBuffer scratch;
     /** Bound as the source of a paper quad, which reads none. */
     private @Nullable DynamicTexture blank;
     /** Draw buffers outgrown, per frame slot, let go when that slot comes round again. */
@@ -207,9 +209,12 @@ final class MapGpu implements AutoCloseable {
     private int write(CommandEncoder encoder, int n, BlockWriter fill) {
         reserve(n);
         int first = cursor;
-        ByteBuffer data = ByteBuffer.allocateDirect(n * BLOCK_STRIDE).order(ByteOrder.nativeOrder());
+        if (scratch == null || scratch.capacity() < n * BLOCK_STRIDE) {
+            scratch = ByteBuffer.allocateDirect(Math.max(64, Integer.highestOneBit(n) << 1) * BLOCK_STRIDE).order(ByteOrder.nativeOrder());
+        }
+        ByteBuffer data = scratch.clear().limit(n * BLOCK_STRIDE);
         for (int i = 0; i < n; i++) fill.write(Std140Builder.intoBuffer(data.slice(i * BLOCK_STRIDE, BLOCK_SIZE).order(ByteOrder.nativeOrder())), i);
-        data.position(0);
+        data.position(0).limit(n * BLOCK_STRIDE);
         encoder.writeToBuffer(blocks.slice((long) first * BLOCK_STRIDE, (long) n * BLOCK_STRIDE), data);
         cursor += n;
         return first;
