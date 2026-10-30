@@ -75,6 +75,8 @@ jobs:
             for j in $jars; do unzip -Z1 "$j" | grep '\.class$' ; done | sed 's/\.class$//' | sort -u > /tmp/ci/classes.txt || true
             sed 's#/#.#g' /tmp/ci/classes.txt | grep -v 'package-info\|module-info' > /tmp/all-classes.txt
             (xargs -a /tmp/all-classes.txt -n 300 javap -p -cp "$cp" 2>/dev/null || true) | gzip -9 > /tmp/ci/javap-all.txt.gz
+            # the bytecode of a few classes, to see how the game itself uses an API
+            if [ -f .github/dump-code ]; then (xargs -a .github/dump-code javap -c -p -cp "$cp" 2>/dev/null || true) | gzip -9 > /tmp/ci/javap-code.txt.gz; fi
           fi
       - name: Smoke test (dedicated server, then a client that joins it)
         if: always()

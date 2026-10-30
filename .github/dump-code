@@ -1,0 +1,12 @@
+net.minecraft.client.renderer.Lightmap
+com.mojang.blaze3d.pipeline.PipelineCache
+com.mojang.blaze3d.systems.RenderSystem
+net.minecraft.client.gui.render.pip.PictureInPictureRenderer
+com.mojang.renderpearl.frontend.FrontendRenderPass
+net.minecraft.client.renderer.MappableRingBuffer
+com.mojang.blaze3d.pipeline.TextureTarget
+com.mojang.blaze3d.pipeline.RenderTarget
+net.minecraft.client.renderer.RenderPipelines
+net.minecraft.client.renderer.ProjectionMatrixBuffer
+net.minecraft.client.renderer.texture.DynamicTexture
+com.mojang.blaze3d.platform.NativeImage
