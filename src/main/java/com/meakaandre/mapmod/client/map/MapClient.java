@@ -11,6 +11,7 @@ import com.meakaandre.mapmod.api.MapFeature;
 import com.meakaandre.mapmod.api.MapGlyphs;
 import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
+import com.meakaandre.mapmod.client.paint.PaintMap;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
@@ -62,6 +63,8 @@ public final class MapClient {
     public static final Set<String> HIDDEN = new HashSet<>();
     /** Contour lines on the painted map: off by default, switched in the map screen, kept in settings.json. */
     public static boolean contours;
+    /** GPU memory for the painted map's baked tiles and mips (MB), kept in settings.json as {@code cache_mb}. */
+    public static int cacheMB = PaintMap.DEFAULT_CACHE_MB;
     /** Markers seen since joining, so a new death marker can be pinned at once. */
     private static final Set<String> SEEN = new HashSet<>();
     private static boolean firstMarkers = true;
@@ -257,6 +260,7 @@ public final class MapClient {
             JsonObject o = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
             if (o.has("hidden")) for (JsonElement e : o.getAsJsonArray("hidden")) HIDDEN.add(e.getAsString());
             if (o.has("contours")) contours = o.get("contours").getAsBoolean();
+            if (o.has("cache_mb")) cacheMB = Math.clamp(o.get("cache_mb").getAsInt(), 16, 4096);
         } catch (IOException | RuntimeException e) {
             MapMod.LOGGER.warn("unreadable map file {}", file, e);
         }
@@ -279,6 +283,7 @@ public final class MapClient {
         for (String h : HIDDEN) hidden.add(h);
         o.add("hidden", hidden);
         o.addProperty("contours", contours);
+        o.addProperty("cache_mb", cacheMB);
         try {
             Path file = settingsFile();
             Files.createDirectories(file.getParent());

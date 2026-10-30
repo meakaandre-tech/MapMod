@@ -1,6 +1,7 @@
 package com.meakaandre.mapmod.client.capture;
 
 import com.meakaandre.mapmod.MapMod;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.jspecify.annotations.Nullable;
@@ -79,6 +80,7 @@ final class CaptureStore {
         if (!Files.isRegularFile(f)) return null;
         try {
             SurfaceTile t = SurfaceTile.unpack(tx, tz, Files.readAllBytes(f));
+            t.revision = Capture.fileRevision(f);
             Capture.STATS.loaded.incrementAndGet();
             return t;
         } catch (IOException e) {
@@ -88,8 +90,17 @@ final class CaptureStore {
         }
     }
 
+    /** Writes a chunk's samples in; a tile that changed is announced ({@link Capture#onTileChanged}). */
     void put(SurfaceSampler.Samples s) {
-        tile(SurfaceTile.tileOfChunk(s.cx), SurfaceTile.tileOfChunk(s.cz)).put(s);
+        SurfaceTile t = tile(SurfaceTile.tileOfChunk(s.cx), SurfaceTile.tileOfChunk(s.cz));
+        if (t.put(s)) Capture.changed(t.tileX, t.tileZ, t.revision);
+    }
+
+    /** The revision of every tile held now, by {@link #key}. */
+    Long2LongOpenHashMap revisions() {
+        Long2LongOpenHashMap out = new Long2LongOpenHashMap(tiles.size());
+        for (var e : tiles.long2ObjectEntrySet()) if (e.getValue().exploredCount() > 0) out.put(e.getLongKey(), e.getValue().revision);
+        return out;
     }
 
     /** Writes every dirty tile out. */
