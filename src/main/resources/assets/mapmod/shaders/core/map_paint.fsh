@@ -117,9 +117,7 @@ float clouds(vec2 ws) {
 vec3 fog(vec3 c, float mask, vec2 ws) {
     float cl = clouds(ws);
     float s = FogColour.a;
-    // only land at least half way into the blurred mask shows, so the bake's own soft edge never does
-    float m = clamp(mask * 2.0 - 1.0, 0.0, 1.0);
-    float shown = smoothstep(0.6, 0.95, m + (cl - 0.5) * 0.4 * s);
+    float shown = smoothstep(0.55, 0.95, mask + (cl - 0.5) * 0.3 * s);
     vec3 f = mix(FogColour.rgb, Paper.rgb, s * smoothstep(0.35, 0.75, cl));
     return mix(f, c, shown);
 }

@@ -1,6 +1,7 @@
 package com.meakaandre.mapmod.client.map;
 
 import com.meakaandre.mapmod.MapMod;
+import com.meakaandre.mapmod.client.paint.PaintMap;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -79,7 +80,8 @@ public final class MobRadar {
             boolean hostile = hostile(e);
             if (hostile ? !hostiles : !passives) continue;
             double x = e.xo + (e.getX() - e.xo) * pt, z = e.zo + (e.getZ() - e.zo) * pt;
-            if (!MapClient.explored((int) Math.floor(x), (int) Math.floor(z))) continue;
+            // under the fog: where the group has not explored or the map has nothing captured
+            if (!MapClient.explored((int) Math.floor(x), (int) Math.floor(z)) || PaintMap.height((int) Math.floor(x), (int) Math.floor(z)) == null) continue;
             double sx = v.sx(x), sy = v.sy(z);
             if (!v.inside(sx, sy, size)) continue;
             int x0 = (int) Math.round(sx) - size / 2, y0 = (int) Math.round(sy) - size / 2;

@@ -271,13 +271,18 @@ public final class TilePrep {
      * 2^level times as far, so the edge wanders alike on screen at every zoom and never runs straight for long.
      */
     static float maskWarp(float edge) {
-        return edge / 6;
+        return edge / 3;
     }
 
-    /** Texels beyond the mask's apron its coverage is read from: the blur, the warp and one for the bilinear look-up. */
+    /** Texels the coverage is eroded by before the blur: as far as the warp reaches, so the edge only ever wanders inward. */
+    static int maskErode(int level, float edge) {
+        return (int) Math.ceil(maskWarp(edge) * (1 << level) / maskTexel(level));
+    }
+
+    /** Texels beyond the mask's apron its coverage is read from: the erosion, the blur, the warp and one for the bilinear look-up. */
     static int maskPad(int level, float edge) {
-        int warp = (int) Math.ceil(maskWarp(edge) * (1 << level) / maskTexel(level)) + 1;
-        return maskBlur(level, edge) + warp + 1;
+        int warp = maskErode(level, edge) + 1;
+        return maskErode(level, edge) + maskBlur(level, edge) + warp + 1;
     }
 
     /** Tiles round a cell whose coverage or fog changes its mask. */
@@ -290,7 +295,7 @@ public final class TilePrep {
      * A cell's fog mask, {@link #MASK_SIZE} square, 0 (unexplored) to 255 (explored), texel {@code i} centred on block
      * {@code cell origin + (i - 0.5) * texel}: the share of each texel that is both captured ({@code coverage}: a tile's
      * explored samples, by tile) and cleared of the group's fog ({@code fog}: a region's chunk bits, by region; a region
-     * is a tile), blurred with a tent {@code edge} blocks wide so neither chunk corners nor sample steps show at any zoom,
+     * is a tile), eroded by as far as the warp below reaches, blurred with a tent {@code edge} blocks wide so neither chunk corners nor sample steps show at any zoom,
      * then read at a position warped by the same world-space noise as the painted region edges, repeating every 8192
      * blocks (at level 0; read coarser and stronger at each level up, see {@link #maskWarp}), so the edge never runs
      * straight. Every cell works out the same value at the same world position, so masks
@@ -322,7 +327,9 @@ public final class TilePrep {
                 }
             }
         }
-        float[] blurred = blur(grid, n, maskBlur(level, edge));
+        // eroded as far as the warp reaches: wandering never shows land past what is captured and explored, where the
+        // bake fades to paper along the sample grid
+        float[] blurred = blur(erode(grid, n, maskErode(level, edge)), n, maskBlur(level, edge));
         double scale = 1 << level, amp = maskWarp(edge) * scale;
         byte[] out = new byte[MASK_SIZE * MASK_SIZE];
         for (int j = 0; j < MASK_SIZE; j++) {
@@ -335,6 +342,27 @@ public final class TilePrep {
                 double wz = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 1) * amp;
                 float v = bilinear(blurred, n, (float) ((px + wx - gx0) / t - 0.5), (float) ((pz + wz - gz0) / t - 0.5));
                 out[i + j * MASK_SIZE] = (byte) Math.round(Math.clamp(v, 0f, 1f) * 255);
+            }
+        }
+        return out;
+    }
+
+    /** A separable minimum over a square {@code r} texels each way, with nothing beyond the grid. */
+    private static float[] erode(float[] g, int n, int r) {
+        if (r <= 0) return g;
+        float[] h = new float[n * n], out = new float[n * n];
+        for (int z = 0; z < n; z++) {
+            for (int x = 0; x < n; x++) {
+                float m = 1;
+                for (int k = -r; k <= r; k++) m = Math.min(m, x + k >= 0 && x + k < n ? g[x + k + z * n] : 0);
+                h[x + z * n] = m;
+            }
+        }
+        for (int z = 0; z < n; z++) {
+            for (int x = 0; x < n; x++) {
+                float m = 1;
+                for (int k = -r; k <= r; k++) m = Math.min(m, z + k >= 0 && z + k < n ? h[x + (z + k) * n] : 0);
+                out[x + z * n] = m;
             }
         }
         return out;

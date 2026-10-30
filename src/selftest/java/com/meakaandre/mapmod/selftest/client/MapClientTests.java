@@ -210,7 +210,8 @@ public final class MapClientTests {
     /** About where the captured land ends east of the player, in blocks: the chunks loaded round them (the close screenshot is centred on it). */
     private static int capturedEdge(Minecraft mc) {
         int pcx = mc.player.getBlockX() >> 4;
-        return (pcx + mc.options.getEffectiveRenderDistance() + 1) * 16;
+        // a little inside, so the close-up shows land, the fade and the fog
+        return (pcx + mc.options.getEffectiveRenderDistance() + 1) * 16 - 24;
     }
 
     private static void watch(Minecraft mc) {
