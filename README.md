@@ -20,6 +20,15 @@ then, which only a server can supply), in `mapmod/server-<address>/` in the game
 Saves: `data/mapmod/` in the world (`terrain/`, `fog/`, `id.txt`, `markers.dat`); client cache and settings: `mapmod/`
 in the game folder (`mapmod/<map id>/` per world). Keys are under **Map** in the controls.
 
+## Surface capture (client)
+
+Being rebuilt as a painted map (see the design doc). The client now captures the surface itself, on any server and with
+any world generator: every chunk it loads, and every chunk whose surface changes, is sampled every 4 blocks on a
+background thread (height, water depth, one of eight surface classes from block tags then map colour, biome tint as
+RGB565, canopy density). Samples go into 512x512-block tiles, zstd-compressed, in
+`mapmod/<server address or world folder>/<dimension>/<x>_<z>.mmt` in the game folder; the layout is documented in
+`SurfaceTile`. `/mapmod stats` shows tiles cached, dirty tiles, the worker queue and samples per second.
+
 ## For other mods: `com.meakaandre.mapmod.api`
 
 With no other mod the map works on its own: every player is a group of their own, everything is unlocked, there are no
