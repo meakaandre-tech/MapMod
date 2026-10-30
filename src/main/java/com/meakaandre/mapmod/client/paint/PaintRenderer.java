@@ -5,6 +5,7 @@ import com.mojang.blaze3d.buffers.Std140Builder;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.device.GpuDevice;
@@ -121,12 +122,13 @@ final class PaintRenderer implements AutoCloseable {
         int paper = pal.paper();
         Vector4f clear = new Vector4f((paper >> 16 & 255) / 255f, (paper >> 8 & 255) / 255f, (paper & 255) / 255f, 1f);
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
+        // everything that writes to a buffer happens before the pass opens: no other command may run while it is open
+        GpuBufferSlice projected = projectionBuffer.getBuffer(projection);
+        CompiledRenderPipeline compiled = quads.isEmpty() ? null : RenderSystem.getCompiledPipelineNullable(PIPELINE);
         try (RenderPass pass = encoder.createRenderPass(() -> MapMod.ID + " painted map", view, Optional.of(clear))) {
-            if (quads.isEmpty()) return;
-            CompiledRenderPipeline compiled = RenderSystem.getCompiledPipelineNullable(PIPELINE);
             if (compiled == null) return;
             pass.setPipeline(compiled);
-            pass.setUniform("Projection", projectionBuffer.getBuffer(projection));
+            pass.setUniform("Projection", projected);
             pass.setUniform("MapPaint", palette);
             for (int i = 0; i < quads.size(); i++) {
                 Quad q = quads.get(i);
