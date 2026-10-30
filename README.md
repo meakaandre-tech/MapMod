@@ -38,11 +38,12 @@ forests darkened by canopy with a soft brush, water deep to shallow by depth and
 band along it (coasts and rivers as smooth curves), optional contour lines (off by default; the switch is in the map's
 top bar and kept in `mapmod/settings.json` as `contours`), and a light paper grain and vignette over it all.
 
-Unexplored land fades into fog: what is shown is what the client has captured *and* the group has explored (the same
-fog POIs follow), blurred into a soft mask per cell off the render thread and wandering with the same world-space noise
+Unexplored land fades into fog: what is shown is everything this client has captured, on any server and in any group
+(the group's fog of war gates POIs, never terrain), so nothing you have seen is fogged but for the soft rim of the
+fog's edge. It is blurred into a soft mask per cell off the render thread and wanders with the same world-space noise
 as region edges, so there are no chunk corners or straight runs at any zoom, with a static cloud texture in it. The fog
-goes on as the screen's pixels are written, never into the baked tiles, so exploring changes a small mask and bakes
-nothing. A change of zoom level cross-fades over about 150 ms; a drag let go while moving glides on briefly (any click
+goes on as the screen's pixels are written, never into the baked tiles, so a change to what may show (MM-6's map locks)
+changes a small mask and bakes nothing. A change of zoom level cross-fades over about 150 ms; a drag let go while moving glides on briefly (any click
 stops it). The top bar has a switch per overlay layer (players, markers, pins, POIs, mob radar), kept in
 `mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.
 

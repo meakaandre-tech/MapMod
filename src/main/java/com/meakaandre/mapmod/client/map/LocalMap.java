@@ -105,7 +105,6 @@ public final class LocalMap {
         MapClient.hello(id, "mapmod.map.shared");
         MapClient.FOG.clear();
         loadFog();
-        MapClient.fogReplaced();
         loadMarkers();
         MapClient.markers(List.copyOf(MARKERS));
         MapMod.LOGGER.info("the server has no {}: this client keeps its own map ({})", MapMod.NAME, id);

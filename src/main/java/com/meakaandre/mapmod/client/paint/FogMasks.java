@@ -249,6 +249,28 @@ final class FogMasks implements AutoCloseable {
         return m != null && m.built != 0 && m.built == m.wanted;
     }
 
+    /** For the selftests: the level-0 mask at a block, made now on this thread from what is held, 0 to 1 (-1: nothing held there). */
+    float valueAt(int x, int z, float e) {
+        int tx = Math.floorDiv(x, BakeCache.SIDE), tz = Math.floorDiv(z, BakeCache.SIDE);
+        if (!coverage.containsKey(TileIndex.key(tx, tz))) return -1;
+        Long2ObjectOpenHashMap<long[]> cov = new Long2ObjectOpenHashMap<>(), bits = new Long2ObjectOpenHashMap<>();
+        int m = TilePrep.maskMarginTiles(0, e);
+        for (int dz = -m; dz <= m; dz++) {
+            for (int dx = -m; dx <= m; dx++) {
+                long k = TileIndex.key(tx + dx, tz + dz);
+                long[] c = coverage.get(k);
+                if (c != null) take(k, c, cov, bits);
+            }
+        }
+        byte[] texels = TilePrep.fogMask(0, tx, tz, e, cov, bits);
+        int t = TilePrep.maskTexel(0);
+        double fx = Math.floorMod(x, BakeCache.SIDE) / (double) t + 0.5, fz = Math.floorMod(z, BakeCache.SIDE) / (double) t + 0.5;
+        int ix = (int) Math.floor(fx), iz = (int) Math.floor(fz);
+        double ax = fx - ix, az = fz - iz;
+        double a = texels[ix + iz * SIZE] & 0xFF, b = texels[ix + 1 + iz * SIZE] & 0xFF, c = texels[ix + (iz + 1) * SIZE] & 0xFF, d = texels[ix + 1 + (iz + 1) * SIZE] & 0xFF;
+        return (float) (((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) / 255);
+    }
+
     /** For the selftests: the explored samples kept for a tile, or null. */
     long @Nullable [] coverageOf(int tx, int tz) {
         return coverage.get(TileIndex.key(tx, tz));

@@ -26,7 +26,7 @@ import java.util.Map;
 /**
  * The mob radar: the mobs round the player on the fullscreen map, each drawn as its own face (read off
  * its model's head and its texture, so it works for any mob a mod adds too), with no names, in a soft frame (MM-5). A
- * mob on land the group has not explored is hidden under the fog. Hostile and passive mobs each have a filter switch
+ * mob on land this client never captured is hidden under the fog. Hostile and passive mobs each have a filter switch
  * (under "Mobs"), and the radar a layer switch of its own in the top bar.
  */
 public final class MobRadar {
@@ -80,8 +80,8 @@ public final class MobRadar {
             boolean hostile = hostile(e);
             if (hostile ? !hostiles : !passives) continue;
             double x = e.xo + (e.getX() - e.xo) * pt, z = e.zo + (e.getZ() - e.zo) * pt;
-            // under the fog: where the group has not explored or the map has nothing captured
-            if (!MapClient.explored((int) Math.floor(x), (int) Math.floor(z)) || PaintMap.height((int) Math.floor(x), (int) Math.floor(z)) == null) continue;
+            // under the fog: where the map has nothing captured
+            if (PaintMap.height((int) Math.floor(x), (int) Math.floor(z)) == null) continue;
             double sx = v.sx(x), sy = v.sy(z);
             if (!v.inside(sx, sy, size)) continue;
             int x0 = (int) Math.round(sx) - size / 2, y0 = (int) Math.round(sy) - size / 2;

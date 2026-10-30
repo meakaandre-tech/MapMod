@@ -71,27 +71,6 @@ public final class MapClient {
     private static final Set<String> SEEN = new HashSet<>();
     private static boolean firstMarkers = true;
 
-    /** Told when the group's fog changes (MM-5): a region (a tile), or all of it at once. */
-    public interface FogListener {
-        void changed(long region, boolean all);
-    }
-
-    private static final List<FogListener> FOG_LISTENERS = new ArrayList<>();
-
-    /** Hears every change to {@link #FOG} from now on (the painted map's fog masks). */
-    public static void onFogChanged(FogListener l) {
-        FOG_LISTENERS.add(l);
-    }
-
-    /** All of {@link #FOG} was replaced (also by the client's own map when it loads its fog). */
-    public static void fogReplaced() {
-        for (FogListener l : FOG_LISTENERS) l.changed(0, true);
-    }
-
-    private static void fogChanged(long region) {
-        for (FogListener l : FOG_LISTENERS) l.changed(region, false);
-    }
-
     /** A pinned thing: shown on the compass with its distance. */
     public record Pin(String key, String label, int x, int y, int z, int icon, int argb) {
     }
@@ -144,7 +123,6 @@ public final class MapClient {
         LocalMap.stop();
         mapId = null;
         FOG.clear();
-        fogReplaced();
         POIS.clear();
         markers = List.of();
         mates = List.of();
@@ -170,24 +148,15 @@ public final class MapClient {
             POIS.clear();
         }
         for (MapPayloads.FogRegion r : p.regions()) FOG.put(r.region(), r.bits());
-        if (p.replace()) fogReplaced();
-        else for (MapPayloads.FogRegion r : p.regions()) fogChanged(r.region());
     }
 
-    /** Clears the fog over chunks (as the server says, or the client's own map); the regions changed are told once each. */
-    public static void fogDelta(long[] chunks) {
-        long last = Long.MIN_VALUE;
-        java.util.Set<Long> changed = new java.util.HashSet<>();
+    static void fogDelta(long[] chunks) {
         for (long c : chunks) {
             int cx = MapGrid.keyX(c), cz = MapGrid.keyZ(c);
             long region = MapGrid.regionOfChunk(cx, cz);
             long[] bits = FOG.computeIfAbsent(region, k -> new long[MapGrid.FOG_LONGS]);
-            if (MapGrid.set(bits, MapGrid.fogBit(cx, cz)) && region != last) {
-                changed.add(region);
-                last = region;
-            }
+            MapGrid.set(bits, MapGrid.fogBit(cx, cz));
         }
-        for (long region : changed) fogChanged(region);
     }
 
     static void markers(List<MapMarker> list) {

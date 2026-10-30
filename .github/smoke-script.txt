@@ -50,6 +50,8 @@ cmd mapmod worldtest open 0.4
 cmd mapmod worldtest check settle level0
 wait 600 SELFTEST client settled level0
 shot
+cmd mapmod worldtest check ownfog
+wait 60 SELFTEST client done ownfog
 cmd mapmod worldtest unfold cat:mapmod_selftest:finds
 cmd mapmod worldtest unfold cat:mapmod:markers
 cmd mapmod worldtest hide sub:mapmod_selftest:ore/iron

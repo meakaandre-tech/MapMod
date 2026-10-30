@@ -23,8 +23,10 @@ import com.meakaandre.mapmod.client.paint.TilePrep;
 import com.meakaandre.mapmod.map.MapGrid;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
+import com.meakaandre.mapmod.map.MapServer;
 import com.meakaandre.mapmod.selftest.MapTests;
 import com.meakaandre.mapmod.selftest.TestPois;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
@@ -195,18 +197,6 @@ public final class MapClientTests {
         MapMod.LOGGER.info("SELFTEST client done dimension");
     }
 
-    /** Clears the group's fog on the client over a disc of the made-up land, so the far view shows the fog's edge across it. */
-    private static void revealFar() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
-        int cx = (SurfaceTile.tileOfBlock(mc.player.getBlockX()) + 3) * SurfaceTile.CHUNKS, cz = SurfaceTile.tileOfBlock(mc.player.getBlockZ()) * SurfaceTile.CHUNKS;
-        int r = 2600 / 16;
-        List<Long> chunks = new ArrayList<>();
-        for (int dz = -r; dz <= r; dz++) for (int dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) chunks.add(MapGrid.key(cx + dx, cz + dz));
-        MapClient.fogDelta(chunks.stream().mapToLong(Long::longValue).toArray());
-        MapMod.LOGGER.info("SELFTEST client far fog revealed: {} chunks round chunk {},{}", chunks.size(), cx, cz);
-    }
-
     /** About where the captured land ends east of the player, in blocks: the chunks loaded round them (the close screenshot is centred on it). */
     private static int capturedEdge(Minecraft mc) {
         int pcx = mc.player.getBlockX() >> 4;
@@ -230,6 +220,7 @@ public final class MapClientTests {
         }
         glideWatch(mc);
         dimensionWatch(mc);
+        ownFogWatch(mc);
         if (bakeCheck != null) {
             List<BakeCheck.Result> results = bakeCheck.step();
             if (results != null) {
@@ -383,6 +374,7 @@ public final class MapClientTests {
         int t = LocalMap.ticks();
         if (t == LOCAL_READY) MapMod.LOGGER.info("SELFTEST local ready.");
         if (t == LOCAL_CHECK + 60) localLater();
+        if (localFogTicks > 0) localFog(mc);
         if (t != LOCAL_CHECK) return;
         int pass = 0, fail = 0;
         int px = mc.player.getBlockX(), pz = mc.player.getBlockZ();
@@ -457,7 +449,83 @@ public final class MapClientTests {
             PaintMap.frames() - framesAtOpen);
         if (painted) localPass++;
         else localFail++;
+        // the fog checks follow once the open map holds the captured land round the player
+        localFogTicks = 1;
+    }
+
+    private static int localFogTicks;
+
+    private static void localCheck(String what, boolean ok, String detail) {
+        MapMod.LOGGER.info("SELFTEST local {} {}{}", ok ? "PASS" : "FAIL", what, detail.isEmpty() ? "" : " (" + detail + ")");
+        if (ok) localPass++;
+        else localFail++;
+    }
+
+    /** MM-5, on a server without MapMod: nothing this client captured is fogged. Waits (up to 30 s) for the open map. */
+    private static void localFog(Minecraft mc) {
+        if (++localFogTicks < 600 && !ownCaptureReady(mc)) return;
+        localFogTicks = 0;
+        for (BakeCheck.Result r : ownCapture(mc)) localCheck(r.what(), r.ok(), r.detail());
         MapMod.LOGGER.info("SELFTEST local done: {} passed, {} failed", localPass, localFail);
+    }
+
+    /** True once the open map holds the captured land round the player and has nothing left to do. */
+    private static boolean ownCaptureReady(Minecraft mc) {
+        return mc.player != null && PaintMap.idle() && PaintMap.fogAt(mc.player.getBlockX(), mc.player.getBlockZ()) >= 0;
+    }
+
+    /**
+     * The fog is this client's own capture, whatever the group's fog says (MM-5): with the group's fog cleared for the
+     * check (so every captured chunk lies past it, beyond the 6-chunk visit radius too), every captured chunk may show at
+     * the fog's source, every one further in than the fog's soft edge shows, and so does the land round the player.
+     */
+    private static List<BakeCheck.Result> ownCapture(Minecraft mc) {
+        List<BakeCheck.Result> out = new ArrayList<>();
+        int px = mc.player.getBlockX(), pz = mc.player.getBlockZ();
+        Long2ObjectOpenHashMap<long[]> kept = new Long2ObjectOpenHashMap<>(MapClient.FOG);
+        MapClient.FOG.clear();
+        try {
+            int pcx = px >> 4, pcz = pz >> 4, r = mc.options.getEffectiveRenderDistance() + 2;
+            int rim = (int) Math.ceil(PaintPalette.current().fogEdge() / 16) + 1;
+            int captured = 0, beyondVisit = 0, unexplored = 0, inner = 0, hidden = 0;
+            for (int dz = -r; dz <= r; dz++) {
+                for (int dx = -r; dx <= r; dx++) {
+                    int bx = (pcx + dx) * 16 + 8, bz = (pcz + dz) * 16 + 8;
+                    if (PaintMap.height(bx, bz) == null) continue;
+                    captured++;
+                    if (dx * dx + dz * dz > MapServer.VISIT_RADIUS * MapServer.VISIT_RADIUS) beyondVisit++;
+                    if (!PaintMap.fogSourceExplores(bx, bz)) unexplored++;
+                    boolean deep = true;
+                    for (int k = -rim; k <= rim && deep; k++) {
+                        for (int j = -rim; j <= rim && deep; j++) deep = PaintMap.height(bx + j * 16, bz + k * 16) != null;
+                    }
+                    if (!deep) continue;
+                    inner++;
+                    if (!PaintMap.fogShows(bx, bz)) hidden++;
+                }
+            }
+            float here = PaintMap.fogAt(px, pz);
+            out.add(new BakeCheck.Result("with the group's fog cleared, every captured chunk may show, those past the visit radius too",
+                captured > 0 && beyondVisit > 0 && unexplored == 0, captured + " captured chunks, " + beyondVisit + " past the visit radius, " + unexplored + " fogged at the source"));
+            out.add(new BakeCheck.Result("every captured chunk further in than the fog's soft edge (" + rim + " chunks) shows, and the land round the player fully",
+                inner > 0 && hidden == 0 && here >= 0.99f, inner + " chunks that far in, " + hidden + " of them fogged; mask round the player " + here));
+        } finally {
+            MapClient.FOG.putAll(kept);
+        }
+        return out;
+    }
+
+    /** "ownfog" on a server with MapMod, in a real group: steps until the open map is ready, then checks. */
+    private static int ownFogTicks;
+
+    private static void ownFogWatch(Minecraft mc) {
+        if (ownFogTicks == 0) return;
+        if (++ownFogTicks < 600 && !ownCaptureReady(mc)) return;
+        ownFogTicks = 0;
+        passed = failed = 0;
+        expect("the player is in a real group with a fog of its own", !MapClient.FOG.isEmpty(), MapClient.FOG.size() + " regions");
+        for (BakeCheck.Result r : ownCapture(mc)) expect("in a real group: " + r.what(), r.ok(), r.detail());
+        MapMod.LOGGER.info("SELFTEST client done ownfog: {} passed, {} failed", passed, failed);
     }
 
     private static MapMarker named(String name) {
@@ -604,7 +672,6 @@ public final class MapClientTests {
         if (what.equals("far")) {
             // the far-zoom checks follow the next settle
             farPending = true;
-            revealFar();
             return;
         }
         if (what.equals("fog")) {
@@ -613,6 +680,10 @@ public final class MapClientTests {
         }
         if (what.equals("overlays")) {
             overlays();
+            return;
+        }
+        if (what.equals("ownfog")) {
+            ownFogTicks = 1;
             return;
         }
         if (what.equals("dimension")) {

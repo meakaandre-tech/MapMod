@@ -129,7 +129,7 @@ public final class FogCheck implements AutoCloseable {
             case 2 -> {
                 frame(0);
                 if (!settled() && frames < PATIENCE) return;
-                expect("exploring makes the fog masks again and paints a new picture, and bakes nothing",
+                expect("more land may show (the fog source MapLock will feed): the masks are made again and a new picture painted, and nothing bakes",
                     settled() && c.leafBakes == bakesAt && painter.masks.builds > buildsAt && painter.painted > paintedAt
                         && painter.masks.current(0, T0 + 1, T0 + 1),
                     (c.leafBakes - bakesAt) + " bakes, " + (painter.masks.builds - buildsAt) + " masks made, " + (painter.painted - paintedAt) + " pictures painted");
