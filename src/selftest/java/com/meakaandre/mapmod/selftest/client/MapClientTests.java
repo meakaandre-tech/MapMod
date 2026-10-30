@@ -264,6 +264,15 @@ public final class MapClientTests {
                 PaintMap.reusePictures(true);
             }
             if (farTicks == 122) {
+                // the world goes on while it is measured (the player's own capture may change a tile): a second that
+                // held work is not a settled one, so it is measured again, a few times at most
+                double steps = steps(Capture.statsLines());
+                if (steps > 0 && farRetries < 5) {
+                    farRetries++;
+                    MapMod.LOGGER.info("map stats far: the last second held work ({} steps/frame), measured again ({} of 5)", steps, farRetries);
+                    farTicks = 82;
+                    return;
+                }
                 farTicks = 0;
                 farPending = false;
                 far();
@@ -300,6 +309,22 @@ public final class MapClientTests {
         } catch (RuntimeException e) {
             return -1;
         }
+    }
+
+    private static int farRetries;
+
+    /** Uploads, bakes and mip copies a frame over the last second, from the stats (-1 if not there). */
+    private static double steps(List<String> stats) {
+        for (String l : stats) {
+            int i = l.indexOf("steps ");
+            if (i < 0 || !l.contains("/frame avg")) continue;
+            try {
+                return Double.parseDouble(l.substring(i + 6, l.indexOf('/', i)));
+            } catch (RuntimeException e) {
+                return -1;
+            }
+        }
+        return -1;
     }
 
     private static double renderMicros(List<String> stats) {
