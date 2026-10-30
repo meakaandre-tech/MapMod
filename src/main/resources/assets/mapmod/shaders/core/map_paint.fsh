@@ -3,8 +3,10 @@
 
 // The painted map, v1 (MM-2): smooth height (bicubic), hillshade from the northwest, one palette colour per surface
 // class times the biome tint, darker lowlands and paler peaks, snow above a height, water flat blue by depth, and paper
-// where nothing is explored. Every field is sampled smoothly (bicubic or bilinear weights over texelFetch); there is no
-// nearest-neighbour look-up anywhere, so no sample's square ever shows.
+// where nothing is explored. Every field is sampled smoothly over the sixteen samples round the point: height with
+// Catmull-Rom weights (it passes through every sample), and the class, water and explored masks with cubic B-spline
+// weights, whose half-way lines are smooth curves; there is no nearest-neighbour look-up anywhere, so no sample's square
+// or block edge ever shows.
 
 uniform sampler2D Fields;   // r, g: height + 32768 (high, low byte)   b: water depth   a: explored
 uniform sampler2D Surface;  // rgb: biome tint   a: class * 32 + 16
@@ -23,40 +25,46 @@ layout(location = 0) in vec2 samplePos;   // in texels of this tile's textures: 
 
 layout(location = 0) out vec4 fragColor;
 
-float heightAt(ivec2 p) {
-    vec4 t = texelFetch(Fields, p, 0);
-    return floor(t.r * 255.0 + 0.5) * 256.0 + floor(t.g * 255.0 + 0.5) - 32768.0;
-}
-
 // Catmull-Rom weights of the four samples round t, and their derivatives
-vec4 cubic(float t) {
+vec4 catmullRom(float t) {
     float t2 = t * t, t3 = t2 * t;
     return vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
 }
 
-vec4 cubicSlope(float t) {
+vec4 catmullRomSlope(float t) {
     float t2 = t * t;
     return vec4(-1.5 * t2 + 2.0 * t - 0.5, 4.5 * t2 - 5.0 * t, -4.5 * t2 + 4.0 * t + 0.5, 1.5 * t2 - t);
+}
+
+// cubic B-spline weights: smooth and never negative, for the masks
+vec4 bspline(float t) {
+    float s = 1.0 - t, t2 = t * t, t3 = t2 * t;
+    return vec4(s * s * s, 3.0 * t3 - 6.0 * t2 + 4.0, -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0, t3) / 6.0;
 }
 
 void main() {
     vec2 base = floor(samplePos);
     vec2 t = samplePos - base;
     ivec2 b = ivec2(base);
+    vec4 hx = catmullRom(t.x), hz = catmullRom(t.y), sx = catmullRomSlope(t.x), sz = catmullRomSlope(t.y);
+    vec4 mx = bspline(t.x), mz = bspline(t.y);
 
-    // bilinear weights of the four nearest samples, for the fields that are not smooth numbers
+    float h = 0.0, dhdx = 0.0, dhdz = 0.0;
     float explored = 0.0, wet = 0.0, depth = 0.0;
     float classWeight[8];
     for (int c = 0; c < 8; c++) classWeight[c] = 0.0;
     vec3 tint = vec3(0.0);
     float tintWeight = 0.0;
-    for (int j = 0; j < 2; j++) {
-        for (int i = 0; i < 2; i++) {
-            ivec2 p = b + ivec2(i, j);
-            float w = (i == 0 ? 1.0 - t.x : t.x) * (j == 0 ? 1.0 - t.y : t.y);
+    for (int j = 0; j < 4; j++) {
+        for (int i = 0; i < 4; i++) {
+            ivec2 p = b + ivec2(i - 1, j - 1);
             vec4 f = texelFetch(Fields, p, 0);
             vec4 s = texelFetch(Surface, p, 0);
-            float e = f.a > 0.5 ? w : 0.0;
+            float v = floor(f.r * 255.0 + 0.5) * 256.0 + floor(f.g * 255.0 + 0.5) - 32768.0;
+            h += hx[i] * hz[j] * v;
+            dhdx += sx[i] * hz[j] * v;
+            dhdz += hx[i] * sz[j] * v;
+            float e = f.a > 0.5 ? mx[i] * mz[j] : 0.0;
             float d = floor(f.b * 255.0 + 0.5);
             explored += e;
             if (d > 0.0) {
@@ -68,18 +76,6 @@ void main() {
                 tint += e * s.rgb;
                 tintWeight += e;
             }
-        }
-    }
-
-    // smooth height and its slope from the sixteen samples round the point
-    vec4 wx = cubic(t.x), wz = cubic(t.y), sx = cubicSlope(t.x), sz = cubicSlope(t.y);
-    float h = 0.0, dhdx = 0.0, dhdz = 0.0;
-    for (int j = 0; j < 4; j++) {
-        for (int i = 0; i < 4; i++) {
-            float v = heightAt(b + ivec2(i - 1, j - 1));
-            h += wx[i] * wz[j] * v;
-            dhdx += sx[i] * wz[j] * v;
-            dhdz += wx[i] * sz[j] * v;
         }
     }
 

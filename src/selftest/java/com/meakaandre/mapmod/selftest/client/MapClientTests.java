@@ -164,7 +164,7 @@ public final class MapClientTests {
         expect("the painted map's shader compiles", compiled == null, compiled == null ? "" : compiled);
         PaintPalette pal = PaintPalette.current();
         expect("map_palette.json is read from the resources", PaintPalette.loads() > 0 && PaintPalette.lastError().isEmpty()
-            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == 0xB2BD8C && pal.snowAbove() == 190 && pal.hillshade() == 0.4f,
+            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == 0xAAB38E && pal.snowAbove() == 190 && pal.hillshade() == 0.4f,
             PaintPalette.loads() + " loads " + PaintPalette.lastError());
         PaintPalette broken = PaintPalette.parse(JsonParser.parseString(
             "{\"classes\": {\"2\": {\"colour\": \"#123456\"}, \"3\": {\"colour\": \"not a colour\"}}, \"snow\": {\"above\": 150}}").getAsJsonObject());

@@ -24,8 +24,8 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
     public static final Identifier FILE = MapMod.id("map_palette.json");
     /** The built-in palette: the same values as the mod's own map_palette.json. */
     public static final PaintPalette DEFAULT = new PaintPalette(
-        new int[]{0xB2BD8C, 0x8A9A6C, 0xDCCB9E, 0x9C978D, 0xECEEEC, 0x93805F, 0xBCD3DE, 0xC8642C},
-        new float[]{0.6f, 0.6f, 0, 0, 0, 0.15f, 0, 0},
+        new int[]{0xAAB38E, 0x879471, 0xDCCB9E, 0x9C978D, 0xECEEEC, 0x93805F, 0xBCD3DE, 0xC8642C},
+        new float[]{0.4f, 0.4f, 0, 0, 0, 0.15f, 0, 0},
         0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.4f);
 
     private static volatile PaintPalette current = DEFAULT;
