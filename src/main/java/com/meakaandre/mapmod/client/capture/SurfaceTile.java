@@ -42,8 +42,12 @@ public final class SurfaceTile {
     public final byte[] water = new byte[AREA], surface = new byte[AREA], canopy = new byte[AREA];
     public final short[] tint = new short[AREA];
     public final long[] explored = new long[AREA / 64];
-    /** Bumped on every change, so a renderer can tell a tile it holds is out of date. */
-    public int revision;
+    /**
+     * When the data last changed, in milliseconds since the epoch, and never smaller than before: a renderer can tell a
+     * copy it holds is out of date, and of two copies the larger revision is the newer. A tile read from disk takes its
+     * file's modification time, so the same file read twice has the same revision.
+     */
+    public long revision;
     boolean dirty;
 
     public SurfaceTile(int tileX, int tileZ) {
@@ -98,7 +102,7 @@ public final class SurfaceTile {
             }
         }
         if (changed) {
-            revision++;
+            revision = Math.max(revision + 1, System.currentTimeMillis());
             dirty = true;
         }
         return changed;

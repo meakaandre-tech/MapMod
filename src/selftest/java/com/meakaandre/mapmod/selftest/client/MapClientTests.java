@@ -13,6 +13,8 @@ import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapFilters;
 import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.client.map.MobRadar;
+import com.meakaandre.mapmod.client.capture.SurfaceTile;
+import com.meakaandre.mapmod.client.paint.BakeCheck;
 import com.meakaandre.mapmod.client.paint.PaintMap;
 import com.meakaandre.mapmod.client.paint.PaintPalette;
 import com.meakaandre.mapmod.client.paint.TilePrep;
@@ -36,7 +38,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The smoke run's remote control of the map ({@link MapTests.Control}, from {@code /mapmod worldtest}): opens or closes
@@ -53,6 +57,153 @@ public final class MapClientTests {
     public static void register() {
         ClientPlayNetworking.registerGlobalReceiver(MapTests.Control.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> control(p)));
         ClientTickEvents.END_CLIENT_TICK.register(MapClientTests::local);
+        ClientTickEvents.END_CLIENT_TICK.register(MapClientTests::watch);
+        Capture.onTileChanged((tx, tz, revision) -> {
+            events++;
+            eventX = tx;
+            eventZ = tz;
+            eventRevision = revision;
+        });
+    }
+
+    // ------------------------------------------------------------------------------------------------ MM-4
+
+    /** Tile-changed events this client heard, and the last one. */
+    private static int events, eventX, eventZ;
+    private static long eventRevision;
+    /** The bake cache check, stepped from the tick while it runs. */
+    private static BakeCheck bakeCheck;
+    private static int bakePass, bakeFail;
+    /** "settle <tag>": the tag to log once the open map has had nothing to do for a while, and for how many ticks. */
+    private static String settling;
+    private static int idleTicks, settleTicks;
+    /** "far": checks to make once the map has settled at far zoom and painted a while longer. */
+    private static boolean farPending;
+    private static int farTicks;
+    /** Ticks the open map must have had nothing to do before it counts as settled, and ticks to give up after. */
+    private static final int SETTLE = 20, SETTLE_GIVE_UP = 3600;
+    /** MM-2's render time at far zoom (us/frame, CPU, averaged): MM-4 must not be slower once settled. */
+    private static final double MM2_MICROS = 134;
+
+    private static void watch(Minecraft mc) {
+        if (bakeCheck != null) {
+            List<BakeCheck.Result> results = bakeCheck.step();
+            if (results != null) {
+                bakeCheck = null;
+                for (BakeCheck.Result r : results) {
+                    MapMod.LOGGER.info("SELFTEST client {} {}{}", r.ok() ? "PASS" : "FAIL", r.what(), r.detail().isEmpty() ? "" : " (" + r.detail() + ")");
+                    if (r.ok()) bakePass++;
+                    else bakeFail++;
+                }
+                MapMod.LOGGER.info("SELFTEST client done bake: {} passed, {} failed", bakePass, bakeFail);
+            }
+        }
+        if (settling != null) {
+            settleTicks++;
+            idleTicks = mc.gui.screen() instanceof MapScreen && PaintMap.idle() ? idleTicks + 1 : 0;
+            if (idleTicks >= SETTLE || settleTicks >= SETTLE_GIVE_UP) {
+                MapMod.LOGGER.info("SELFTEST client settled {} after {} ticks{}: {}", settling, settleTicks,
+                    idleTicks >= SETTLE ? "" : " (gave up)", PaintMap.lastFrame());
+                for (String line : Capture.statsLines()) if (line.startsWith("  ") || line.contains("painted")) MapMod.LOGGER.info("map stats {}: {}", settling, line);
+                settling = null;
+                if (farPending) farTicks = 1;
+            }
+        }
+        // a second and a half after settling at far zoom: the last second's numbers are all settled frames
+        if (farTicks > 0 && ++farTicks > 30) {
+            farTicks = 0;
+            farPending = false;
+            far();
+        }
+    }
+
+    private static void far() {
+        passed = failed = 0;
+        String frame = PaintMap.lastFrame();
+        List<String> stats = Capture.statsLines();
+        double micros = renderMicros(stats);
+        expect("far zoom draws a large explored area from the mip pyramid as a few dozen quads", frame.startsWith("level ") && !frame.startsWith("level 0")
+            && quads(frame) > 0 && quads(frame) <= 64, frame);
+        expect(String.format(Locale.ROOT, "far zoom, settled, renders in no more CPU time than MM-2 (%.0f us/frame)", MM2_MICROS),
+            micros >= 0 && micros <= MM2_MICROS, micros + " us/frame avg");
+        expect("tiles read from disk fire the map's disk-load event", PaintMap.diskEvents() > 0, PaintMap.diskEvents() + " events");
+        expect("the cache keeps within its budget, evicting as it goes", PaintMap.cacheBytes() <= (long) MapClient.cacheMB * 1048576,
+            PaintMap.cacheBytes() / 1048576 + " MB of " + MapClient.cacheMB + "; " + PaintMap.bakedTiles() + " tiles, " + PaintMap.mips() + " mips");
+        expect("at most " + PaintMap.UPLOADS_PER_FRAME + " uploads, bakes and mip copies a frame", PaintMap.maxUploadsPerFrame() <= PaintMap.UPLOADS_PER_FRAME,
+            PaintMap.maxUploadsPerFrame() + " at most");
+        expect("/mapmod stats shows GPU time (or n/a), baked tiles, mips, cache MB and bakes per frame",
+            stats.stream().anyMatch(l -> l.contains("GPU ")) && stats.stream().anyMatch(l -> l.contains("baked tiles") && l.contains("mips") && l.contains(" MB"))
+                && stats.stream().anyMatch(l -> l.contains("bakes") && l.contains("/frame")), String.join(" | ", stats));
+        MapMod.LOGGER.info("SELFTEST client done far: {} passed, {} failed", passed, failed);
+    }
+
+    private static int quads(String frame) {
+        try {
+            String[] parts = frame.split(", ");
+            return Integer.parseInt(parts[1].substring(0, parts[1].indexOf(' ')));
+        } catch (RuntimeException e) {
+            return -1;
+        }
+    }
+
+    private static double renderMicros(List<String> stats) {
+        for (String l : stats) {
+            int i = l.indexOf("render ");
+            if (i < 0 || !l.contains("us/frame")) continue;
+            try {
+                return Double.parseDouble(l.substring(i + 7, l.indexOf(' ', i + 7)));
+            } catch (RuntimeException e) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /** Writes made-up tiles round the player's ground, off the render thread, and logs when they are in. */
+    private static void bigWorld() {
+        Minecraft mc = Minecraft.getInstance();
+        Path dir = Capture.dir();
+        if (mc.player == null || dir == null) {
+            expect("a large made-up explored area is written for the far zoom", false, "no player or no tile folder");
+            return;
+        }
+        int ptx = SurfaceTile.tileOfBlock(mc.player.getBlockX()), ptz = SurfaceTile.tileOfBlock(mc.player.getBlockZ());
+        Thread t = new Thread(() -> {
+            try {
+                int n = SyntheticTiles.writeRing(dir, ptx, ptz, 2, 6);
+                MapMod.LOGGER.info("SELFTEST client bigworld written: {} tiles round tile {},{}", n, ptx, ptz);
+            } catch (Exception e) {
+                MapMod.LOGGER.warn("SELFTEST client FAIL writing the made-up explored area", e);
+                MapMod.LOGGER.info("SELFTEST client bigworld written: none");
+            }
+        }, "selftest big world");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** The change event: heard, and carrying the position and revision of what the capture holds there now (or older). */
+    private static void changeEvents() {
+        SurfaceTile held = null;
+        try {
+            held = Capture.tile(eventX, eventZ).get(20, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            MapMod.LOGGER.warn("change event test: no tile", e);
+        }
+        expect("the capture fires a tile-changed event with the tile's position and revision", events > 0 && Capture.tileEvents() >= events
+            && held != null && held.tileX == eventX && held.tileZ == eventZ && held.revision >= eventRevision && eventRevision > 0,
+            events + " events, last " + eventX + "," + eventZ + " at " + eventRevision + ", held " + (held == null ? "none" : held.revision));
+    }
+
+    /** GPU time in the stats, and "n/a" when timer queries are unsupported. */
+    private static void timerFallback() {
+        boolean real = PaintMap.timer().supported();
+        PaintMap.timer().forceUnsupported(true);
+        List<String> off = Capture.statsLines();
+        PaintMap.timer().forceUnsupported(false);
+        List<String> on = Capture.statsLines();
+        expect("/mapmod stats shows GPU time, and n/a where timer queries are unsupported",
+            off.stream().anyMatch(l -> l.contains("GPU n/a")) && on.stream().anyMatch(l -> l.contains("GPU ") && (real != l.contains("GPU n/a"))),
+            "timer queries " + (real ? "supported" : "unsupported") + "; " + on.stream().filter(l -> l.contains("GPU ")).findFirst().orElse("no GPU line"));
     }
 
     /** Ticks of the client's own map before the screenshot of its HUD, and before the checks. */
@@ -180,7 +331,7 @@ public final class MapClientTests {
     /** The painted map's shader and palette, before the map has been opened. */
     private static void painted() {
         String compiled = PaintMap.compileCheck();
-        expect("the painted map's shader compiles", compiled == null, compiled == null ? "" : compiled);
+        expect("the painted map's shaders compile (paint, and quads for baked tiles, mips and the finish)", compiled == null, compiled == null ? "" : compiled);
         PaintPalette pal = PaintPalette.current();
         expect("map_palette.json is read from the resources", PaintPalette.loads() > 0 && PaintPalette.lastError().isEmpty()
             && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == 0xAAB38E && pal.snowAbove() == 190 && pal.hillshade() == 0.4f,
@@ -267,6 +418,32 @@ public final class MapClientTests {
     private static void check(String what) {
         Minecraft mc = Minecraft.getInstance();
         passed = failed = 0;
+        if (what.equals("bigworld")) {
+            bigWorld();
+            return;
+        }
+        if (what.startsWith("settle ")) {
+            settling = what.substring(7);
+            idleTicks = settleTicks = 0;
+            return;
+        }
+        if (what.equals("far")) {
+            // the far-zoom checks follow the next settle
+            farPending = true;
+            return;
+        }
+        if (what.equals("bake")) {
+            bakePass = bakeFail = 0;
+            bakeCheck = new BakeCheck(SyntheticTiles::make);
+            return;
+        }
+        if (what.equals("unload")) {
+            PaintMap.unload();
+            expect("leaving the world lets the baked tiles and mips go", PaintMap.cacheBytes() == 0 && PaintMap.bakedTiles() == 0 && PaintMap.mips() == 0,
+                PaintMap.cacheBytes() + " bytes");
+            MapMod.LOGGER.info("SELFTEST client done unload: {} passed, {} failed", passed, failed);
+            return;
+        }
         if (what.equals("join")) {
             // before any test provider steps in: a plain join with the map's defaults
             expect("on joining, with nothing but the map's defaults, everything is unlocked", MapClient.unlocks == MapFeature.ALL, Integer.toString(MapClient.unlocks));
@@ -330,11 +507,16 @@ public final class MapClientTests {
             // the map was opened, zoomed and closed by the script before this
             expect("the painted map painted frames and uploaded tiles while open", PaintMap.frames() > 0 && PaintMap.uploads() > 0,
                 PaintMap.frames() + " frames, " + PaintMap.uploads() + " uploads, " + PaintMap.tilesPainted() + " tiles in the last");
-            expect("the painted map uploads at most " + PaintMap.UPLOADS_PER_FRAME + " tiles a frame",
+            expect("the painted map uploads, bakes and copies mips at most " + PaintMap.UPLOADS_PER_FRAME + " times a frame",
                 PaintMap.maxUploadsPerFrame() <= PaintMap.UPLOADS_PER_FRAME, PaintMap.maxUploadsPerFrame() + " at most");
-            expect("the painted map lets its tiles go when it closes", !PaintMap.open(), "");
+            expect("the painted map lets its tiles' data go when it closes", !PaintMap.open(), "");
+            expect("the baked tiles and mips stay while the map is closed in the same world", PaintMap.bakedTiles() + PaintMap.mips() > 0
+                && PaintMap.cacheBytes() > 0, PaintMap.bakedTiles() + " tiles, " + PaintMap.mips() + " mips, " + PaintMap.cacheBytes() / 1048576 + " MB");
             expect("tiles are prepared off the render thread before they are uploaded", PaintMap.prepared() >= PaintMap.uploads(),
                 PaintMap.prepared() + " prepared, " + PaintMap.uploads() + " uploaded");
+            expect("tiles are baked once into the cache", PaintMap.bakes() > 0, PaintMap.bakes() + " bakes");
+            changeEvents();
+            timerFallback();
             List<String> stats = Capture.statsLines();
             expect("/mapmod stats shows render time and uploads per frame",
                 stats.stream().anyMatch(l -> l.contains("us/frame")) && stats.stream().anyMatch(l -> l.contains("uploads")), String.join(" | ", stats));

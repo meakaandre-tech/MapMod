@@ -8,7 +8,7 @@ import os
 import re
 import sys
 
-SCREENSHOTS = 7
+SCREENSHOTS = 10
 # suite prefix -> (log file, the line that says it ran to its end)
 SUITES = {
     "SELFTEST map ": ("server.log", "SELFTEST map done (later checks)"),
@@ -51,6 +51,12 @@ def main():
             bad.append(f"{prefix.strip()} has failed checks")
         if not finished:
             bad.append(f"{prefix.strip()} did not finish ({end!r} not in {log})")
+    # the client's later suites (MM-4) end with lines of their own
+    client = [l for l in (read(os.path.join(ci, "client.log")) or []) if "System chat:" not in l]
+    for end in ("SELFTEST client done bake", "SELFTEST client done far", "SELFTEST client done unload"):
+        if not any(end in l for l in client):
+            print(f"client: {end!r} missing, DID NOT FINISH")
+            bad.append(f"{end!r} not in client.log")
     shots = sorted(f for f in os.listdir(ci) if re.fullmatch(r"client-\d\d\.png", f)) if os.path.isdir(ci) else []
     print(f"screenshots: {len(shots)} ({', '.join(shots)})")
     if len(shots) < SCREENSHOTS:
@@ -65,7 +71,9 @@ def main():
     except ImportError:
         Image = None
         bad.append("Pillow is missing, so the tile-gap check could not run")
-    for shot in ("client-02.png", "client-03.png", "client-04.png", "client-05.png", "local-02.png"):
+    # 02 level 2, 03 live, 04 close, 05 far (a large made-up area, level 3), 06 level 1, 07 level 0 baked, 08 filters
+    for shot in ("client-02.png", "client-03.png", "client-04.png", "client-05.png", "client-06.png", "client-07.png", "client-08.png",
+                 "local-02.png"):
         if Image is None or not os.path.exists(os.path.join(ci, shot)):
             continue
         im = Image.open(os.path.join(ci, shot)).convert("RGB")

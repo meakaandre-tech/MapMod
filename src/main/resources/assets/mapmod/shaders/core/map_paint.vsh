@@ -9,7 +9,7 @@ layout(std140) uniform MapTile {
     vec4 Rect;      // x0, y0, x1, y1
     vec4 Samples;   // u0, v0, u1, v1: texel coordinates of the tile's textures at those corners
     vec4 Origin;    // xy: world position of texel (0, 0), in samples, wrapped to the noise period
-    vec4 View;      // xy: size of the painted picture (pixels)  z: 1 for the paper background  w: 1 with contours on
+    vec4 View;      // xy: size of the painted picture (pixels)  w: 1 with contours on
 };
 
 layout(location = 0) out vec2 samplePos;

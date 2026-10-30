@@ -60,11 +60,18 @@ public final class MapDraw {
             return sx >= left - margin && sx < left + width + margin && sy >= top - margin && sy < top + height + margin;
         }
 
-        /** The regions the view shows. */
+        /** The regions the view shows (zoomed far out: those of them the map holds POIs for). */
         public List<Long> regions() {
             List<Long> out = new ArrayList<>();
             int x0 = Math.floorDiv((int) Math.floor(wx(left)), MapGrid.REGION_BLOCKS), x1 = Math.floorDiv((int) Math.ceil(wx(left + width)), MapGrid.REGION_BLOCKS);
             int z0 = Math.floorDiv((int) Math.floor(wz(top)), MapGrid.REGION_BLOCKS), z1 = Math.floorDiv((int) Math.ceil(wz(top + height)), MapGrid.REGION_BLOCKS);
+            if ((long) (x1 - x0 + 1) * (z1 - z0 + 1) > MapClient.POIS.size()) {
+                for (long k : MapClient.POIS.keySet()) {
+                    int rx = MapGrid.keyX(k), rz = MapGrid.keyZ(k);
+                    if (rx >= x0 && rx <= x1 && rz >= z0 && rz <= z1) out.add(k);
+                }
+                return out;
+            }
             for (int rz = z0; rz <= z1; rz++) for (int rx = x0; rx <= x1; rx++) out.add(MapGrid.key(rx, rz));
             return out;
         }

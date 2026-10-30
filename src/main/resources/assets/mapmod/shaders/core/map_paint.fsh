@@ -1,13 +1,14 @@
 #version 330
 #extension GL_ARB_separate_shader_objects : require
 
-// The painted map (MM-3). Relief: smooth height (Catmull-Rom, unwarped), a hillshade from the northwest, darker lowlands
+// The painted map (MM-3; MM-4 bakes it once per tile and adds grain and the vignette in a pass of their own). Relief: smooth height (Catmull-Rom, unwarped), a hillshade from the northwest, darker lowlands
 // and paler peaks, snow above a height, optional contour lines. Everything else is read at a position warped by
 // low-frequency noise in world space (seamless across tiles, still when panning or zooming) with cubic B-spline weights:
 // blurred class weights blended into soft, wandering borders; the biome tint; forests darkened by canopy with a soft
 // brush; water from a signed distance to the shore (a smooth coast and ribbon rivers), deep to shallow with a pale band
-// along the shore. Unexplored land is paper; a paper grain and a vignette go over everything. There is no
-// nearest-neighbour look-up anywhere, so no sample's square or block edge ever shows.
+// along the shore. Unexplored land is paper. There is no
+// nearest-neighbour look-up anywhere, so no sample's square or block edge ever shows. The paper grain and the vignette
+// are not here: map_quad puts them over the finished picture at screen resolution.
 
 uniform sampler2D Fields;   // r, g: height + 32768 (high, low byte)   b: water depth   a: explored
 uniform sampler2D Surface;  // rgb: biome tint   a: canopy
@@ -27,14 +28,14 @@ layout(std140) uniform MapPaint {
     vec4 Edges;             // x: border softness  y: warp (blocks)
     vec4 Forest;            // x: darkening at full canopy  y: brush strength
     vec4 Contour;           // x: interval (blocks)  y: strength
-    vec4 Finish;            // x: paper grain  y: vignette
+    vec4 Finish;            // x: paper grain  y: vignette (applied by map_quad)
 };
 
 layout(std140) uniform MapTile {
     vec4 Rect;
     vec4 Samples;
     vec4 Origin;            // xy: world position of texel (0, 0), in samples, wrapped to PERIOD
-    vec4 View;              // xy: picture size (pixels)  z: 1 for the paper background  w: 1 with contours on
+    vec4 View;              // xy: picture size (pixels)  w: 1 with contours on
 };
 
 layout(location = 0) in vec2 samplePos;   // in texels of this tile's textures: texel i's centre is at i
@@ -86,25 +87,11 @@ vec4 bspline(float t) {
     return vec4(s * s * s, 3.0 * t3 - 6.0 * t2 + 4.0, -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0, t3) / 6.0;
 }
 
-// paper grain (fixed to the screen, like the paper under a painting) and the vignette
-vec3 finish(vec3 c) {
-    vec2 fc = gl_FragCoord.xy;
-    float g = 0.65 * vnoise(fc / 2.0, 0.0) + 0.35 * vnoise(fc / 6.0, 0.0);
-    c *= 1.0 + Finish.x * (g - 0.5) * 2.0;
-    vec2 hs = 0.5 * vec2(View.x / max(View.y, 1.0), 1.0);
-    float r = length((fc / max(View.xy, vec2(1.0)) - 0.5) * vec2(View.x / max(View.y, 1.0), 1.0)) / length(hs);
-    return c * (1.0 - Finish.y * smoothstep(0.45, 1.0, r));
-}
-
 vec3 classColour(int c, vec3 biome) {
     return ClassColour[c].rgb * mix(vec3(1.0), biome, ClassColour[c].a);
 }
 
 void main() {
-    if (View.z > 0.5) {
-        fragColor = vec4(finish(Paper.rgb), 1.0);
-        return;
-    }
     ivec2 lim = textureSize(Fields, 0) - 1;
 
     // relief and the explored mask, where the sample is
@@ -210,5 +197,5 @@ void main() {
     float water = smoothstep(-wa, wa, sdf);
 
     vec3 colour = mix(land, sea, water);
-    fragColor = vec4(finish(mix(Paper.rgb, colour, shown)), 1.0);
+    fragColor = vec4(mix(Paper.rgb, colour, shown), 1.0);
 }

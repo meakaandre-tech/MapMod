@@ -5,6 +5,7 @@ import com.meakaandre.mapmod.map.ClientBlockHook;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
@@ -24,8 +25,12 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.storage.LevelResource;
 import org.jspecify.annotations.Nullable;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -102,6 +107,7 @@ public final class Capture {
             DUE.remove(k);
         });
         ClientTickEvents.END_CLIENT_TICK.register(Capture::tick);
+        ClientTickEvents.END_CLIENT_TICK.register(client -> dispatchChanges());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(Capture::leave));
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> stop());
         Runtime.getRuntime().addShutdownHook(new Thread(Capture::stop, MapMod.NAME + " capture shutdown"));
@@ -156,6 +162,7 @@ public final class Capture {
     private static void closeStore() {
         CaptureStore old = store;
         store = null;
+        CHANGED.clear();
         PENDING.clear();
         DUE.clear();
         if (old != null) {
@@ -273,6 +280,69 @@ public final class Capture {
         return f;
     }
 
+    // ------------------------------------------------------------------------------------------------ changes
+
+    /**
+     * Told when a tile the capture holds changes: its position and its new {@link SurfaceTile#revision}. Called on the
+     * client (render) thread, at the end of a client tick or when a renderer asks ({@link #dispatchChanges}); changes
+     * that come quicker than that are taken together, so a listener sees a tile's latest revision once.
+     */
+    @FunctionalInterface
+    public interface TileListener {
+        void changed(int tileX, int tileZ, long revision);
+    }
+
+    private static final List<TileListener> LISTENERS = new CopyOnWriteArrayList<>();
+    /** Tiles changed on the worker and not announced yet: key to latest revision. */
+    private static final ConcurrentHashMap<Long, Long> CHANGED = new ConcurrentHashMap<>();
+    private static final AtomicLong EVENTS = new AtomicLong();
+
+    /** Adds a listener for changed tiles (see {@link TileListener}). */
+    public static void onTileChanged(TileListener listener) {
+        LISTENERS.add(listener);
+    }
+
+    public static void removeTileListener(TileListener listener) {
+        LISTENERS.remove(listener);
+    }
+
+    /** Worker: a held tile changed. */
+    static void changed(int tx, int tz, long revision) {
+        CHANGED.merge(CaptureStore.key(tx, tz), revision, Math::max);
+    }
+
+    /** Announces the tiles changed since the last call to every listener. Client thread. */
+    public static void dispatchChanges() {
+        if (CHANGED.isEmpty()) return;
+        for (Long k : new ArrayList<>(CHANGED.keySet())) {
+            Long revision = CHANGED.remove(k);
+            if (revision == null) continue;
+            EVENTS.incrementAndGet();
+            int tx = CaptureStore.keyX(k), tz = CaptureStore.keyZ(k);
+            for (TileListener l : LISTENERS) {
+                try {
+                    l.changed(tx, tz, revision);
+                } catch (RuntimeException e) {
+                    MapMod.LOGGER.warn("a map tile listener failed", e);
+                }
+            }
+        }
+    }
+
+    /** Tile-changed events announced since the game started (for the selftests). */
+    public static long tileEvents() {
+        return EVENTS.get();
+    }
+
+    /** The revision a tile read from this file has: the file's modification time (0 if it cannot be read). */
+    public static long fileRevision(Path file) {
+        try {
+            return Files.getLastModifiedTime(file).toMillis();
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------ for others
 
     /** Writes every dirty tile now; completes on the worker once they are written. */
@@ -304,11 +374,16 @@ public final class Capture {
      * there or it has not changed. Never reads the disk and never makes the worker hold a tile it did not, so a map
      * reading saved tiles itself leaves the capture's own radius as it is.
      */
-    public static CompletableFuture<@Nullable SurfaceTile> held(int tileX, int tileZ, int knownRevision) {
+    public static CompletableFuture<@Nullable SurfaceTile> held(int tileX, int tileZ, long knownRevision) {
         return ask(s -> {
             SurfaceTile t = s.peek(tileX, tileZ);
             return t == null || t.revision == knownRevision ? null : t.copy();
         });
+    }
+
+    /** The revision of every explored tile the worker holds right now, keyed {@code tileX << 32 | tileZ}. */
+    public static CompletableFuture<@Nullable Long2LongOpenHashMap> heldRevisions() {
+        return ask(CaptureStore::revisions);
     }
 
     /** Lines other parts of the client add to {@code /mapmod stats}. */

@@ -34,8 +34,10 @@ import java.util.Set;
  */
 public class MapScreen extends Screen {
     private static final int PANEL = 140, BAR = 16, FOOT = 14, ROW = 12;
-    /** Zoomed out no further than about a hundred regions on screen, so the tiles drawn stay few and cached. */
-    private static final double MIN_SCALE = 0.3, MAX_SCALE = 8;
+    /** Zoom limits (screen pixels a block): far enough out for a whole explored world, drawn from the mip pyramid. */
+    private static final double MIN_SCALE = 1.0 / 1024, MAX_SCALE = 8;
+    /** How quickly an animated zoom closes on its target (per second, of the remaining distance in log scale). */
+    private static final double ZOOM_RATE = 14;
     /** Zoom factor of one scroll step in and out. */
     private static final double ZOOM_IN = 1.25, ZOOM_OUT = 0.8;
     /** Length of the scale bar (pixels). */
@@ -48,7 +50,11 @@ public class MapScreen extends Screen {
     private static final Set<String> OPEN = new HashSet<>();
     private static double lastScale = 1;
 
-    private double cx, cz, scale = lastScale;
+    private double cx, cz, scale = lastScale, target = lastScale;
+    /** Animated zoom: the screen point it zooms round and the world point that stays under it. */
+    private boolean anchored;
+    private double anchorX, anchorY, anchorWx, anchorWz;
+    private long lastFrameNanos;
     private boolean placed;
     private boolean dragging;
     private @Nullable Hover hover;
@@ -78,7 +84,8 @@ public class MapScreen extends Screen {
     public void centre(int x, int z, float zoom) {
         cx = x;
         cz = z;
-        if (zoom > 0) scale = Math.clamp(zoom, MIN_SCALE, MAX_SCALE);
+        if (zoom > 0) scale = target = Math.clamp(zoom, MIN_SCALE, MAX_SCALE);
+        anchored = false;
         placed = true;
     }
 
@@ -134,6 +141,7 @@ public class MapScreen extends Screen {
 
     @Override
     public void extractBackground(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+        animate();
         g.fill(0, 0, width, height, 0xFF151A20);
         MapDraw.View v = view();
         g.enableScissor(v.left(), v.top(), v.left() + v.width(), v.top() + v.height());
@@ -295,6 +303,28 @@ public class MapScreen extends Screen {
         return a * a + b * b;
     }
 
+    /**
+     * Moves the scale towards its target, smoothly and at the same pace at any frame rate, keeping the world point under
+     * the zoom's anchor where it is.
+     */
+    private void animate() {
+        long now = System.nanoTime();
+        double dt = lastFrameNanos == 0 ? 0 : Math.min(0.1, (now - lastFrameNanos) / 1e9);
+        lastFrameNanos = now;
+        if (scale == target) {
+            anchored = false;
+            return;
+        }
+        double ls = Math.log(scale), lt = Math.log(target);
+        double next = ls + (lt - ls) * (1 - Math.exp(-ZOOM_RATE * dt));
+        scale = Math.abs(lt - next) < 1e-3 ? target : Math.exp(next);
+        if (anchored) {
+            MapDraw.View v = view();
+            cx += anchorWx - v.wx(anchorX);
+            cz += anchorWz - v.wz(anchorY);
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------ input
 
     @Override
@@ -339,6 +369,9 @@ public class MapScreen extends Screen {
         if (dragging && !editing) {
             cx -= dx / scale;
             cz -= dy / scale;
+            // a zoom still under way stays round the same spot of the screen
+            anchorWx -= dx / scale;
+            anchorWz -= dy / scale;
             return true;
         }
         return super.mouseDragged(event, dx, dy);
@@ -347,14 +380,15 @@ public class MapScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mx, double my, double sx, double sy) {
         if (editing || !inMap(mx, my) || sy == 0) return super.mouseScrolled(mx, my, sx, sy);
+        // the zoom animates towards the new target round the spot under the mouse (see animate)
         MapDraw.View v = view();
-        double wx = v.wx(mx), wz = v.wz(my);
-        scale = Math.clamp(scale * (sy > 0 ? ZOOM_IN : ZOOM_OUT), MIN_SCALE, MAX_SCALE);
-        lastScale = scale;
-        // keep the spot under the mouse where it is
-        MapDraw.View after = view();
-        cx += wx - after.wx(mx);
-        cz += wz - after.wz(my);
+        anchored = true;
+        anchorX = mx;
+        anchorY = my;
+        anchorWx = v.wx(mx);
+        anchorWz = v.wz(my);
+        target = Math.clamp(target * Math.pow(sy > 0 ? ZOOM_IN : ZOOM_OUT, Math.abs(sy)), MIN_SCALE, MAX_SCALE);
+        lastScale = target;
         return true;
     }
 

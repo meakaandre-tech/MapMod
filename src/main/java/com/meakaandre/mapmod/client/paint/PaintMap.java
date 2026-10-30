@@ -8,9 +8,7 @@ import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.textures.FilterMode;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.longs.LongArrayList;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.resource.v1.ResourceLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -18,33 +16,35 @@ import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import org.jspecify.annotations.Nullable;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The painted map (MM-3): while the fullscreen map is open, the tiles it shows are held ({@link PaintTiles}), their
- * textures worked out on a background thread ({@link TilePrep}: blurred class weights, the shore distance field,
- * canopy), uploaded to the GPU a tile or two a frame ({@link TileTextures}) and painted live every frame by one fragment
- * shader per tile ({@link PaintRenderer}) into a texture the size of the map on screen in real pixels, which the screen
- * then draws as one picture with its icons on top. Tiles not uploaded yet show as paper. When the map closes,
- * everything is let go.
- * <p>
- * Baking tiles once and a mip pyramid for far zoom come in MM-4; until then every visible tile is painted each frame.
+ * The painted map (MM-3, baked and mipped in MM-4). While in a world the map keeps an index of the tiles there are
+ * ({@link TileIndex}) and, once it has been opened, their baked pictures and the mip pyramid over them
+ * ({@link BakeCache}), kept up by the capture's change events; while it is open it also holds the data and textures of
+ * the tiles it is working on ({@link PaintTiles}, {@link TileTextures}). Each frame {@link MapPainter} paints the view
+ * into a picture the size of the map on screen in real pixels, which the screen then draws as one picture with its
+ * icons on top. Closing the screen lets the data, textures and pictures go and keeps the baked tiles; leaving the world
+ * lets everything go.
  */
 public final class PaintMap {
-    /** Tiles uploaded to the GPU in one frame at most, so opening the map never stalls a frame. */
-    public static final int UPLOADS_PER_FRAME = 2;
-    /** Tiles held beyond the visible ones on each side before they are let go. */
-    private static final int KEEP_MARGIN = 2;
+    /** Uploads, bakes and mip copies in one frame at most, together. */
+    public static final int UPLOADS_PER_FRAME = MapPainter.OPS;
+    /** The GPU budget of baked tiles and mips when the settings name none (MB). */
+    public static final int DEFAULT_CACHE_MB = 96;
 
+    private static @Nullable MapPainter painter;
+    private static @Nullable TileIndex index;
     private static @Nullable PaintTiles tiles;
-    private static final Long2ObjectOpenHashMap<TileTextures> GPU = new Long2ObjectOpenHashMap<>();
-    private static @Nullable PaintRenderer renderer;
+    /** The tile folder the index and the cache were made for. */
+    private static @Nullable Path world;
+    private static final GpuTimer TIMER = new GpuTimer();
     private static final Stats STATS = new Stats();
     /** Works out tiles' textures off the render thread, one at a time. */
     private static final ExecutorService PREP = Executors.newSingleThreadExecutor(r -> {
@@ -53,190 +53,123 @@ public final class PaintMap {
         t.setPriority(Thread.NORM_PRIORITY - 1);
         return t;
     });
-    /** Bumped when the map closes, so preparations still running then are thrown away. */
-    private static volatile int generation;
-    /** Per tile: the stamps it is being prepared from, and the finished preparations waiting for an upload. */
-    private static final Long2LongOpenHashMap PREPARING = new Long2LongOpenHashMap();
-    private static final ConcurrentHashMap<Long, Prepared> PREPARED = new ConcurrentHashMap<>();
-    private static final AtomicLong PREP_COUNT = new AtomicLong(), PREP_NANOS = new AtomicLong();
-    private static final AtomicLong PREP_MAX_NANOS = new AtomicLong();
-
-    private record Prepared(int generation, long stamps, TilePrep.Result result) {
-    }
 
     /** Render-thread numbers for {@code /mapmod stats}: per frame, averaged over the last second, and the worst. */
     private static final class Stats {
-        long frames, uploads;
-        long windowStart, windowFrames, windowMicros, windowUploads, windowMaxMicros, windowMaxUploads;
-        double avgMicros, avgUploads;
-        long maxMicros, maxUploads, lastMaxMicros, lastMaxUploads;
-        int tilesShown, tilesPainted;
+        long frames, uploads, bakes, mips;
+        long windowStart, windowFrames, windowMicros, windowOps, windowBakes, windowMaxMicros, windowMaxOps, windowMaxBakes;
+        double avgMicros, avgOps, avgBakes;
+        long maxOps, lastMaxMicros, lastMaxOps, lastMaxBakes;
+        long windowGpuNanos, windowGpuFrames;
+        double avgGpuMicros = -1;
+        int tilesPainted;
         boolean contours;
     }
 
     private PaintMap() {
     }
 
-    /** The palette's reload listener: F3+T (and every resource reload) reads map_palette.json again. */
+    /** The palette's reload listener, the capture's change events, and letting go on leaving a world. */
     public static void register() {
         ResourceLoader.get(PackType.CLIENT_RESOURCES).registerReloadListener(MapMod.id("map_palette"),
             (ResourceManagerReloadListener) PaintPalette::load);
         Capture.addStats(PaintMap::statsLines);
+        Capture.onTileChanged((tx, tz, revision) -> {
+            TileIndex i = index;
+            if (i != null) i.set(tx, tz, revision);
+        });
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(PaintMap::unload));
+    }
+
+    /** The index and the cache for the world being played, made (or made again for another world) if needed. */
+    private static MapPainter painter() {
+        Path dir = Capture.dir();
+        MapPainter p = painter;
+        if (p != null && Objects.equals(dir, world)) return p;
+        unload();
+        world = dir;
+        TileIndex i = new TileIndex((tx, tz) -> {
+            MapPainter q = painter;
+            if (q != null) q.cache.tileChanged(tx, tz);
+        });
+        index = i;
+        painter = p = new MapPainter(i, (long) MapClient.cacheMB * 1024 * 1024, PREP);
+        return p;
     }
 
     /** Paints the terrain under a view and draws it there (the screen has clipped to the view). */
     public static void draw(GuiGraphicsExtractor g, MapDraw.View v) {
         long t0 = System.nanoTime();
+        Capture.dispatchChanges();
         Minecraft mc = Minecraft.getInstance();
         int scale = Math.max(1, mc.getWindow().getGuiScale());
         int w = v.width() * scale, h = v.height() * scale;
         if (w <= 0 || h <= 0) return;
-        PaintTiles held = tiles;
-        if (held == null) tiles = held = new PaintTiles();
-        // the tiles under the view, and one more on each side for their neighbours' aprons
-        double wx0 = v.wx(v.left()), wx1 = v.wx(v.left() + v.width()), wz0 = v.wz(v.top()), wz1 = v.wz(v.top() + v.height());
-        int tx0 = Math.floorDiv((int) Math.floor(wx0), SurfaceTile.BLOCKS), tx1 = Math.floorDiv((int) Math.floor(wx1), SurfaceTile.BLOCKS);
-        int tz0 = Math.floorDiv((int) Math.floor(wz0), SurfaceTile.BLOCKS), tz1 = Math.floorDiv((int) Math.floor(wz1), SurfaceTile.BLOCKS);
-        held.update(tx0 - 1, tz0 - 1, tx1 + 1, tz1 + 1, KEEP_MARGIN);
-        dropFar(held);
-        boolean terrain = MapClient.unlocked(MapFeature.TERRAIN);
-        int uploads = terrain ? upload(held, tx0, tz0, tx1, tz1, (tx0 + tx1) / 2.0, (tz0 + tz1) / 2.0) : 0;
+        MapPainter p = painter();
+        TileIndex i = Objects.requireNonNull(index);
+        if (tiles == null) {
+            PaintTiles t = new PaintTiles(i, world);
+            tiles = t;
+            p.provider(new MapPainter.Provider() {
+                @Override
+                public void update(long frame) {
+                    t.update(frame);
+                }
 
-        PaintRenderer r = renderer;
-        if (r == null) renderer = r = new PaintRenderer();
-        List<PaintRenderer.Quad> quads = new ArrayList<>();
-        int shown = 0;
-        double blocksPerPixel = 1.0 / (v.scale() * scale);
-        for (int tz = tz0; tz <= tz1; tz++) {
-            for (int tx = tx0; tx <= tx1; tx++) {
-                shown++;
-                TileTextures tex = terrain ? GPU.get(PaintTiles.key(tx, tz)) : null;
-                if (tex == null) continue;
-                // the tile's corners in the target's pixels (x right, y down from the top-left)
-                double x0 = (tx * (double) SurfaceTile.BLOCKS - wx0) / blocksPerPixel, x1 = x0 + SurfaceTile.BLOCKS / blocksPerPixel;
-                double y0 = (tz * (double) SurfaceTile.BLOCKS - wz0) / blocksPerPixel, y1 = y0 + SurfaceTile.BLOCKS / blocksPerPixel;
-                // sample i stands for its cell's middle (block i * 4 + 2), so the tile's edge is half a sample before
-                // the first and after the last; texel i + APRON holds sample i
-                float u0 = TileTextures.APRON - 0.5f, u1 = u0 + SurfaceTile.SIDE;
-                // texel (0, 0) is world sample (tx * 128 - APRON, ...): wrapped to the noise's period, the shader's
-                // numbers stay small and neighbouring tiles agree
-                int ox = Math.floorMod(tx * SurfaceTile.SIDE - TileTextures.APRON, PaintRenderer.NOISE_PERIOD);
-                int oz = Math.floorMod(tz * SurfaceTile.SIDE - TileTextures.APRON, PaintRenderer.NOISE_PERIOD);
-                quads.add(new PaintRenderer.Quad(tex, (float) x0, (float) y0, (float) x1, (float) y1, u0, u0, u1, u1, ox, oz));
-            }
+                @Override
+                public PaintTiles.@Nullable Around around(int tx, int tz) {
+                    return t.around(tx, tz);
+                }
+
+                @Override
+                public void trim() {
+                    t.trim();
+                }
+            });
+            t.scan();
         }
-        boolean contours = MapClient.contours;
-        r.paint(w, h, PaintPalette.current(), PaintPalette.version(), quads, contours);
-        STATS.contours = contours;
-        g.blit(r.view(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR),
-            v.left(), v.top(), v.left() + v.width(), v.top() + v.height(), 0f, 1f, r.v0(), r.v1());
+        p.cache.budget((long) MapClient.cacheMB * 1024 * 1024);
+        double blocksPerPixel = 1.0 / (v.scale() * scale);
+        MapPainter.Frame f = new MapPainter.Frame(w, h, v.wx(v.left()), v.wz(v.top()), blocksPerPixel);
+        TIMER.begin();
+        MapGpu.Target picture = p.paint(f, PaintPalette.current(), PaintPalette.version(), MapClient.contours, MapClient.unlocked(MapFeature.TERRAIN));
+        TIMER.end();
+        g.blit(picture.view, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
+            v.left(), v.top(), v.left() + v.width(), v.top() + v.height(), 0f, 1f, 1f, 0f);
 
         long micros = (System.nanoTime() - t0) / 1000;
         Stats s = STATS;
         s.frames++;
-        s.uploads += uploads;
-        s.tilesShown = shown;
-        s.tilesPainted = quads.size();
+        s.uploads += p.lastUploads;
+        s.bakes += p.lastBakes;
+        s.mips += p.lastMips;
+        s.tilesPainted = p.lastPainted;
+        s.contours = p.lastContours;
         s.windowFrames++;
         s.windowMicros += micros;
-        s.windowUploads += uploads;
+        s.windowOps += p.lastOps;
+        s.windowBakes += p.lastBakes;
         s.windowMaxMicros = Math.max(s.windowMaxMicros, micros);
-        s.windowMaxUploads = Math.max(s.windowMaxUploads, uploads);
-        s.maxUploads = Math.max(s.maxUploads, uploads);
+        s.windowMaxOps = Math.max(s.windowMaxOps, p.lastOps);
+        s.windowMaxBakes = Math.max(s.windowMaxBakes, p.lastBakes);
+        s.maxOps = Math.max(s.maxOps, p.lastOps);
+        long gpu = TIMER.poll();
+        if (gpu >= 0) {
+            s.windowGpuNanos += gpu;
+            s.windowGpuFrames++;
+        }
         long now = System.currentTimeMillis();
         if (now - s.windowStart >= 1000) {
             s.avgMicros = s.windowFrames == 0 ? 0 : (double) s.windowMicros / s.windowFrames;
-            s.avgUploads = s.windowFrames == 0 ? 0 : (double) s.windowUploads / s.windowFrames;
+            s.avgOps = s.windowFrames == 0 ? 0 : (double) s.windowOps / s.windowFrames;
+            s.avgBakes = s.windowFrames == 0 ? 0 : (double) s.windowBakes / s.windowFrames;
+            s.avgGpuMicros = s.windowGpuFrames == 0 ? -1 : s.windowGpuNanos / 1000.0 / s.windowGpuFrames;
             s.lastMaxMicros = s.windowMaxMicros;
-            s.lastMaxUploads = s.windowMaxUploads;
+            s.lastMaxOps = s.windowMaxOps;
+            s.lastMaxBakes = s.windowMaxBakes;
             s.windowStart = now;
-            s.windowFrames = s.windowMicros = s.windowUploads = s.windowMaxMicros = s.windowMaxUploads = 0;
-        }
-    }
-
-    /**
-     * Uploads up to {@link #UPLOADS_PER_FRAME} visible tiles whose GPU copy is missing or older than their data (or a
-     * neighbour's), nearest the middle of the view first. Their textures are worked out on the prep thread first; a tile
-     * is uploaded once its preparation is in. A tile waits while a neighbour is still being read, so it is not prepared
-     * twice in a row as the map opens.
-     */
-    private static int upload(PaintTiles held, int tx0, int tz0, int tx1, int tz1, double mx, double mz) {
-        record Want(int tx, int tz, long key, double d) {
-        }
-        List<Want> wants = new ArrayList<>();
-        for (int tz = tz0; tz <= tz1; tz++) {
-            for (int tx = tx0; tx <= tx1; tx++) {
-                PaintTiles.Entry e = held.get(tx, tz);
-                if (e == null || e.data == null || held.settling(tx, tz)) continue;
-                long key = stamps(held, tx, tz);
-                TileTextures tex = GPU.get(PaintTiles.key(tx, tz));
-                if (tex != null && tex.key == key) continue;
-                wants.add(new Want(tx, tz, key, (tx - mx) * (tx - mx) + (tz - mz) * (tz - mz)));
-            }
-        }
-        wants.sort((a, b) -> Double.compare(a.d, b.d));
-        int done = 0;
-        for (Want want : wants) {
-            long k = PaintTiles.key(want.tx, want.tz);
-            Prepared p = PREPARED.get(k);
-            if (p != null && p.generation == generation && p.stamps == want.key) {
-                if (done >= UPLOADS_PER_FRAME) continue;
-                PREPARED.remove(k);
-                PREPARING.remove(k);
-                TileTextures tex = GPU.get(k);
-                if (tex == null) GPU.put(k, tex = TileTextures.create(want.tx, want.tz));
-                tex.upload(p.result);
-                tex.key = want.key;
-                done++;
-                continue;
-            }
-            if (PREPARING.containsKey(k) && PREPARING.get(k) == want.key) continue;
-            PREPARING.put(k, want.key);
-            SurfaceTile[][] around = new SurfaceTile[3][3];
-            for (int dz = -1; dz <= 1; dz++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    PaintTiles.Entry n = held.get(want.tx + dx, want.tz + dz);
-                    around[dz + 1][dx + 1] = n == null ? null : n.data;
-                }
-            }
-            int gen = generation;
-            long stamps = want.key;
-            PREP.execute(() -> {
-                if (gen != generation) return;
-                long t0 = System.nanoTime();
-                TilePrep.Result r = TilePrep.prepare(around);
-                long ns = System.nanoTime() - t0;
-                PREP_COUNT.incrementAndGet();
-                PREP_NANOS.addAndGet(ns);
-                PREP_MAX_NANOS.accumulateAndGet(ns, Math::max);
-                if (gen == generation) PREPARED.put(k, new Prepared(gen, stamps, r));
-            });
-        }
-        return done;
-    }
-
-    /** One number from the stamps of a tile and its eight neighbours: it changes when any of their data does. */
-    private static long stamps(PaintTiles held, int tx, int tz) {
-        long h = 1469598103934665603L;
-        for (int dz = -1; dz <= 1; dz++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                PaintTiles.Entry n = held.get(tx + dx, tz + dz);
-                h = (h ^ (n == null ? 0 : n.stamp)) * 1099511628211L;
-            }
-        }
-        return h;
-    }
-
-    /** Lets go of the GPU copies of tiles the holder no longer holds. */
-    private static void dropFar(PaintTiles held) {
-        LongArrayList gone = new LongArrayList();
-        for (var e : GPU.long2ObjectEntrySet()) {
-            int tx = (int) (e.getLongKey() >> 32), tz = (int) e.getLongKey();
-            if (held.get(tx, tz) == null) gone.add(e.getLongKey());
-        }
-        for (long k : gone) {
-            TileTextures t = GPU.remove(k);
-            if (t != null) t.close();
+            s.windowFrames = s.windowMicros = s.windowOps = s.windowBakes = s.windowMaxMicros = s.windowMaxOps = s.windowMaxBakes = 0;
+            s.windowGpuNanos = s.windowGpuFrames = 0;
         }
     }
 
@@ -250,19 +183,23 @@ public final class PaintMap {
         return e.data.explored(i) ? (int) e.data.height[i] : null;
     }
 
-    /** The map closed: its tiles, their textures and the painted picture are let go. */
+    /** The map closed: the tiles' data, their textures and the pictures go; the baked tiles and mips stay. */
     public static void close() {
         PaintTiles held = tiles;
         tiles = null;
         if (held != null) held.close();
-        for (TileTextures t : GPU.values()) t.close();
-        GPU.clear();
-        generation++;
-        PREPARING.clear();
-        PREPARED.clear();
-        PaintRenderer r = renderer;
-        renderer = null;
-        if (r != null) r.close();
+        MapPainter p = painter;
+        if (p != null) p.release();
+    }
+
+    /** Leaving the world (or for another): everything goes, the baked tiles too. */
+    public static void unload() {
+        close();
+        MapPainter p = painter;
+        painter = null;
+        index = null;
+        world = null;
+        if (p != null) p.close();
     }
 
     /** True while the map holds tiles (it is open). */
@@ -270,8 +207,9 @@ public final class PaintMap {
         return tiles != null;
     }
 
-    /** Frames painted and tiles uploaded since the game started, the most uploaded in one frame, and the tiles painted
-     * in the last frame (for the selftests). */
+    // ------------------------------------------------------------------------------------------------ for the selftests
+
+    /** Frames painted, steps (uploads, bakes, mip copies) and uploads since the game started, and the most steps in a frame. */
     public static long frames() {
         return STATS.frames;
     }
@@ -280,22 +218,69 @@ public final class PaintMap {
         return STATS.uploads;
     }
 
-    public static long maxUploadsPerFrame() {
-        return STATS.maxUploads;
+    public static long bakes() {
+        return STATS.bakes;
     }
 
+    public static long maxUploadsPerFrame() {
+        return STATS.maxOps;
+    }
+
+    /** Tiles painted live in the last frame. */
     public static int tilesPainted() {
         return STATS.tilesPainted;
     }
 
-    /** Whether the last frame painted contour lines (for the selftests). */
+    /** Whether the last frame painted with contour lines on (for the selftests). */
     public static boolean contoursPainted() {
         return STATS.contours;
     }
 
-    /** Tiles prepared off-thread since the game started (for the selftests). */
+    /** Tiles prepared off-thread since the world was joined (for the selftests). */
     public static long prepared() {
-        return PREP_COUNT.get();
+        MapPainter p = painter;
+        return p == null ? 0 : p.prepared();
+    }
+
+    /** Baked tiles and mips held, and their GPU bytes (0 when there is no cache). */
+    public static int bakedTiles() {
+        MapPainter p = painter;
+        return p == null ? 0 : p.cache.count(0);
+    }
+
+    public static int mips() {
+        MapPainter p = painter;
+        return p == null ? 0 : p.cache.mips();
+    }
+
+    public static long cacheBytes() {
+        MapPainter p = painter;
+        return p == null ? 0 : p.cache.bytes();
+    }
+
+    /** True if the last frame found nothing left to do for what is on screen. */
+    public static boolean idle() {
+        MapPainter p = painter;
+        return p != null && p.idle();
+    }
+
+    /** The mip level and whether the last frame painted live, and its quads. */
+    public static String lastFrame() {
+        MapPainter p = painter;
+        if (p == null) return "none";
+        return (p.lastLive ? "live" : "level " + p.lastLevel) + ", " + p.lastQuads + " quads, " + p.lastPainted + " painted, "
+            + p.lastPasses() + " passes, " + p.lastDraws() + " draws";
+    }
+
+    /** Disk-load events the open map's tiles fired (tiles read from disk). */
+    public static int diskEvents() {
+        PaintTiles t = tiles;
+        return t == null ? 0 : t.diskEvents;
+    }
+
+    /** The GPU timer (the selftests switch it off to see the fallback). */
+    public static GpuTimer timer() {
+        return TIMER;
     }
 
     /**
@@ -324,25 +309,34 @@ public final class PaintMap {
         return null;
     }
 
-    /** Compiles the paint shader now (for the selftests): null if it compiled, else what went wrong. */
+    /** Compiles both shaders now (for the selftests): null if they compiled, else what went wrong. */
     public static @Nullable String compileCheck() {
-        return PaintRenderer.compileCheck();
+        return MapGpu.compileCheck();
     }
 
     private static List<String> statsLines() {
         Stats s = STATS;
+        MapPainter p = painter;
         PaintTiles held = tiles;
         List<String> lines = new ArrayList<>();
         lines.add(MapMod.NAME + " painted map" + (held == null ? " (closed)" : " (open)"));
-        lines.add(String.format(Locale.ROOT, "  render %.0f us/frame avg, %d us max (last second)", s.avgMicros, s.lastMaxMicros));
-        lines.add(String.format(Locale.ROOT, "  uploads %.2f/frame avg, %d max (budget %d); %d total in %d frames",
-            s.avgUploads, s.lastMaxUploads, UPLOADS_PER_FRAME, s.uploads, s.frames));
-        lines.add(String.format(Locale.ROOT, "  tiles shown %d, painted %d, held %d, on the GPU %d (read %d, from capture %d)",
-            s.tilesShown, s.tilesPainted, held == null ? 0 : held.size(), GPU.size(), held == null ? 0 : held.read.get(),
-            held == null ? 0 : held.fromCapture.get()));
-        long n = PREP_COUNT.get();
-        lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d; contours %s",
-            n, n == 0 ? 0 : PREP_NANOS.get() / 1e6 / n, PREP_MAX_NANOS.get() / 1e6, PREPARED.size(), MapClient.contours ? "on" : "off"));
+        String gpu = !TIMER.supported() ? "n/a" : s.avgGpuMicros < 0 ? "waiting" : String.format(Locale.ROOT, "%.0f us/frame avg", s.avgGpuMicros);
+        lines.add(String.format(Locale.ROOT, "  render %.0f us/frame avg, %d us max (last second); GPU %s", s.avgMicros, s.lastMaxMicros, gpu));
+        lines.add(String.format(Locale.ROOT, "  steps %.2f/frame avg, %d max (budget %d); bakes %.2f/frame avg, %d max; %d uploads, %d bakes, %d mip copies in %d frames",
+            s.avgOps, s.lastMaxOps, UPLOADS_PER_FRAME, s.avgBakes, s.lastMaxBakes, s.uploads, s.bakes, s.mips, s.frames));
+        if (p != null) {
+            BakeCache c = p.cache;
+            lines.add(String.format(Locale.ROOT, "  baked tiles %d, mips %d, cache %.1f / %d MB, evicted %d; tiles known %d",
+                c.count(0), c.mips(), c.bytes() / 1048576.0, c.budget() / 1048576, c.evictions, p.index.size()));
+            lines.add("  last frame: " + lastFrame() + ", textures " + p.textures());
+            long n = p.prepared();
+            lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d",
+                n, n == 0 ? 0 : p.prepNanos.get() / 1e6 / n, p.prepMaxNanos.get() / 1e6, p.waiting()));
+        }
+        if (held != null) {
+            lines.add(String.format(Locale.ROOT, "  tiles held %d, loading %d (read %d, from capture %d); contours %s",
+                held.size(), held.loading(), held.read.get(), held.fromCapture.get(), MapClient.contours ? "on" : "off"));
+        }
         return lines;
     }
 }
