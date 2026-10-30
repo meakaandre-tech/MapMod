@@ -48,6 +48,11 @@ public final class MapClient {
 
     public static @Nullable String mapId;
     public static final Long2ObjectOpenHashMap<long[]> FOG = new Long2ObjectOpenHashMap<>();
+    /**
+     * Whether the server says the player's group fog decides what of the captured terrain shows (MM-5): only in a real
+     * group on a server with MapMod. Until it says, and on a server without MapMod, it is false.
+     */
+    public static boolean groupFog;
     public static final Long2ObjectOpenHashMap<List<MapPoi>> POIS = new Long2ObjectOpenHashMap<>();
     public static List<MapMarker> markers = List.of();
     public static List<MapPayloads.Mate> mates = List.of();
@@ -103,7 +108,7 @@ public final class MapClient {
 
     public static void register() {
         KeyMappingHelper.registerKeyMapping(OPEN);
-        ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Hello.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> hello(p.mapId(), p.sharedKey())));
+        ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Hello.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> hello(p.mapId(), p.sharedKey(), p.groupFog())));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Unlocks.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> {
             unlocks = p.mask();
             lockedKey = p.lockedKey();
@@ -135,6 +140,15 @@ public final class MapClient {
         return mc.level != null && mc.level.dimension() == Level.OVERWORLD;
     }
 
+    /**
+     * True when the painted map shows everything this client captured, fogging only what it never captured: on a server
+     * without MapMod, alone (the default group provider, singleplayer included) or in no group. Otherwise the group's
+     * fog also decides.
+     */
+    public static boolean fogFromCapture() {
+        return LocalMap.active() || !groupFog;
+    }
+
     public static boolean explored(int x, int z) {
         long[] bits = FOG.get(MapGrid.regionOfBlock(x, z));
         return bits != null && MapGrid.get(bits, MapGrid.fogBit(x >> 4, z >> 4));
@@ -144,6 +158,7 @@ public final class MapClient {
         LocalMap.stop();
         mapId = null;
         FOG.clear();
+        groupFog = false;
         fogReplaced();
         POIS.clear();
         markers = List.of();
@@ -157,8 +172,12 @@ public final class MapClient {
         firstMarkers = true;
     }
 
-    static void hello(String id, String shared) {
+    static void hello(String id, String shared, boolean fog) {
         sharedKey = shared;
+        if (fog != groupFog) {
+            groupFog = fog;
+            fogReplaced();
+        }
         if (!id.equals(mapId)) PINS.clear();
         mapId = id;
         loadPins();

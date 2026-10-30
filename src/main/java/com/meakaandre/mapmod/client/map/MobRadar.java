@@ -80,8 +80,9 @@ public final class MobRadar {
             boolean hostile = hostile(e);
             if (hostile ? !hostiles : !passives) continue;
             double x = e.xo + (e.getX() - e.xo) * pt, z = e.zo + (e.getZ() - e.zo) * pt;
-            // under the fog: where the group has not explored or the map has nothing captured
-            if (!MapClient.explored((int) Math.floor(x), (int) Math.floor(z)) || PaintMap.height((int) Math.floor(x), (int) Math.floor(z)) == null) continue;
+            // under the fog: where the map has nothing captured, or (where the group's fog decides) the group has not explored
+            int bx = (int) Math.floor(x), bz = (int) Math.floor(z);
+            if (PaintMap.height(bx, bz) == null || (!MapClient.fogFromCapture() && !MapClient.explored(bx, bz))) continue;
             double sx = v.sx(x), sy = v.sy(z);
             if (!v.inside(sx, sy, size)) continue;
             int x0 = (int) Math.round(sx) - size / 2, y0 = (int) Math.round(sy) - size / 2;

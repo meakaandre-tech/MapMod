@@ -332,13 +332,22 @@ public final class MapServer {
         else UNLOCKS.remove(player.getUUID());
     }
 
+    /**
+     * Whether a player's group fog decides what of their client's captured terrain the map shows: only in a real group
+     * from a mod's provider. With the default provider (every player alone, singleplayer included) or no group, the
+     * client shows all it captured.
+     */
+    public static boolean groupFog(GroupProvider provider, String group) {
+        return provider != GroupProvider.ALONE && !group.isEmpty();
+    }
+
     /** Everything a player's client needs: the map's id, their unlocks, their group's fog, their markers and the POIs. */
     public static void sync(ServerPlayer player) {
         if (ignored(player)) return;
         MinecraftServer server = player.level().getServer();
         String group = MapModApi.groupOf(player);
         SYNCED.put(player.getUUID(), group);
-        if (mapId != null && send(player, new MapPayloads.Hello(mapId, groups().sharedLabel()))) GREETED.add(player.getUUID());
+        if (mapId != null && send(player, new MapPayloads.Hello(mapId, groups().sharedLabel(), groupFog(groups(), group)))) GREETED.add(player.getUUID());
         sendUnlocks(player, true);
         sendMarkers(player);
         if (group.isEmpty()) {
