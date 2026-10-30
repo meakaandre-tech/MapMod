@@ -8,6 +8,7 @@ import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.textures.FilterMode;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import net.fabricmc.fabric.api.resource.v1.ResourceLoader;
@@ -20,13 +21,18 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The painted map (MM-2, shader v1): while the fullscreen map is open, the tiles it shows are held ({@link PaintTiles}),
- * uploaded to the GPU a tile or two a frame ({@link TileTextures}) and painted live every frame by one fragment shader
- * per tile ({@link PaintRenderer}) into a texture the size of the map on screen in real pixels, which the screen then
- * draws as one picture with its icons on top. Tiles not uploaded yet show as paper. When the map closes, everything is
- * let go.
+ * The painted map (MM-3): while the fullscreen map is open, the tiles it shows are held ({@link PaintTiles}), their
+ * textures worked out on a background thread ({@link TilePrep}: blurred class weights, the shore distance field,
+ * canopy), uploaded to the GPU a tile or two a frame ({@link TileTextures}) and painted live every frame by one fragment
+ * shader per tile ({@link PaintRenderer}) into a texture the size of the map on screen in real pixels, which the screen
+ * then draws as one picture with its icons on top. Tiles not uploaded yet show as paper. When the map closes,
+ * everything is let go.
  * <p>
  * Baking tiles once and a mip pyramid for far zoom come in MM-4; until then every visible tile is painted each frame.
  */
@@ -40,6 +46,23 @@ public final class PaintMap {
     private static final Long2ObjectOpenHashMap<TileTextures> GPU = new Long2ObjectOpenHashMap<>();
     private static @Nullable PaintRenderer renderer;
     private static final Stats STATS = new Stats();
+    /** Works out tiles' textures off the render thread, one at a time. */
+    private static final ExecutorService PREP = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, MapMod.NAME + " map prep");
+        t.setDaemon(true);
+        t.setPriority(Thread.NORM_PRIORITY - 1);
+        return t;
+    });
+    /** Bumped when the map closes, so preparations still running then are thrown away. */
+    private static volatile int generation;
+    /** Per tile: the stamps it is being prepared from, and the finished preparations waiting for an upload. */
+    private static final Long2LongOpenHashMap PREPARING = new Long2LongOpenHashMap();
+    private static final ConcurrentHashMap<Long, Prepared> PREPARED = new ConcurrentHashMap<>();
+    private static final AtomicLong PREP_COUNT = new AtomicLong(), PREP_NANOS = new AtomicLong();
+    private static final AtomicLong PREP_MAX_NANOS = new AtomicLong();
+
+    private record Prepared(int generation, long stamps, TilePrep.Result result) {
+    }
 
     /** Render-thread numbers for {@code /mapmod stats}: per frame, averaged over the last second, and the worst. */
     private static final class Stats {
@@ -48,6 +71,7 @@ public final class PaintMap {
         double avgMicros, avgUploads;
         long maxMicros, maxUploads, lastMaxMicros, lastMaxUploads;
         int tilesShown, tilesPainted;
+        boolean contours;
     }
 
     private PaintMap() {
@@ -94,10 +118,16 @@ public final class PaintMap {
                 // sample i stands for its cell's middle (block i * 4 + 2), so the tile's edge is half a sample before
                 // the first and after the last; texel i + APRON holds sample i
                 float u0 = TileTextures.APRON - 0.5f, u1 = u0 + SurfaceTile.SIDE;
-                quads.add(new PaintRenderer.Quad(tex, (float) x0, (float) y0, (float) x1, (float) y1, u0, u0, u1, u1));
+                // texel (0, 0) is world sample (tx * 128 - APRON, ...): wrapped to the noise's period, the shader's
+                // numbers stay small and neighbouring tiles agree
+                int ox = Math.floorMod(tx * SurfaceTile.SIDE - TileTextures.APRON, PaintRenderer.NOISE_PERIOD);
+                int oz = Math.floorMod(tz * SurfaceTile.SIDE - TileTextures.APRON, PaintRenderer.NOISE_PERIOD);
+                quads.add(new PaintRenderer.Quad(tex, (float) x0, (float) y0, (float) x1, (float) y1, u0, u0, u1, u1, ox, oz));
             }
         }
-        r.paint(w, h, PaintPalette.current(), PaintPalette.version(), quads);
+        boolean contours = MapClient.contours;
+        r.paint(w, h, PaintPalette.current(), PaintPalette.version(), quads, contours);
+        STATS.contours = contours;
         g.blit(r.view(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR),
             v.left(), v.top(), v.left() + v.width(), v.top() + v.height(), 0f, 1f, r.v0(), r.v1());
 
@@ -126,8 +156,9 @@ public final class PaintMap {
 
     /**
      * Uploads up to {@link #UPLOADS_PER_FRAME} visible tiles whose GPU copy is missing or older than their data (or a
-     * neighbour's), nearest the middle of the view first. A tile waits while a neighbour is still being read, so it is
-     * not uploaded twice in a row as the map opens.
+     * neighbour's), nearest the middle of the view first. Their textures are worked out on the prep thread first; a tile
+     * is uploaded once its preparation is in. A tile waits while a neighbour is still being read, so it is not prepared
+     * twice in a row as the map opens.
      */
     private static int upload(PaintTiles held, int tx0, int tz0, int tx1, int tz1, double mx, double mz) {
         record Want(int tx, int tz, long key, double d) {
@@ -146,10 +177,21 @@ public final class PaintMap {
         wants.sort((a, b) -> Double.compare(a.d, b.d));
         int done = 0;
         for (Want want : wants) {
-            if (done >= UPLOADS_PER_FRAME) break;
             long k = PaintTiles.key(want.tx, want.tz);
-            TileTextures tex = GPU.get(k);
-            if (tex == null) GPU.put(k, tex = TileTextures.create(want.tx, want.tz));
+            Prepared p = PREPARED.get(k);
+            if (p != null && p.generation == generation && p.stamps == want.key) {
+                if (done >= UPLOADS_PER_FRAME) continue;
+                PREPARED.remove(k);
+                PREPARING.remove(k);
+                TileTextures tex = GPU.get(k);
+                if (tex == null) GPU.put(k, tex = TileTextures.create(want.tx, want.tz));
+                tex.upload(p.result);
+                tex.key = want.key;
+                done++;
+                continue;
+            }
+            if (PREPARING.containsKey(k) && PREPARING.get(k) == want.key) continue;
+            PREPARING.put(k, want.key);
             SurfaceTile[][] around = new SurfaceTile[3][3];
             for (int dz = -1; dz <= 1; dz++) {
                 for (int dx = -1; dx <= 1; dx++) {
@@ -157,9 +199,18 @@ public final class PaintMap {
                     around[dz + 1][dx + 1] = n == null ? null : n.data;
                 }
             }
-            tex.upload(around);
-            tex.key = want.key;
-            done++;
+            int gen = generation;
+            long stamps = want.key;
+            PREP.execute(() -> {
+                if (gen != generation) return;
+                long t0 = System.nanoTime();
+                TilePrep.Result r = TilePrep.prepare(around);
+                long ns = System.nanoTime() - t0;
+                PREP_COUNT.incrementAndGet();
+                PREP_NANOS.addAndGet(ns);
+                PREP_MAX_NANOS.accumulateAndGet(ns, Math::max);
+                if (gen == generation) PREPARED.put(k, new Prepared(gen, stamps, r));
+            });
         }
         return done;
     }
@@ -206,6 +257,9 @@ public final class PaintMap {
         if (held != null) held.close();
         for (TileTextures t : GPU.values()) t.close();
         GPU.clear();
+        generation++;
+        PREPARING.clear();
+        PREPARED.clear();
         PaintRenderer r = renderer;
         renderer = null;
         if (r != null) r.close();
@@ -234,6 +288,42 @@ public final class PaintMap {
         return STATS.tilesPainted;
     }
 
+    /** Whether the last frame painted contour lines (for the selftests). */
+    public static boolean contoursPainted() {
+        return STATS.contours;
+    }
+
+    /** Tiles prepared off-thread since the game started (for the selftests). */
+    public static long prepared() {
+        return PREP_COUNT.get();
+    }
+
+    /**
+     * The canopy path end to end (for the selftests): a tile with a known canopy pattern is prepared and uploaded into
+     * real textures, and the surface texture's alpha read back. Null if every texel carried its sample's canopy, else
+     * what was wrong. Render thread only.
+     */
+    public static @Nullable String canopyCheck() {
+        SurfaceTile t = new SurfaceTile(0, 0);
+        for (int i = 0; i < SurfaceTile.AREA; i++) {
+            t.canopy[i] = (byte) (i * 7 % 256);
+            t.explored[i >>> 6] |= 1L << i;
+        }
+        SurfaceTile[][] around = new SurfaceTile[3][3];
+        around[1][1] = t;
+        TilePrep.Result r = TilePrep.prepare(around);
+        try (TileTextures tex = TileTextures.create(0, 0)) {
+            tex.upload(r);
+            for (int i = 0; i < SurfaceTile.AREA; i += 97) {
+                int sx = i % SurfaceTile.SIDE, sz = i / SurfaceTile.SIDE;
+                int got = tex.pixel(TilePrep.SURFACE, sx + TilePrep.APRON, sz + TilePrep.APRON) >>> 24;
+                if (got != (t.canopy[i] & 0xFF)) return "sample " + sx + "," + sz + ": canopy " + (t.canopy[i] & 0xFF) + ", texel alpha " + got;
+            }
+            if (tex.pixel(TilePrep.SURFACE, 0, 0) >>> 24 != 0) return "the apron of a tile with no neighbours has canopy";
+        }
+        return null;
+    }
+
     /** Compiles the paint shader now (for the selftests): null if it compiled, else what went wrong. */
     public static @Nullable String compileCheck() {
         return PaintRenderer.compileCheck();
@@ -250,6 +340,9 @@ public final class PaintMap {
         lines.add(String.format(Locale.ROOT, "  tiles shown %d, painted %d, held %d, on the GPU %d (read %d, from capture %d)",
             s.tilesShown, s.tilesPainted, held == null ? 0 : held.size(), GPU.size(), held == null ? 0 : held.read.get(),
             held == null ? 0 : held.fromCapture.get()));
+        long n = PREP_COUNT.get();
+        lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d; contours %s",
+            n, n == 0 ? 0 : PREP_NANOS.get() / 1e6 / n, PREP_MAX_NANOS.get() / 1e6, PREPARED.size(), MapClient.contours ? "on" : "off"));
         return lines;
     }
 }

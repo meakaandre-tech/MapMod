@@ -90,7 +90,23 @@ public class MapScreen extends Screen {
             cz = mc.player.getZ();
             placed = true;
         }
-        if (editing) buildForm();
+        if (editing) {
+            buildForm();
+        } else {
+            addRenderableWidget(Button.builder(contoursText(), b -> {
+                toggleContours();
+                b.setMessage(contoursText());
+            }).bounds(width - 200, 1, 96, 14).build());
+        }
+    }
+
+    /** Switches contour lines on or off (the top bar's button; also used by the selftests). */
+    public static void toggleContours() {
+        MapClient.setContours(!MapClient.contours);
+    }
+
+    private static Component contoursText() {
+        return Component.translatable(MapClient.contours ? "mapmod.map.contours_on" : "mapmod.map.contours_off");
     }
 
     @Override
