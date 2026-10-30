@@ -4,7 +4,8 @@ package com.meakaandre.mapmod.api;
 public enum MapFeature {
     /** Terrain tiles: without it the map shows only fog and what stands on it. */
     TERRAIN,
-    /** The small square minimap at the top right. */
+    /** Was the small minimap; the map has had none since its painted renderer, so this gates nothing now. Kept so
+     * providers that name it still compile. */
     MINIMAP,
     /** The fullscreen map (M). */
     FULLSCREEN;

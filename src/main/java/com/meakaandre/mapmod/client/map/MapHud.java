@@ -1,7 +1,6 @@
 package com.meakaandre.mapmod.client.map;
 
 import com.meakaandre.mapmod.MapMod;
-import com.meakaandre.mapmod.api.MapFeature;
 import com.meakaandre.mapmod.api.MapGlyphs;
 import com.meakaandre.mapmod.api.MapModApi;
 import com.meakaandre.mapmod.api.MapPoi;
@@ -25,14 +24,10 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * The HUD: Satisfactory's compass strip across the top (always) and a small square minimap at the top right (once the
- * player has it unlocked; N hides it). The boss bars move down under the compass and the effect icons move left of the
- * minimap.
+ * The HUD: Satisfactory's compass strip across the top. The boss bars move down under it. (There is no minimap: the
+ * map is the fullscreen one only.)
  */
 public final class MapHud {
-    public static final int MINIMAP = 100;
-    /** Minimap scale: screen pixels a block. */
-    private static final double MINIMAP_SCALE = 1;
     private static final int BAND = 13, TOP = 3;
     private static final String[] POINTS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
     /** The compass strip's width: this share of the screen, within these bounds (pixels). */
@@ -43,40 +38,26 @@ public final class MapHud {
     private static final int COMPASS_HALF_VIEW = 88;
     /** Degrees between the strip's ticks, and between the points of the compass. */
     private static final int TICK_STEP = 15, POINT_STEP = 45;
-    /** Scale of the small text under the strip and the minimap. */
+    /** Scale of the small text under the strip. */
     private static final float SMALL_TEXT = 0.75f;
     /** The same scale as a double, for measuring the small text's width. */
     private static final double SMALL_TEXT_WIDTH = SMALL_TEXT;
     /** Pixels outside a view an icon may stand and still be drawn (its half size). */
     private static final int ICON_MARGIN = 8;
-    /** Below this map scale (pixels a block) small details are left off a small map. */
-    private static final double NODE_MIN_SCALE = 0.3;
 
     private MapHud() {
     }
 
     public static void register() {
         HudElementRegistry.addLast(MapMod.id("compass"), MapHud::compass);
-        HudElementRegistry.addLast(MapMod.id("minimap"), MapHud::minimap);
-        HudElementRegistry.replaceElement(VanillaHudElements.BOSS_BAR, vanilla -> (g, delta) -> shifted(g, delta, vanilla, 0, BAND + 12));
-        HudElementRegistry.replaceElement(VanillaHudElements.MOB_EFFECTS, vanilla -> (g, delta) ->
-            shifted(g, delta, vanilla, minimapShown() ? -(MINIMAP + 8) : 0, 0));
+        HudElementRegistry.replaceElement(VanillaHudElements.BOSS_BAR, vanilla -> (g, delta) -> shifted(g, delta, vanilla, BAND + 12));
     }
 
-    private static void shifted(GuiGraphicsExtractor g, DeltaTracker delta, HudElement vanilla, int dx, int dy) {
-        if (dx == 0 && dy == 0) {
-            vanilla.extractRenderState(g, delta);
-            return;
-        }
+    private static void shifted(GuiGraphicsExtractor g, DeltaTracker delta, HudElement vanilla, int dy) {
         g.pose().pushMatrix();
-        g.pose().translate(dx, dy);
+        g.pose().translate(0, dy);
         vanilla.extractRenderState(g, delta);
         g.pose().popMatrix();
-    }
-
-    private static boolean minimapShown() {
-        Minecraft mc = Minecraft.getInstance();
-        return mc.player != null && MapClient.minimapOn && MapClient.unlocked(MapFeature.MINIMAP) && MapClient.mappedHere();
     }
 
     // ------------------------------------------------------------------------------------------------ compass
@@ -293,41 +274,16 @@ public final class MapHud {
         g.pose().popMatrix();
     }
 
-    // ------------------------------------------------------------------------------------------------ minimap
-
-    public static void minimap(GuiGraphicsExtractor g, DeltaTracker delta) {
-        Minecraft mc = Minecraft.getInstance();
-        LocalPlayer player = mc.player;
-        if (player == null || !minimapShown()) return;
-        int size = MINIMAP, left = g.guiWidth() - size - 5, top = 5;
-        float pt = delta.getGameTimeDeltaPartialTick(true);
-        double x = player.xo + (player.getX() - player.xo) * pt, z = player.zo + (player.getZ() - player.zo) * pt;
-        MapDraw.View v = new MapDraw.View(x, z, MINIMAP_SCALE, left, top, size, size, true);
-        // a round minimap: the map in a disc, then what is on it, then its ring
-        MapDraw.roundTiles(g, v);
-        things(g, v, false);
-        MobRadar.draw(g, v, false);
-        MapIcons.ring(g, left, top, size);
-        MapDraw.self(g, (float) v.sx(x), (float) v.sy(z));
-        g.centeredText(mc.font, "N", left + size / 2, top + 3, 0xFFFF6A4D);
-        small(g, "X " + player.getBlockX() + "   Z " + player.getBlockZ(), left + size / 2, top + size + 4, 0xFFE6E6E6);
-    }
-
     /**
      * Everything on the map inside a view, as the filters allow: POIs where the group has explored, markers, pins,
      * moving things and the group's players. Returns nothing; the fullscreen map does its own hover on top.
      */
-    public static void things(GuiGraphicsExtractor g, MapDraw.View v, boolean big) {
+    public static void things(GuiGraphicsExtractor g, MapDraw.View v) {
         for (MapPoi poi : MapClient.poisIn(v.regions())) {
             if (!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) continue;
             if (!MapClient.explored(poi.x(), poi.z())) continue;
             double sx = v.sx(poi.x() + 0.5), sy = v.sy(poi.z() + 0.5);
             if (!v.inside(sx, sy, ICON_MARGIN)) continue;
-            // far out, the minimap and the zoomed-out map show only the bigger things
-            if (!big && v.scale() < NODE_MIN_SCALE) {
-                PoiKind kind = MapModApi.kind(poi.kind());
-                if (kind != null && kind.detail()) continue;
-            }
             MapDraw.poi(g, poi, (int) Math.round(sx), (int) Math.round(sy));
         }
         for (MapMarker m : MapClient.markers) {

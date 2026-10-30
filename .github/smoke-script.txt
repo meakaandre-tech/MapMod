@@ -25,6 +25,9 @@ shot
 cmd mapmod worldtest open 0.6
 sleep 6
 shot
+cmd mapmod worldtest open 8
+sleep 6
+shot
 cmd mapmod worldtest unfold cat:mapmod_selftest:finds
 cmd mapmod worldtest unfold cat:mapmod:markers
 cmd mapmod worldtest hide sub:mapmod_selftest:ore/iron

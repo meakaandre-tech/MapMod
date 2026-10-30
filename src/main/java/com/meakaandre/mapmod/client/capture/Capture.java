@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Client-side surface capture: every chunk the client loads, and every chunk whose surface changes, is copied on the
@@ -298,6 +299,26 @@ public final class Capture {
         });
     }
 
+    /**
+     * A copy of a tile the worker holds right now, if its revision is not {@code knownRevision}; null if it holds none
+     * there or it has not changed. Never reads the disk and never makes the worker hold a tile it did not, so a map
+     * reading saved tiles itself leaves the capture's own radius as it is.
+     */
+    public static CompletableFuture<@Nullable SurfaceTile> held(int tileX, int tileZ, int knownRevision) {
+        return ask(s -> {
+            SurfaceTile t = s.peek(tileX, tileZ);
+            return t == null || t.revision == knownRevision ? null : t.copy();
+        });
+    }
+
+    /** Lines other parts of the client add to {@code /mapmod stats}. */
+    private static final List<Supplier<List<String>>> MORE_STATS = new ArrayList<>();
+
+    /** Adds lines to {@code /mapmod stats} (client thread). */
+    public static void addStats(Supplier<List<String>> lines) {
+        MORE_STATS.add(lines);
+    }
+
     /** Where the tiles of the world being played are kept (null when not in one). */
     public static @Nullable Path dir() {
         CaptureStore st = store;
@@ -323,6 +344,7 @@ public final class Capture {
         lines.add(String.format("  samples/s %.0f (%d total)", s.samplesPerSecond(), s.samples()));
         lines.add(String.format("  client thread %d us/tick avg, %d us max", s.tickAvgMicros(), s.tickMaxMicros()));
         if (s.dir() != null) lines.add("  " + Minecraft.getInstance().gameDirectory.toPath().relativize(s.dir()));
+        for (Supplier<List<String>> more : MORE_STATS) lines.addAll(more.get());
         return lines;
     }
 

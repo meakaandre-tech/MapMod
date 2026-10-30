@@ -16,7 +16,6 @@ import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
 import com.mojang.blaze3d.platform.InputConstants;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.longs.LongArrayList;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -39,13 +38,12 @@ import java.util.Set;
 
 /**
  * The map on the client: what the server has sent (unlocks, fog, POIs, markers, the group's players, moving things),
- * what the player chose (pins, filters, minimap on or off, kept in the game folder's {@code mapmod} folder) and the keys:
- * M opens the map, N shows or hides the minimap (both changeable under "Map").
+ * what the player chose (pins and filters, kept in the game folder's {@code mapmod} folder) and the key: M opens the
+ * map (changeable under "Map"). The terrain is the client's own surface capture, painted by {@code client.paint}.
  */
 public final class MapClient {
     private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(MapMod.id("map"));
     public static final KeyMapping OPEN = new KeyMapping("key.mapmod.open", InputConstants.KEY_M, CATEGORY);
-    public static final KeyMapping MINIMAP = new KeyMapping("key.mapmod.minimap", InputConstants.KEY_N, CATEGORY);
 
     public static @Nullable String mapId;
     public static final Long2ObjectOpenHashMap<long[]> FOG = new Long2ObjectOpenHashMap<>();
@@ -62,30 +60,21 @@ public final class MapClient {
     public static final Map<String, Pin> PINS = new LinkedHashMap<>();
     /** Filter switches that are off (see {@link MapFilters}). */
     public static final Set<String> HIDDEN = new HashSet<>();
-    public static boolean minimapOn = true;
     /** Markers seen since joining, so a new death marker can be pinned at once. */
     private static final Set<String> SEEN = new HashSet<>();
     private static boolean firstMarkers = true;
-    private static int ticks;
 
     /** A pinned thing: shown on the compass with its distance. */
     public record Pin(String key, String label, int x, int y, int z, int icon, int argb) {
     }
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    /** Tiles are asked for this often (ticks: once a second). */
-    private static final int REQUEST_TICKS = 20;
-    /** A tile is asked for again at most this often (ms): the player's own region, its neighbours, the open map's. */
-    private static final int HERE_EVERY_MS = 8_000, AROUND_EVERY_MS = 20_000, SCREEN_EVERY_MS = 15_000;
-    /** Regions asked for in one request at most. */
-    private static final int REGIONS_PER_REQUEST = 24;
 
     private MapClient() {
     }
 
     public static void register() {
         KeyMappingHelper.registerKeyMapping(OPEN);
-        KeyMappingHelper.registerKeyMapping(MINIMAP);
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Hello.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> hello(p.mapId(), p.sharedKey())));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Unlocks.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> {
             unlocks = p.mask();
@@ -96,7 +85,6 @@ public final class MapClient {
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Pois.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> {
             for (MapPayloads.RegionPois r : p.regions()) POIS.put(r.region(), r.pois());
         }));
-        ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Tile.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> ClientTiles.accept(p.region(), p.data())));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Markers.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> markers(p.markers())));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Mates.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> mates = p.mates()));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Moving.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> moving = p.moving()));
@@ -126,7 +114,6 @@ public final class MapClient {
 
     private static void reset() {
         LocalMap.stop();
-        ClientTiles.clear();
         mapId = null;
         FOG.clear();
         POIS.clear();
@@ -139,29 +126,21 @@ public final class MapClient {
         PINS.clear();
         SEEN.clear();
         firstMarkers = true;
-        ClientTiles.clear();
     }
 
     static void hello(String id, String shared) {
         sharedKey = shared;
-        if (!id.equals(mapId)) {
-            ClientTiles.clear();
-            PINS.clear();
-        }
+        if (!id.equals(mapId)) PINS.clear();
         mapId = id;
         loadPins();
     }
 
     private static void fog(MapPayloads.Fog p) {
         if (p.replace()) {
-            for (long region : FOG.keySet()) ClientTiles.fogChanged(region);
             FOG.clear();
             POIS.clear();
         }
-        for (MapPayloads.FogRegion r : p.regions()) {
-            FOG.put(r.region(), r.bits());
-            ClientTiles.fogChanged(r.region());
-        }
+        for (MapPayloads.FogRegion r : p.regions()) FOG.put(r.region(), r.bits());
     }
 
     static void fogDelta(long[] chunks) {
@@ -169,7 +148,7 @@ public final class MapClient {
             int cx = MapGrid.keyX(c), cz = MapGrid.keyZ(c);
             long region = MapGrid.regionOfChunk(cx, cz);
             long[] bits = FOG.computeIfAbsent(region, k -> new long[MapGrid.FOG_LONGS]);
-            if (MapGrid.set(bits, MapGrid.fogBit(cx, cz))) ClientTiles.fogChanged(cx, cz);
+            MapGrid.set(bits, MapGrid.fogBit(cx, cz));
         }
     }
 
@@ -274,7 +253,6 @@ public final class MapClient {
         if (!Files.exists(file)) return;
         try {
             JsonObject o = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
-            if (o.has("minimap")) minimapOn = o.get("minimap").getAsBoolean();
             if (o.has("hidden")) for (JsonElement e : o.getAsJsonArray("hidden")) HIDDEN.add(e.getAsString());
         } catch (IOException | RuntimeException e) {
             MapMod.LOGGER.warn("unreadable map file {}", file, e);
@@ -283,7 +261,6 @@ public final class MapClient {
 
     public static void saveSettings() {
         JsonObject o = new JsonObject();
-        o.addProperty("minimap", minimapOn);
         JsonArray hidden = new JsonArray();
         for (String h : HIDDEN) hidden.add(h);
         o.add("hidden", hidden);
@@ -301,36 +278,7 @@ public final class MapClient {
     private static void tick(Minecraft mc) {
         if (mc.player == null || mc.level == null) return;
         LocalMap.tick(mc);
-        if (mc.gui.screen() == null) {
-            while (OPEN.consumeClick()) open();
-            while (MINIMAP.consumeClick()) {
-                minimapOn = !minimapOn;
-                saveSettings();
-            }
-        }
-        if (++ticks % REQUEST_TICKS != 0 || !unlocked(MapFeature.TERRAIN) || !mappedHere() || !ClientPlayNetworking.canSend(MapPayloads.TileRequest.TYPE)) return;
-        // ask for the tiles round the player and on the open map, each again at most every so often
-        LongArrayList regions = new LongArrayList();
-        LongArrayList versions = new LongArrayList();
-        int px = mc.player.getBlockX(), pz = mc.player.getBlockZ();
-        long here = MapGrid.regionOfBlock(px, pz);
-        for (int dz = -1; dz <= 1; dz++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                long region = MapGrid.key(MapGrid.keyX(here) + dx, MapGrid.keyZ(here) + dz);
-                want(region, dx == 0 && dz == 0 ? HERE_EVERY_MS : AROUND_EVERY_MS, regions, versions);
-            }
-        }
-        if (mc.gui.screen() instanceof MapScreen screen) for (long region : screen.visibleRegions()) want(region, SCREEN_EVERY_MS, regions, versions);
-        if (!regions.isEmpty()) ClientPlayNetworking.send(new MapPayloads.TileRequest(regions.toLongArray(), versions.toLongArray()));
-    }
-
-    private static void want(long region, long every, LongArrayList regions, LongArrayList versions) {
-        if (regions.size() >= REGIONS_PER_REQUEST || regions.contains(region) || !FOG.containsKey(region)) return;
-        // the disk copy is read first, so only a tile that changed since is sent again
-        long version = ClientTiles.version(region);
-        if (ClientTiles.loading(region) || ClientTiles.askedWithin(region, every)) return;
-        regions.add(region);
-        versions.add(version);
+        if (mc.gui.screen() == null) while (OPEN.consumeClick()) open();
     }
 
     /** Opens the fullscreen map, if the player has it and is in the Overworld. */

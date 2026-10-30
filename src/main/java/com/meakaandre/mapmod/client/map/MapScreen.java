@@ -3,6 +3,7 @@ package com.meakaandre.mapmod.client.map;
 import com.meakaandre.mapmod.api.MapFeature;
 import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
+import com.meakaandre.mapmod.client.paint.PaintMap;
 import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapPayloads;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -24,8 +25,9 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * The fullscreen map (M), laid out like Satisfactory's: the filter panel down the left, the map filling the rest.
- * Drag to move, scroll to zoom, C to centre on the player. Left click pins or unpins what is under the mouse (pins
+ * The fullscreen map (M), laid out like Satisfactory's: the filter panel down the left, the painted map
+ * ({@link PaintMap}) filling the rest, with everything on it drawn over. Drag to move, scroll to zoom round the mouse,
+ * C to centre on the player. Left click pins or unpins what is under the mouse (pins
  * show on the compass with their distance); right click on an empty spot places a marker there, and on one of your
  * markers (or a shared one of your group) changes or removes it. A marker gets an icon, a colour and a name, and is
  * private or shared with the group.
@@ -92,6 +94,13 @@ public class MapScreen extends Screen {
     }
 
     @Override
+    public void removed() {
+        // the map's tiles and their textures are let go as soon as it closes
+        PaintMap.close();
+        super.removed();
+    }
+
+    @Override
     public boolean isPauseScreen() {
         return false;
     }
@@ -105,11 +114,6 @@ public class MapScreen extends Screen {
         return new MapDraw.View(cx, cz, scale, PANEL, BAR, width - PANEL, height - BAR - FOOT);
     }
 
-    /** The regions on screen, for the tile requests. */
-    public List<Long> visibleRegions() {
-        return view().regions();
-    }
-
     // ------------------------------------------------------------------------------------------------ drawing
 
     @Override
@@ -117,9 +121,9 @@ public class MapScreen extends Screen {
         g.fill(0, 0, width, height, 0xFF151A20);
         MapDraw.View v = view();
         g.enableScissor(v.left(), v.top(), v.left() + v.width(), v.top() + v.height());
-        MapDraw.tiles(g, v);
-        MapHud.things(g, v, true);
-        MobRadar.draw(g, v, true);
+        PaintMap.draw(g, v);
+        MapHud.things(g, v);
+        MobRadar.draw(g, v);
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) MapDraw.self(g, (float) v.sx(mc.player.getX()), (float) v.sy(mc.player.getZ()));
         g.disableScissor();
@@ -383,7 +387,7 @@ public class MapScreen extends Screen {
         editingMarker = null;
         editX = x;
         editZ = z;
-        Integer h = ClientTiles.height(x, z);
+        Integer h = PaintMap.height(x, z);
         editY = h == null ? DEFAULT_MARKER_Y : h + 1;
         editIcon = 0;
         editColour = 0;

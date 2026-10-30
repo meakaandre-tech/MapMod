@@ -8,7 +8,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * The map mod: Satisfactory's compass strip, a small square minimap and a fullscreen map with fog of war, filters, pins
+ * The map mod: Satisfactory's compass strip and a painted fullscreen map with fog of war, filters, pins
  * and markers, for any modpack. Other mods plug in through {@link com.meakaandre.mapmod.api.MapModApi}.
  */
 public class MapMod implements ModInitializer {

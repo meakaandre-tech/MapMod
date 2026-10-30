@@ -16,8 +16,6 @@ import net.minecraft.resources.Identifier;
 public final class MapIcons {
     public static final int CELL = 11, SIZE = MapGlyphs.SIZE;
     private static final int COLUMNS = 16;
-    /** Width of the round minimap's ring (pixels). */
-    private static final int RING_WIDTH = 3;
     private static final Identifier ID = MapMod.id("map/icons");
     /** Glyphs in the texture as made; -1 before it is made. */
     private static int made = -1;
@@ -48,39 +46,6 @@ public final class MapIcons {
             for (int y = 0; y < SIZE; y++) for (int x = 0; x < SIZE; x++) if (MapGlyphs.set(i, x, y)) image.setPixel(ox + 1 + x, oy + 1 + y, 0xFFFFFFFF);
         }
         Minecraft.getInstance().getTextureManager().register(ID, new DynamicTexture(() -> MapMod.ID + " map icons", image));
-    }
-
-    private static final Identifier RING = MapMod.id("map/ring");
-    private static int ringMade = -1;
-
-    /**
-     * The round minimap's ring round a disc of diameter {@code d} whose box starts at x, y: a dark band with a faint
-     * light edge inside it, smoothed at its rims.
-     */
-    public static void ring(GuiGraphicsExtractor g, int x, int y, int d) {
-        int size = d + 2 * RING_WIDTH;
-        if (ringMade != d) {
-            if (ringMade >= 0) Minecraft.getInstance().getTextureManager().release(RING);
-            ringMade = d;
-            NativeImage image = new NativeImage(size, size, true);
-            double c = size / 2.0, inner = d / 2.0, outer = inner + RING_WIDTH;
-            for (int py = 0; py < size; py++) {
-                for (int px = 0; px < size; px++) {
-                    double r = Math.hypot(px + 0.5 - c, py + 0.5 - c);
-                    int argb = 0;
-                    if (r >= inner - 1 && r <= outer) {
-                        // soft rims: the alpha fades over the outermost half pixel and the innermost
-                        double a = Math.min(1, Math.min(outer - r + 0.5, r - inner + 1.5));
-                        int rgb = r < inner ? 0x9AA4AE : 0x0E1216;
-                        int alpha = (int) Math.round(Math.clamp(a, 0, 1) * (r < inner ? 0x70 : 0xF0));
-                        argb = alpha << 24 | rgb;
-                    }
-                    image.setPixel(px, py, argb);
-                }
-            }
-            Minecraft.getInstance().getTextureManager().register(RING, new DynamicTexture(() -> MapMod.ID + " minimap ring", image));
-        }
-        g.blit(RenderPipelines.GUI_TEXTURED, RING, x - RING_WIDTH, y - RING_WIDTH, 0, 0, size, size, size, size);
     }
 
     /** Draws a glyph with its top-left corner at x, y (the outline reaches a pixel further), tinted ARGB. */

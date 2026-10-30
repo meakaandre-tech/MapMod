@@ -15,7 +15,7 @@ import java.util.List;
 /**
  * The fullscreen map's filter panel, as Satisfactory's: a switch for each category (the map's own players and markers
  * first, then those mods registered, in order), and inside most of them a switch for each kind or sub-type. A switch
- * that is off hides its things on the map, the minimap and the compass.
+ * that is off hides its things on the map and the compass.
  */
 public final class MapFilters {
     public static final String PLACED = "markers:placed", DEATHS = "markers:death";

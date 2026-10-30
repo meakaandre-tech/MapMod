@@ -1,0 +1,18 @@
+{
+  "_comment": "The painted map's colours. Resource packs can replace this file; F3+T reloads it. Classes are the surface classes 0-7: grass, forest floor, sand, rock, snow, dirt/mud, ice, lava. 'tint' is how much the biome's grass or foliage colour tints the class (0 none, 1 fully).",
+  "classes": {
+    "0": { "colour": "#aab38e", "tint": 0.4 },
+    "1": { "colour": "#879471", "tint": 0.4 },
+    "2": { "colour": "#dccb9e", "tint": 0.0 },
+    "3": { "colour": "#9c978d", "tint": 0.0 },
+    "4": { "colour": "#eceeec", "tint": 0.0 },
+    "5": { "colour": "#93805f", "tint": 0.15 },
+    "6": { "colour": "#bcd3de", "tint": 0.0 },
+    "7": { "colour": "#c8642c", "tint": 0.0 }
+  },
+  "water": { "shallow": "#8db6c2", "deep": "#3e6f8e", "deep_at": 20 },
+  "paper": "#e6dcc6",
+  "height_tint": { "low": 50, "high": 220, "low_shade": 0.88, "high_light": 1.12 },
+  "snow": { "above": 190, "blend": 20, "colour": "#f0f1ef" },
+  "hillshade": 0.4
+}
