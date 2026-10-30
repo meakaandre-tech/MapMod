@@ -323,7 +323,7 @@ public final class PaintMap {
         MapPainter p = painter;
         if (p == null) return "none";
         return (p.lastLive ? "live" : "level " + p.lastLevel) + (p.lastReused ? " (picture shown again)" : "") + ", " + p.lastQuads + " quads, " + p.lastPainted + " painted, "
-            + p.lastPasses() + " passes, " + p.lastDraws() + " draws";
+            + p.lastPasses() + " passes, " + p.lastDraws() + " draws" + (p.idle() ? "" : "; busy: " + p.busy());
     }
 
     /** Disk-load events the open map's tiles fired (tiles read from disk). */

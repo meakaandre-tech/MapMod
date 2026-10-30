@@ -127,19 +127,20 @@ public final class MapClientTests {
             seen.append(l.id).append(savedOff && savedOn ? " ok " : " NOT SAVED ");
         }
         report("overlays", "each overlay layer's switch in the top bar turns it off and on and is saved in settings.json", all, seen.toString().trim());
-        double far60 = 0, far25 = 0, v60 = 500, v25 = 500;
+        // half a second at 60 frames a second, and at 20
+        double far60 = 0, far20 = 0, v60 = 500, v20 = 500;
         for (int i = 0; i < 30; i++) {
             double[] g = MapScreen.glide(v60, 1 / 60.0);
             far60 += g[0];
             v60 = g[1];
         }
-        for (int i = 0; i < 12; i++) {
-            double[] g = MapScreen.glide(v25, 1 / 25.0);
-            far25 += g[0];
-            v25 = g[1];
+        for (int i = 0; i < 10; i++) {
+            double[] g = MapScreen.glide(v20, 1 / 20.0);
+            far20 += g[0];
+            v20 = g[1];
         }
-        report("overlays", "the glide after a drag goes the same way at any frame rate", Math.abs(far60 - far25) < 1e-6 * far60 && Math.abs(v60 - v25) < 1e-6 * v60,
-            String.format(Locale.ROOT, "half a second: %.4f blocks at 60 fps, %.4f at 25", far60, far25));
+        report("overlays", "the glide after a drag goes the same way at any frame rate", Math.abs(far60 - far20) < 1e-6 * far60 && Math.abs(v60 - v20) < 1e-6 * v60,
+            String.format(Locale.ROOT, "half a second: %.4f blocks at 60 fps, %.4f at 20", far60, far20));
         if (mc.gui.screen() instanceof MapScreen screen) {
             glideX = screen.centreX();
             glideZ = screen.centreZ();

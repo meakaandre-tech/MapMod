@@ -157,6 +157,12 @@ final class MapPainter implements AutoCloseable {
         return lastWork == 0 && preparing.isEmpty() && !lastFogPending && !lastFading;
     }
 
+    /** Why the last frame was not idle (for the selftests' logs). */
+    String busy() {
+        return lastWork + " jobs, " + preparing.size() + " preparing, " + prepared.size() + " prepared" + (lastFogPending ? ", fog masks" : "")
+            + (lastFading ? ", blending" : "");
+    }
+
     /** The mip level whose texels are about a pixel at this many blocks a pixel. */
     static int level(double blocksPerPixel) {
         if (blocksPerPixel <= 1) return 0;
@@ -218,6 +224,7 @@ final class MapPainter implements AutoCloseable {
                 if (ops >= OPS) break;
                 ops += run(j, pal, palVersion, contours, OPS - ops);
             }
+            dropUnwanted(jobs.wanted);
             for (int i = 0; i < cells.size(); i++) fogPending |= masks.need(level, x(cells.getLong(i)), z(cells.getLong(i)));
             fogPending |= masks.pending();
         } else {
@@ -405,6 +412,8 @@ final class MapPainter implements AutoCloseable {
     private final class FrameJobs extends BakeCache.Jobs {
         final List<Job> work = new ArrayList<>();
         final LongOpenHashSet seen = new LongOpenHashSet();
+        /** Tiles whose textures this frame wanted (prepared results for any other tile are let go). */
+        final LongOpenHashSet wanted = new LongOpenHashSet();
         int asked;
 
         @Override
@@ -425,6 +434,7 @@ final class MapPainter implements AutoCloseable {
         private void tile(int tx, int tz, boolean bake) {
             long k = TileIndex.key(tx, tz);
             long want = index.key3x3(tx, tz);
+            wanted.add(k);
             TileTextures t = tex.get(k);
             if (t != null && t.key == want) {
                 texUsed.put(k, frame);
@@ -435,6 +445,11 @@ final class MapPainter implements AutoCloseable {
             if (p != null && p.generation == generation && p.key == want) {
                 if (seen.add(k ^ 0x5DEECE66DL)) work.add(new Job(Kind.UPLOAD, 0, tx, tz, bake));
                 return;
+            }
+            if (p != null) {
+                // prepared from data that has changed since: let it go, so it neither blocks nor waits forever
+                prepared.remove(k);
+                preparing.remove(k);
             }
             if (preparing.containsKey(k) && preparing.get(k) == want) return;
             if (preparing.size() >= PREP_MAX || asked >= ASKS || data == null) {
@@ -459,6 +474,19 @@ final class MapPainter implements AutoCloseable {
         void split(int level, int x, int z, int quarter) {
             int cx = x * 2 + (quarter & 1), cz = z * 2 + (quarter >> 1);
             if (seen.add(TileIndex.key(cx, cz) * 37 + level - 1)) work.add(new Job(Kind.SPLIT, level, x, z, false, quarter));
+        }
+    }
+
+    /**
+     * Prepared textures for tiles no frame wants any more go, with their place among those being prepared: otherwise
+     * they wait for an upload that never comes, and count against {@link #PREP_MAX} and the painter's idleness.
+     */
+    private void dropUnwanted(LongOpenHashSet wanted) {
+        if (prepared.isEmpty()) return;
+        for (Long k : List.copyOf(prepared.keySet())) {
+            if (wanted.contains(k)) continue;
+            prepared.remove(k);
+            preparing.remove((long) k);
         }
     }
 

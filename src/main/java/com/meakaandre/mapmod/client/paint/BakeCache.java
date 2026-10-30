@@ -285,9 +285,11 @@ final class BakeCache implements AutoCloseable {
         byte deficit = (byte) Math.min(Byte.MAX_VALUE, b.deficit[q] + 1);
         int occ = occupiedChildren(level - 1, cx, cz);
         for (int q2 = 0; q2 < 4; q2++) {
+            // a quarter with no tile under it is paper, as fine as it gets
+            if ((occ & 1 << q2) == 0) continue;
             c.deficit[q2] = deficit;
             c.builtAt[q2] = made;
-            if ((occ & 1 << q2) != 0 && index.changedAt(level - 2, cx * 2 + (q2 & 1), cz * 2 + (q2 >> 1)) > made) c.dirty |= 1 << q2;
+            if (index.changedAt(level - 2, cx * 2 + (q2 & 1), cz * 2 + (q2 >> 1)) > made) c.dirty |= 1 << q2;
         }
         splits++;
         return true;
