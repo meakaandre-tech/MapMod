@@ -52,6 +52,7 @@ public final class SurfaceClass {
         if (state.is(BlockTags.SAND)) return SAND;
         if (state.is(BlockTags.LOGS) || state.is(BlockTags.LEAVES)) return FOREST;
         if (state.is(BlockTags.BASE_STONE_OVERWORLD)) return ROCK;
+        if (state.is(BlockTags.MUD)) return DIRT;
         MapColor colour = state.getMapColor(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
         // #dirt holds grass blocks, moss and mycelium as well as dirt and mud: green ones are grass
         if (state.is(BlockTags.DIRT)) return green(colour) ? GRASS : DIRT;
