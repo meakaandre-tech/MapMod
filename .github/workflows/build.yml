@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "mm-3-painted-finish"]
   workflow_dispatch:
 
 permissions:
