@@ -2,6 +2,7 @@ package com.meakaandre.mapmod.client.paint;
 
 import com.meakaandre.mapmod.MapMod;
 import com.mojang.blaze3d.buffers.Std140Builder;
+import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
@@ -22,6 +23,7 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.Projection;
 import net.minecraft.client.renderer.ProjectionMatrixBuffer;
+import net.minecraft.client.renderer.texture.DynamicTexture;
 import org.joml.Vector4f;
 import org.joml.Vector4fc;
 import org.jspecify.annotations.Nullable;
@@ -36,14 +38,15 @@ import java.util.Optional;
 /**
  * The painted map's GPU work (MM-4), on render targets of its own the way the game paints its picture-in-picture views:
  * an orthographic projection over the target's pixels (y down, flipped as the game flips it), so every target holds its
- * picture with v running from 1 at the top to 0 at the bottom, and is drawn on with that. Three kinds of pass:
+ * picture with v running from 1 at the top to 0 at the bottom, and is drawn on with that. Two kinds of pass:
  * <ul>
  *   <li>{@link #paint}: {@code core/map_paint}, the full painted shader, one draw per tile (a bake, or close zoom);</li>
  *   <li>{@link #quads}: {@code core/map_quad} copying textures with linear filtering (baked tiles and mips on screen,
- *   and a mip's four children into its quarters);</li>
- *   <li>{@link #finish}: {@code core/map_quad} once over the whole picture, adding grain and the vignette.</li>
+ *   and a mip's four children into its quarters), or laying paper.</li>
  * </ul>
- * Render thread only.
+ * On screen both add the paper grain and the vignette as they write each pixel, from its screen position: one pass over
+ * the screen's pixels with no picture read back in the same frame (on a software rasterizer a read-back stalls the
+ * render thread until the earlier pass is drawn). Render thread only.
  */
 final class MapGpu implements AutoCloseable {
     static final RenderPipeline PAINT = RenderPipeline.builder()
@@ -80,7 +83,7 @@ final class MapGpu implements AutoCloseable {
     /** Bytes of the palette block: 8 class colours and 11 more vec4s. */
     private static final int PALETTE_SIZE = (8 + 11) * 16;
     /** Bytes of one draw's block, and the stride between them (the strictest offset alignment). */
-    private static final int BLOCK_SIZE = 4 * 16, BLOCK_STRIDE = 256;
+    private static final int BLOCK_SIZE = 5 * 16, BLOCK_STRIDE = 256;
     /** The shader's noise repeats every this many samples; tile origins are wrapped to it. */
     static final int NOISE_PERIOD = 2048;
     private static final String[] SAMPLERS = {"Fields", "Surface", "ClassA", "ClassB", "Shore"};
@@ -121,14 +124,23 @@ final class MapGpu implements AutoCloseable {
     record PaintQuad(TileTextures tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float ox, float oz) {
     }
 
-    /** One texture to copy: its corners in the target's pixels and its texture coordinates there (v up, see above). */
-    record TexQuad(GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1) {
+    /**
+     * One texture to copy: its corners in the target's pixels and its texture coordinates there (v up, see above). A
+     * null source lays plain paper.
+     */
+    record TexQuad(@Nullable GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1) {
+        /** Paper over the whole of a target. */
+        static TexQuad paper(Target t) {
+            return new TexQuad(null, 0, 0, t.width, t.height, 0, 1, 1, 0);
+        }
     }
 
     /** One projection per target size used: a tile's 512 and the screen's. */
     private final List<Projected> projections = new ArrayList<>();
     private @Nullable GpuBuffer palette, blocks;
     private int paletteVersion = -1, capacity, cursor;
+    /** Bound as the source of a paper quad, which reads none. */
+    private @Nullable DynamicTexture blank;
     /** Draw buffers outgrown this frame, let go at the start of the next (their draws may still be in flight). */
     private final List<GpuBuffer> retired = new ArrayList<>();
     /** Passes and draws this frame (for the stats). */
@@ -207,8 +219,8 @@ final class MapGpu implements AutoCloseable {
         return paper == null ? Optional.empty() : colour(paper.paper());
     }
 
-    /** Paints tiles into the target with the full shader; {@code clear} as {@link #clear}. */
-    void paint(Target t, Optional<Vector4fc> clear, List<PaintQuad> quads, PaintPalette pal, int version, boolean contours) {
+    /** Paints tiles into the target with the full shader; {@code clear} as {@link #clear}; on screen with grain and vignette. */
+    void paint(Target t, Optional<Vector4fc> clear, List<PaintQuad> quads, PaintPalette pal, int version, boolean contours, boolean screen) {
         if (quads.isEmpty() && clear.isEmpty()) return;
         GpuDevice device = RenderSystem.getDevice();
         if (palette == null || paletteVersion != version) {
@@ -217,10 +229,10 @@ final class MapGpu implements AutoCloseable {
             paletteVersion = version;
         }
         CommandEncoder encoder = device.createCommandEncoder();
-        float flag = contours ? 1f : 0f;
+        float flag = contours ? 1f : 0f, finish = screen ? 1f : 0f;
         int first = quads.isEmpty() ? 0 : write(encoder, quads.size(), (b, i) -> {
             PaintQuad q = quads.get(i);
-            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(q.ox, q.oz, 0, 0).putVec4(t.width, t.height, 0f, flag);
+            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(q.ox, q.oz, 0, 0).putVec4(t.width, t.height, finish, flag);
         });
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
         // everything that writes to a buffer happens before the pass opens: no other command may run while it is open
@@ -242,14 +254,26 @@ final class MapGpu implements AutoCloseable {
         }
     }
 
-    /** Copies textures into the target with linear filtering; {@code clear} as {@link #clear}. */
-    void quads(Target t, Optional<Vector4fc> clear, List<TexQuad> quads) {
+    /**
+     * Copies textures (or lays paper) into the target with linear filtering; {@code clear} as {@link #clear}. With a
+     * palette ({@code screen}) every pixel also gets its grain and the vignette.
+     */
+    void quads(Target t, Optional<Vector4fc> clear, List<TexQuad> quads, @Nullable PaintPalette screen) {
         if (quads.isEmpty() && clear.isEmpty()) return;
         GpuDevice device = RenderSystem.getDevice();
+        if (blank == null) {
+            blank = new DynamicTexture(() -> MapMod.ID + " map blank", new NativeImage(1, 1, false));
+            blank.upload();
+        }
+        GpuTextureView none = blank.getTextureView();
         CommandEncoder encoder = device.createCommandEncoder();
+        float grain = screen == null ? 0 : screen.grain(), vignette = screen == null ? 0 : screen.vignette();
+        int paper = screen == null ? 0 : screen.paper();
         int first = quads.isEmpty() ? 0 : write(encoder, quads.size(), (b, i) -> {
             TexQuad q = quads.get(i);
-            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(0, 0, 0, 0).putVec4(t.width, t.height, 0, 0);
+            float mode = q.src == null ? 2 : screen == null ? 0 : 1;
+            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(mode, grain, vignette, 0).putVec4(t.width, t.height, 0, 0);
+            colour(b, paper, 0);
         });
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
         GpuBufferSlice projection = projected(t.width, t.height);
@@ -261,32 +285,11 @@ final class MapGpu implements AutoCloseable {
             pass.setUniform("Projection", projection);
             for (int i = 0; i < quads.size(); i++) {
                 pass.setUniform("MapQuad", block(first + i));
-                pass.setUniform("Src", quads.get(i).src, smooth);
+                GpuTextureView src = quads.get(i).src;
+                pass.setUniform("Src", src == null ? none : src, smooth);
                 pass.draw(6, 1, 0, 0);
                 draws++;
             }
-        }
-    }
-
-    /** Grain and the vignette over {@code src}, into {@code dst} of the same size. */
-    void finish(Target src, Target dst, PaintPalette pal) {
-        GpuDevice device = RenderSystem.getDevice();
-        CommandEncoder encoder = device.createCommandEncoder();
-        int w = dst.width, h = dst.height;
-        int first = write(encoder, 1, (b, i) -> b.putVec4(0, 0, w, h).putVec4(0, 1, 1, 0).putVec4(1f, pal.grain(), pal.vignette(), 0)
-            .putVec4(w, h, 0, 0));
-        GpuSampler nearest = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
-        GpuBufferSlice projection = projected(w, h);
-        CompiledRenderPipeline compiled = RenderSystem.getCompiledPipelineNullable(QUAD);
-        passes++;
-        try (RenderPass pass = encoder.createRenderPass(() -> MapMod.ID + " map finish", dst.view, Optional.empty())) {
-            if (compiled == null) return;
-            pass.setPipeline(compiled);
-            pass.setUniform("Projection", projection);
-            pass.setUniform("MapQuad", block(first));
-            pass.setUniform("Src", src.view, nearest);
-            pass.draw(6, 1, 0, 0);
-            draws++;
         }
     }
 
@@ -330,6 +333,8 @@ final class MapGpu implements AutoCloseable {
         if (blocks != null) blocks.close();
         for (GpuBuffer b : retired) b.close();
         retired.clear();
+        if (blank != null) blank.close();
+        blank = null;
         for (Projected p : projections) p.buffer.close();
         projections.clear();
         palette = blocks = null;

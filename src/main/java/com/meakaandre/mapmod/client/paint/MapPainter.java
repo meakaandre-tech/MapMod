@@ -20,8 +20,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * Below one pixel a block every visible cell of the mip level whose texels are about a pixel is drawn as one quad from
  * the {@link BakeCache}; a cell not made yet borrows from the nearest coarser level, else from the level below, else is
  * paper. Above one pixel a block the visible tiles are painted live with the full shader (as in MM-3), each from its
- * {@link TileTextures}, and a tile without them yet borrows its baked texture. Either way the picture then gets the
- * grain and the vignette in one pass at screen resolution.
+ * {@link TileTextures}, and a tile without them yet borrows its baked texture. Either way every screen pixel gets the
+ * grain and the vignette as it is written (baked tiles carry neither), so they stay screen-fine at every zoom.
  * <p>
  * The work that keeps all that up to date is found each frame (visible cells first, nearest the middle first, depth
  * first under each: see {@link BakeCache#need}) and done at most {@link #OPS} steps a frame, a step being an upload of a
@@ -64,7 +64,7 @@ final class MapPainter implements AutoCloseable {
     private final Long2LongOpenHashMap preparing = new Long2LongOpenHashMap();
     private final ConcurrentHashMap<Long, Prepared> prepared = new ConcurrentHashMap<>();
     private volatile int generation;
-    private MapGpu.@Nullable Target content, picture;
+    private MapGpu.@Nullable Target picture;
     private long frame;
     private int lookVersion = Integer.MIN_VALUE;
     private boolean lookContours;
@@ -165,9 +165,10 @@ final class MapPainter implements AutoCloseable {
         lastBakes = (int) (cache.leafBakes - bakes0);
         lastMips = (int) (cache.mipBuilds - mips0);
 
-        content = sized(content, "map picture", f.width(), f.height());
-        picture = sized(picture, "map finished", f.width(), f.height());
+        picture = sized(picture, "map picture", f.width(), f.height());
         List<MapGpu.TexQuad> quads = new ArrayList<>();
+        // paper first, under everything: where no tile lies, unexplored land
+        quads.add(MapGpu.TexQuad.paper(picture));
         List<MapGpu.PaintQuad> paints = new ArrayList<>();
         if (terrain) {
             for (int i = 0; i < cells.size(); i++) {
@@ -181,11 +182,11 @@ final class MapPainter implements AutoCloseable {
                 }
             }
         }
-        lastQuads = quads.size();
+        lastQuads = quads.size() - 1;
         lastPainted = paints.size();
-        gpu.quads(content, MapGpu.clear(pal), quads);
-        gpu.paint(content, Optional.empty(), paints, pal, palVersion, contours);
-        gpu.finish(content, picture, pal);
+        // grain and the vignette go on as the screen's pixels are written, by both passes
+        gpu.quads(picture, Optional.empty(), quads, pal);
+        gpu.paint(picture, Optional.empty(), paints, pal, palVersion, contours, true);
 
         cache.evict();
         if (data != null) data.trim();
@@ -374,7 +375,7 @@ final class MapPainter implements AutoCloseable {
     private int bake(int tx, int tz, TileTextures t, PaintPalette pal, int palVersion, boolean contours) {
         BakeCache.Baked b = cache.leaf(tx, tz);
         int s = BakeCache.SIDE;
-        gpu.paint(b.target, MapGpu.clear(pal), List.of(tileQuad(t, tx, tz, 0, 0, s, s)), pal, palVersion, contours);
+        gpu.paint(b.target, MapGpu.clear(pal), List.of(tileQuad(t, tx, tz, 0, 0, s, s)), pal, palVersion, contours, false);
         cache.baked(b, t.key);
         return 1;
     }
@@ -405,9 +406,8 @@ final class MapPainter implements AutoCloseable {
     /** The screen closed: the pictures, the tiles' textures and their data go; the baked tiles stay. */
     void release() {
         closeTextures();
-        if (content != null) content.close();
         if (picture != null) picture.close();
-        content = picture = null;
+        picture = null;
         gpu.close();
         data = null;
     }

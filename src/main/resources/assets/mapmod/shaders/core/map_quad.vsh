@@ -8,8 +8,9 @@
 layout(std140) uniform MapQuad {
     vec4 Rect;      // x0, y0, x1, y1
     vec4 Samples;   // u0, v0, u1, v1
-    vec4 Params;    // x: 0 copy, 1 finish  y: paper grain  z: vignette
+    vec4 Params;    // x: 0 copy, 1 copy and finish, 2 paper and finish  y: paper grain  z: vignette
     vec4 View;      // xy: size of the target (pixels)
+    vec4 Paper;     // rgb
 };
 
 layout(location = 0) out vec2 uv;

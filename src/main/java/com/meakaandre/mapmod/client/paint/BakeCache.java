@@ -203,7 +203,7 @@ final class BakeCache implements AutoCloseable {
             b.dirty &= ~(1 << q);
         }
         if (quads.isEmpty() && !fresh) return false;
-        gpu.quads(b.target, fresh ? MapGpu.clear(pal) : Optional.empty(), quads);
+        gpu.quads(b.target, fresh ? MapGpu.clear(pal) : Optional.empty(), quads, null);
         mipBuilds++;
         dirtyAbove(level, x, z);
         return true;

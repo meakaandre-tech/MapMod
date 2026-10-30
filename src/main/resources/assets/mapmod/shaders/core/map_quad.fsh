@@ -1,17 +1,19 @@
 #version 330
 #extension GL_ARB_separate_shader_objects : require
 
-// The painted map's quads (MM-4). Copy: a baked tile or mip drawn with linear filtering (also how a mip is made from
-// its four children: each drawn into a quarter, so every texel is the mean of a 2x2 block). Finish: the paper grain and
-// the vignette over the whole picture at screen resolution, so the grain stays one screen pixel fine at every zoom.
+// The painted map's quads (MM-4): a baked tile or mip drawn with linear filtering (also how a mip is made from its four
+// children: each drawn into a quarter, so every texel is the mean of a 2x2 block), or plain paper. On screen the paper
+// grain and the vignette go on as each pixel is written, from the screen position, so the grain stays one screen pixel
+// fine at every zoom and never scales with the map; baked tiles and mips carry neither.
 
 uniform sampler2D Src;
 
 layout(std140) uniform MapQuad {
     vec4 Rect;
     vec4 Samples;
-    vec4 Params;            // x: 0 copy, 1 finish  y: paper grain  z: vignette
+    vec4 Params;            // x: 0 copy, 1 copy and finish, 2 paper and finish  y: paper grain  z: vignette
     vec4 View;              // xy: size of the target (pixels)
+    vec4 Paper;             // rgb
 };
 
 layout(location = 0) in vec2 uv;
@@ -31,18 +33,18 @@ float vnoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-void main() {
-    if (Params.x < 0.5) {
-        fragColor = vec4(texture(Src, uv).rgb, 1.0);
-        return;
-    }
+// paper grain, fixed to the screen like the paper under a painting, and the vignette
+vec3 finish(vec3 c) {
     vec2 fc = gl_FragCoord.xy;
-    vec3 c = texelFetch(Src, ivec2(fc), 0).rgb;
-    // paper grain, fixed to the screen like the paper under a painting
     float g = 0.65 * vnoise(fc / 2.0) + 0.35 * vnoise(fc / 6.0);
     c *= 1.0 + Params.y * (g - 0.5) * 2.0;
     vec2 v = max(View.xy, vec2(1.0));
     vec2 hs = 0.5 * vec2(v.x / v.y, 1.0);
     float r = length((fc / v - 0.5) * vec2(v.x / v.y, 1.0)) / length(hs);
-    fragColor = vec4(c * (1.0 - Params.z * smoothstep(0.45, 1.0, r)), 1.0);
+    return c * (1.0 - Params.z * smoothstep(0.45, 1.0, r));
+}
+
+void main() {
+    vec3 c = Params.x > 1.5 ? Paper.rgb : texture(Src, uv).rgb;
+    fragColor = vec4(Params.x > 0.5 ? finish(c) : c, 1.0);
 }

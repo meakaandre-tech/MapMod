@@ -7,8 +7,8 @@
 // blurred class weights blended into soft, wandering borders; the biome tint; forests darkened by canopy with a soft
 // brush; water from a signed distance to the shore (a smooth coast and ribbon rivers), deep to shallow with a pale band
 // along the shore. Unexplored land is paper. There is no
-// nearest-neighbour look-up anywhere, so no sample's square or block edge ever shows. The paper grain and the vignette
-// are not here: map_quad puts them over the finished picture at screen resolution.
+// nearest-neighbour look-up anywhere, so no sample's square or block edge ever shows. Painted live on screen, the paper
+// grain and the vignette go on from the screen position (as map_quad does); baked, they are left out.
 
 uniform sampler2D Fields;   // r, g: height + 32768 (high, low byte)   b: water depth   a: explored
 uniform sampler2D Surface;  // rgb: biome tint   a: canopy
@@ -28,14 +28,14 @@ layout(std140) uniform MapPaint {
     vec4 Edges;             // x: border softness  y: warp (blocks)
     vec4 Forest;            // x: darkening at full canopy  y: brush strength
     vec4 Contour;           // x: interval (blocks)  y: strength
-    vec4 Finish;            // x: paper grain  y: vignette (applied by map_quad)
+    vec4 Finish;            // x: paper grain  y: vignette
 };
 
 layout(std140) uniform MapTile {
     vec4 Rect;
     vec4 Samples;
     vec4 Origin;            // xy: world position of texel (0, 0), in samples, wrapped to PERIOD
-    vec4 View;              // xy: picture size (pixels)  w: 1 with contours on
+    vec4 View;              // xy: picture size (pixels)  z: 1 on screen (grain and vignette)  w: 1 with contours on
 };
 
 layout(location = 0) in vec2 samplePos;   // in texels of this tile's textures: texel i's centre is at i
@@ -85,6 +85,16 @@ vec4 catmullRomSlope(float t) {
 vec4 bspline(float t) {
     float s = 1.0 - t, t2 = t * t, t3 = t2 * t;
     return vec4(s * s * s, 3.0 * t3 - 6.0 * t2 + 4.0, -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0, t3) / 6.0;
+}
+
+// paper grain (fixed to the screen, like the paper under a painting) and the vignette: the same as map_quad's
+vec3 finish(vec3 c) {
+    vec2 fc = gl_FragCoord.xy;
+    float g = 0.65 * vnoise(fc / 2.0, 0.0) + 0.35 * vnoise(fc / 6.0, 0.0);
+    c *= 1.0 + Finish.x * (g - 0.5) * 2.0;
+    vec2 hs = 0.5 * vec2(View.x / max(View.y, 1.0), 1.0);
+    float r = length((fc / max(View.xy, vec2(1.0)) - 0.5) * vec2(View.x / max(View.y, 1.0), 1.0)) / length(hs);
+    return c * (1.0 - Finish.y * smoothstep(0.45, 1.0, r));
 }
 
 vec3 classColour(int c, vec3 biome) {
@@ -197,5 +207,6 @@ void main() {
     float water = smoothstep(-wa, wa, sdf);
 
     vec3 colour = mix(land, sea, water);
-    fragColor = vec4(mix(Paper.rgb, colour, shown), 1.0);
+    vec3 c = mix(Paper.rgb, colour, shown);
+    fragColor = vec4(View.z > 0.5 ? finish(c) : c, 1.0);
 }
