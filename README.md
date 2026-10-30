@@ -4,9 +4,10 @@ A Satisfactory-style map for Fabric 26.3, for any modpack (working name; the rea
 `gradle.properties` as `mod_name`, read back in code as `MapMod.NAME`):
 
 - a **compass strip** across the top of the screen, with pins and their distance, group players, markers and nearby POIs;
-- a **painted fullscreen map** (M): smooth shaded terrain at any zoom, no blocks and no pixels, with a **filter panel**,
-  **pins**, **markers** (an icon, a colour and a name, private or shared with your group), **death markers** and the mob
-  radar on top. There is no minimap.
+- a **painted fullscreen map** (M): smooth shaded terrain at any zoom, no blocks and no pixels, unexplored land fading
+  into soft, cloudy fog, with a **filter panel**, **pins**, **markers** (an icon, a colour and a name, private or shared
+  with your group), **death markers** and the mob radar on top, and a switch per overlay layer in its top bar. There is
+  no minimap.
 
 Terrain is captured by the client itself (see below), so it works on any server and with any world generator. Only the
 Overworld's surface is mapped. Vanilla's locator bar is switched
@@ -35,13 +36,23 @@ wander with low-frequency noise in world space (no straight runs, no chunk edges
 zoom), one muted colour per surface class tinted by the biome, darker lowlands and paler peaks, snow above a height,
 forests darkened by canopy with a soft brush, water deep to shallow by depth and distance from the shore with a pale
 band along it (coasts and rivers as smooth curves), optional contour lines (off by default; the switch is in the map's
-top bar and kept in `mapmod/settings.json` as `contours`), paper where nothing is explored, and a light paper grain and
-vignette over it all. Resource packs restyle it through `assets/mapmod/map_palette.json` (colours per class 0-7, water,
-shore band, paper, height tint, snow line, hillshade share, `edges`, `forest`, `contours`, `finish`); every value is
-optional and falls back on its own; F3+T reloads it.
+top bar and kept in `mapmod/settings.json` as `contours`), and a light paper grain and vignette over it all.
+
+Unexplored land fades into fog: what is shown is what the client has captured *and* the group has explored (the same
+fog POIs follow), blurred into a soft mask per cell off the render thread and wandering with the same world-space noise
+as region edges, so there are no chunk corners or straight runs at any zoom, with a static cloud texture in it. The fog
+goes on as the screen's pixels are written, never into the baked tiles, so exploring changes a small mask and bakes
+nothing. A change of zoom level cross-fades over about 150 ms; a drag let go while moving glides on briefly (any click
+stops it). The top bar has a switch per overlay layer (players, markers, pins, POIs, mob radar), kept in
+`mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.
+
+Resource packs restyle it through `assets/mapmod/map_palette.json` (colours per class 0-7, water,
+shore band, paper, height tint, snow line, hillshade share, `edges`, `forest`, `contours`, `finish`, `fog`: colour,
+edge width in blocks, cloud strength); every value is optional and falls back on its own; F3+T reloads it.
 
 `/mapmod stats` shows tiles cached, dirty tiles, the worker queue, samples per second, and with the map open its render
-time, uploads per frame and the off-thread preparation time per tile.
+time, uploads per frame and the off-thread preparation time per tile, the fog masks made and held, mips made again from
+their parent after an eviction, and frames cross-faded.
 
 ## For other mods: `com.meakaandre.mapmod.api`
 

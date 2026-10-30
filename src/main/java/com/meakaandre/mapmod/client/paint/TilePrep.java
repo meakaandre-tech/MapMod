@@ -2,6 +2,8 @@ package com.meakaandre.mapmod.client.paint;
 
 import com.meakaandre.mapmod.client.capture.SurfaceClass;
 import com.meakaandre.mapmod.client.capture.SurfaceTile;
+import com.meakaandre.mapmod.map.MapGrid;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -245,5 +247,197 @@ public final class TilePrep {
             float dq = q - v[k];
             d[q] = dq * dq + f[v[k]];
         }
+    }
+
+    // ------------------------------------------------------------------------------------------------ fog (MM-5)
+
+    /** Texels along a fog mask's cell, and the mask's side with an apron of one texel each way (so cells meet). */
+    public static final int MASK_TEXELS = 64, MASK_SIZE = MASK_TEXELS + 2;
+    /** The noise of region edges repeats every this many blocks (the shader's 2048 samples). */
+    static final int NOISE_BLOCKS = MapGpu.NOISE_PERIOD * SurfaceTile.SPACING;
+
+    /** Blocks along one texel of a level's fog mask: 8 at level 0, doubling each level. */
+    public static int maskTexel(int level) {
+        return 8 << level;
+    }
+
+    /** Texels the fog's edge is blurred over at a level (at least one). */
+    static int maskBlur(int level, float edge) {
+        return Math.max(1, Math.round(edge / maskTexel(level)));
+    }
+
+    /**
+     * How far the edge wanders at level 0 (blocks). Each level reads the same noise 2^level times coarser and wanders
+     * 2^level times as far, so the edge wanders alike on screen at every zoom and never runs straight for long.
+     */
+    static float maskWarp(float edge) {
+        return edge / 3;
+    }
+
+    /** Texels the coverage is eroded by before the blur: as far as the warp reaches, so the edge only ever wanders inward. */
+    static int maskErode(int level, float edge) {
+        return (int) Math.ceil(maskWarp(edge) * (1 << level) / maskTexel(level));
+    }
+
+    /** Texels beyond the mask's apron its coverage is read from: the erosion, the blur, the warp and one for the bilinear look-up. */
+    static int maskPad(int level, float edge) {
+        int warp = maskErode(level, edge) + 1;
+        return maskErode(level, edge) + maskBlur(level, edge) + warp + 1;
+    }
+
+    /** Tiles round a cell whose coverage or fog changes its mask. */
+    public static int maskMarginTiles(int level, float edge) {
+        long blocks = (long) (maskPad(level, edge) + 1) * maskTexel(level);
+        return (int) ((blocks + SurfaceTile.BLOCKS - 1) / SurfaceTile.BLOCKS);
+    }
+
+    /**
+     * A cell's fog mask, {@link #MASK_SIZE} square, 0 (unexplored) to 255 (explored), texel {@code i} centred on block
+     * {@code cell origin + (i - 0.5) * texel}: the share of each texel that is both captured ({@code coverage}: a tile's
+     * explored samples, by tile) and cleared of the group's fog ({@code fog}: a region's chunk bits, by region; a region
+     * is a tile), eroded by as far as the warp below reaches, blurred with a tent {@code edge} blocks wide so neither chunk corners nor sample steps show at any zoom,
+     * then read at a position warped by the same world-space noise as the painted region edges, repeating every 8192
+     * blocks (at level 0; read coarser and stronger at each level up, see {@link #maskWarp}), so the edge never runs
+     * straight. Every cell works out the same value at the same world position, so masks
+     * meet without a seam.
+     */
+    public static byte[] fogMask(int level, int cellX, int cellZ, float edge, Long2ObjectMap<long[]> coverage, Long2ObjectMap<long[]> fog) {
+        int t = maskTexel(level), pad = maskPad(level, edge), n = MASK_TEXELS + 2 * (pad + 1);
+        long cellBlocks = (long) SurfaceTile.BLOCKS << level;
+        long gx0 = cellX * cellBlocks - (long) (pad + 1) * t, gz0 = cellZ * cellBlocks - (long) (pad + 1) * t;
+        float[] grid = new float[n * n];
+        float share = (float) (SurfaceTile.SPACING * SurfaceTile.SPACING) / ((float) t * t);
+        for (var e : coverage.long2ObjectEntrySet()) {
+            long key = e.getLongKey();
+            long[] chunks = fog.get(key);
+            if (chunks == null) continue;
+            long[] samples = e.getValue();
+            int tx = MapGrid.keyX(key), tz = MapGrid.keyZ(key);
+            long bx0 = (long) tx * SurfaceTile.BLOCKS, bz0 = (long) tz * SurfaceTile.BLOCKS;
+            if (bx0 + SurfaceTile.BLOCKS <= gx0 || bz0 + SurfaceTile.BLOCKS <= gz0 || bx0 >= gx0 + (long) n * t || bz0 >= gz0 + (long) n * t) continue;
+            for (int c = 0; c < MapGrid.REGION_CHUNKS * MapGrid.REGION_CHUNKS; c++) {
+                if (!MapGrid.get(chunks, c)) continue;
+                int lx = c % MapGrid.REGION_CHUNKS, lz = c / MapGrid.REGION_CHUNKS;
+                for (int k = 0; k < 16; k++) {
+                    int sx = lx * 4 + (k & 3), sz = lz * 4 + (k >> 2), i = SurfaceTile.index(sx, sz);
+                    if ((samples[i >>> 6] & 1L << i) == 0) continue;
+                    long gx = Math.floorDiv(bx0 + (long) sx * SurfaceTile.SPACING - gx0, t), gz = Math.floorDiv(bz0 + (long) sz * SurfaceTile.SPACING - gz0, t);
+                    if (gx < 0 || gz < 0 || gx >= n || gz >= n) continue;
+                    grid[(int) gx + (int) gz * n] += share;
+                }
+            }
+        }
+        // eroded as far as the warp reaches: wandering never shows land past what is captured and explored, where the
+        // bake fades to paper along the sample grid
+        float[] blurred = blur(erode(grid, n, maskErode(level, edge)), n, maskBlur(level, edge));
+        double scale = 1 << level, amp = maskWarp(edge) * scale;
+        byte[] out = new byte[MASK_SIZE * MASK_SIZE];
+        for (int j = 0; j < MASK_SIZE; j++) {
+            for (int i = 0; i < MASK_SIZE; i++) {
+                double px = cellX * (double) cellBlocks + (i - 0.5) * t, pz = cellZ * (double) cellBlocks + (j - 0.5) * t;
+                // the noise at the position scaled down to level 0's, wrapped to its period
+                double qx = px / scale, qz = pz / scale;
+                double ws = qx - NOISE_BLOCKS * Math.floor(qx / NOISE_BLOCKS), wt = qz - NOISE_BLOCKS * Math.floor(qz / NOISE_BLOCKS);
+                double wx = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 0) * amp;
+                double wz = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 1) * amp;
+                float v = bilinear(blurred, n, (float) ((px + wx - gx0) / t - 0.5), (float) ((pz + wz - gz0) / t - 0.5));
+                out[i + j * MASK_SIZE] = (byte) Math.round(Math.clamp(v, 0f, 1f) * 255);
+            }
+        }
+        return out;
+    }
+
+    /** A separable minimum over a square {@code r} texels each way, with nothing beyond the grid. */
+    private static float[] erode(float[] g, int n, int r) {
+        if (r <= 0) return g;
+        float[] h = new float[n * n], out = new float[n * n];
+        for (int z = 0; z < n; z++) {
+            for (int x = 0; x < n; x++) {
+                float m = 1;
+                for (int k = -r; k <= r; k++) m = Math.min(m, x + k >= 0 && x + k < n ? g[x + k + z * n] : 0);
+                h[x + z * n] = m;
+            }
+        }
+        for (int z = 0; z < n; z++) {
+            for (int x = 0; x < n; x++) {
+                float m = 1;
+                for (int k = -r; k <= r; k++) m = Math.min(m, z + k >= 0 && z + k < n ? h[x + (z + k) * n] : 0);
+                out[x + z * n] = m;
+            }
+        }
+        return out;
+    }
+
+    /** A separable tent blur, {@code r} texels each way, with nothing beyond the grid. */
+    private static float[] blur(float[] g, int n, int r) {
+        float norm = (float) (r + 1) * (r + 1);
+        float[] h = new float[n * n], out = new float[n * n];
+        for (int z = 0; z < n; z++) {
+            for (int x = 0; x < n; x++) {
+                float sum = 0;
+                for (int k = -r; k <= r; k++) {
+                    int xx = x + k;
+                    if (xx >= 0 && xx < n) sum += g[xx + z * n] * (r + 1 - Math.abs(k));
+                }
+                h[x + z * n] = sum;
+            }
+        }
+        for (int z = 0; z < n; z++) {
+            for (int x = 0; x < n; x++) {
+                float sum = 0;
+                for (int k = -r; k <= r; k++) {
+                    int zz = z + k;
+                    if (zz >= 0 && zz < n) sum += h[x + zz * n] * (r + 1 - Math.abs(k));
+                }
+                out[x + z * n] = sum / (norm * norm);
+            }
+        }
+        return out;
+    }
+
+    private static float bilinear(float[] g, int n, float x, float z) {
+        x = Math.clamp(x, 0, n - 1.001f);
+        z = Math.clamp(z, 0, n - 1.001f);
+        int ix = (int) x, iz = (int) z;
+        float fx = x - ix, fz = z - iz;
+        float a = g[ix + iz * n], b = g[ix + 1 + iz * n], c = g[ix + (iz + 1) * n], d = g[ix + 1 + (iz + 1) * n];
+        return (a + (b - a) * fx) * (1 - fz) + (c + (d - c) * fx) * fz;
+    }
+
+    // the shader's noise (map_paint.fsh: hash, vnoise, warp), so the fog's edge wanders as region edges do
+
+    private static float fract(float v) {
+        return v - (float) Math.floor(v);
+    }
+
+    static float hash(float x, float y) {
+        float p3x = fract(x * 0.1031f), p3y = fract(y * 0.1031f), p3z = fract(x * 0.1031f);
+        float d = p3x * (p3y + 33.33f) + p3y * (p3z + 33.33f) + p3z * (p3x + 33.33f);
+        p3x += d;
+        p3y += d;
+        p3z += d;
+        return fract((p3x + p3y) * p3z);
+    }
+
+    /** Smooth value noise over cells of size 1, repeating every {@code period} cells. */
+    static float vnoise(double x, double y, double period) {
+        double ix = Math.floor(x), iy = Math.floor(y);
+        float fx = (float) (x - ix), fy = (float) (y - iy);
+        float ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+        double jx = ix + 1, jy = iy + 1;
+        ix = ix - period * Math.floor(ix / period);
+        iy = iy - period * Math.floor(iy / period);
+        jx = jx - period * Math.floor(jx / period);
+        jy = jy - period * Math.floor(jy / period);
+        float a = hash((float) ix, (float) iy), b = hash((float) jx, (float) iy), c = hash((float) ix, (float) jy), d = hash((float) jx, (float) jy);
+        return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy;
+    }
+
+    /** One axis of the shader's warp at a world position in samples, at unit strength (-1 to 1). */
+    static double warp(double sx, double sz, int axis) {
+        double p = MapGpu.NOISE_PERIOD;
+        double big = axis == 0 ? vnoise(sx / 16, sz / 16, p / 16) : vnoise(sx / 16 + 53, sz / 16 + 17, p / 16);
+        double small = axis == 0 ? vnoise(sx / 4 + 7, sz / 4 + 91, p / 4) : vnoise(sx / 4 + 29, sz / 4 + 3, p / 4);
+        return (big - 0.5) * 1.4 + (small - 0.5) * 0.6;
     }
 }

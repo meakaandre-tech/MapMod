@@ -13,6 +13,8 @@ import java.util.function.BiFunction;
  * tiles, with a budget of {@value #BUDGET_TILES} cells so the pyramid cannot all stay, stepped a few frames at a time
  * from the client tick. It settles at far zoom, then one tile's revision changes (the mips over it go dirty, it and
  * its neighbours bake again, the mips are made again), then a zoom in to a tile that was evicted makes it bake again.
+ * MM-5: then, with room enough, every cell under the top one is let go and a tile in the middle changes: the cells
+ * under the top one are made again from its picture and only the changed tile and its neighbours bake, not all 16.
  * Render thread only.
  */
 public final class BakeCheck implements AutoCloseable {
@@ -32,7 +34,7 @@ public final class BakeCheck implements AutoCloseable {
     private final BiFunction<Integer, Integer, SurfaceTile> make;
     private final List<Result> results = new ArrayList<>();
     private int phase, frames, settledFrames;
-    private long maxOps, bakesAt, mipsAt, evictedAt;
+    private long maxOps, bakesAt, mipsAt, evictedAt, splitsAt;
     private boolean done;
 
     /** @param make a made-up tile at a position (its revision is set here) */
@@ -42,7 +44,9 @@ public final class BakeCheck implements AutoCloseable {
         index = new TileIndex((tx, tz) -> {
             if (self[0] != null) self[0].cache.tileChanged(tx, tz);
         });
-        painter = new MapPainter(index, (long) BUDGET_TILES * BakeCache.SIDE * BakeCache.SIDE * 4, null);
+        long[] clear = new long[com.meakaandre.mapmod.map.MapGrid.FOG_LONGS];
+        java.util.Arrays.fill(clear, -1L);
+        painter = new MapPainter(index, (long) BUDGET_TILES * BakeCache.SIDE * BakeCache.SIDE * 4, null, region -> clear);
         self[0] = painter;
         painter.provider(new MapPainter.Provider() {
             @Override
@@ -145,6 +149,32 @@ public final class BakeCheck implements AutoCloseable {
                 BakeCache.Baked corner = c.get(0, T0, T0);
                 expect("an evicted tile is baked again when it is wanted", corner != null && c.clean(corner) && c.leafBakes > bakesAt,
                     (c.leafBakes - bakesAt) + " bakes, " + (c.evictions - evictedAt) + " more evicted");
+                // settle the far view again with room for everything, then let every cell under the top one go
+                c.budget(64L * BakeCache.SIDE * BakeCache.SIDE * 4);
+                phase = 3;
+                frames = settledFrames = 0;
+            }
+            case 3 -> {
+                frame(2, T0, T0);
+                if (!settled() && frames < PATIENCE) return;
+                c.evictBelow(2);
+                long k = TileIndex.key(T0 + 1, T0 + 1);
+                SurfaceTile t = world.get(k);
+                for (int i = 0; i < SurfaceTile.AREA; i += 5) t.height[i] -= 7;
+                t.revision = 3;
+                bakesAt = c.leafBakes;
+                splitsAt = c.splits;
+                index.set(T0 + 1, T0 + 1, 3);
+                phase = 4;
+                frames = settledFrames = 0;
+            }
+            case 4 -> {
+                frame(2, T0, T0);
+                if (!settled() && frames < PATIENCE) return;
+                BakeCache.Baked top = c.get(2, cell, cell);
+                long rebaked = c.leafBakes - bakesAt, split = c.splits - splitsAt;
+                expect("with the cells under a mip evicted, a changed tile makes them again from the mip's picture: only it and its neighbours bake",
+                    top != null && c.clean(top) && rebaked == 9 && split == 4, rebaked + " bakes (16 would be the whole subtree), " + split + " cells made from their parent");
                 done = true;
                 close();
             }

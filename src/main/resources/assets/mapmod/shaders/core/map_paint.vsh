@@ -10,9 +10,12 @@ layout(std140) uniform MapTile {
     vec4 Samples;   // u0, v0, u1, v1: texel coordinates of the tile's textures at those corners
     vec4 Origin;    // xy: world position of texel (0, 0), in samples, wrapped to the noise period
     vec4 View;      // xy: size of the painted picture (pixels)  z: 1 on screen  w: 1 with contours on
+    vec4 MaskUv;    // the fog mask's u0, v0, u1, v1 at the corners (MM-5)
+    vec4 Mask;      // x: 1 with a fog mask
 };
 
 layout(location = 0) out vec2 samplePos;
+layout(location = 1) out vec2 maskUv;
 
 void main() {
     // 0 1 2  2 1 3 over the corners (0, 0) (1, 0) (0, 1) (1, 1)
@@ -20,4 +23,5 @@ void main() {
     vec2 c = vec2(corner & 1, corner >> 1);
     gl_Position = ProjMat * vec4(mix(Rect.xy, Rect.zw, c), 0.0, 1.0);
     samplePos = mix(Samples.xy, Samples.zw, c);
+    maskUv = mix(MaskUv.xy, MaskUv.zw, c);
 }

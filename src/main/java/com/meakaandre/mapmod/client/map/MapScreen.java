@@ -26,8 +26,9 @@ import java.util.Set;
 
 /**
  * The fullscreen map (M), laid out like Satisfactory's: the filter panel down the left, the painted map
- * ({@link PaintMap}) filling the rest, with everything on it drawn over. Drag to move, scroll to zoom round the mouse,
- * C to centre on the player. Left click pins or unpins what is under the mouse (pins
+ * ({@link PaintMap}) filling the rest, with everything on it drawn over, and a button per overlay layer
+ * ({@link MapLayer}) in the top bar. Drag to move (let go while moving and it glides on a moment, framerate-independent,
+ * until any click), scroll to zoom round the mouse, C to centre on the player. Left click pins or unpins what is under the mouse (pins
  * show on the compass with their distance); right click on an empty spot places a marker there, and on one of your
  * markers (or a shared one of your group) changes or removes it. A marker gets an icon, a colour and a name, and is
  * private or shared with the group.
@@ -42,6 +43,12 @@ public class MapScreen extends Screen {
     private static final double ZOOM_IN = 1.25, ZOOM_OUT = 0.8;
     /** Length of the scale bar (pixels). */
     private static final int SCALE_BAR = 80;
+    /** The glide after a drag: how quickly it slows (per second), the speed it stops below (screen pixels a second),
+     * the fastest it starts (the same), and how recently the mouse must have moved for a release to glide. */
+    private static final double GLIDE_FRICTION = 6, GLIDE_STOP = 4, GLIDE_MAX = 3000;
+    private static final long GLIDE_WINDOW_NANOS = 60_000_000L;
+    /** The layer buttons in the top bar: their size and the room between them. */
+    private static final int LAYER_W = 14, LAYER_STEP = 16;
     /** How near the mouse (pixels) a thing must be to be hovered. */
     private static final int HOVER_RADIUS = 7;
     /** Height a new marker gets where the map has no ground recorded. */
@@ -57,6 +64,9 @@ public class MapScreen extends Screen {
     private long lastFrameNanos;
     private boolean placed;
     private boolean dragging;
+    /** The drag's speed (world blocks a second, smoothed) and when the mouse last moved; the glide's after release. */
+    private double dragVx, dragVz, glideVx, glideVz;
+    private long lastDragNanos;
     private @Nullable Hover hover;
 
     // the marker form
@@ -149,7 +159,7 @@ public class MapScreen extends Screen {
         MapHud.things(g, v);
         MobRadar.draw(g, v);
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player != null) MapDraw.self(g, (float) v.sx(mc.player.getX()), (float) v.sy(mc.player.getZ()));
+        if (mc.player != null && MapLayer.PLAYERS.on()) MapDraw.self(g, (float) v.sx(mc.player.getX()), (float) v.sy(mc.player.getZ()));
         g.disableScissor();
         panel(g, mouseX, mouseY);
         // the top bar: title, the scale, and the world position under the mouse
@@ -158,6 +168,7 @@ public class MapScreen extends Screen {
         String scaleText = MapDraw.distance(SCALE_BAR / scale);
         g.fill(width - 96, 10, width - 16, 11, 0xFFE6E6E6);
         g.text(font, scaleText, width - 96, 1, 0xFFE6E6E6, false);
+        layerButtons(g, mouseX, mouseY);
         if (inMap(mouseX, mouseY)) {
             String at = String.format(Locale.ROOT, "X %d   Z %d", (int) Math.floor(v.wx(mouseX)), (int) Math.floor(v.wz(mouseY)));
             g.text(font, at, PANEL + 6, 4, 0xFFB0B8C0, false);
@@ -175,7 +186,45 @@ public class MapScreen extends Screen {
             formFront(g, mouseX, mouseY);
         } else if (hover != null) {
             g.setComponentTooltipForNextFrame(font, hover.lines, mouseX, mouseY);
+        } else {
+            MapLayer l = layerAt(mouseX, mouseY);
+            if (l != null) {
+                g.setComponentTooltipForNextFrame(font, List.of(l.label(), Component.translatable(l.on() ? "mapmod.map.layer_on" : "mapmod.map.layer_off")
+                    .withColor(0x8A949E)), mouseX, mouseY);
+            }
         }
+    }
+
+    // ------------------------------------------------------------------------------------------------ layer buttons
+
+    private int layerX(int i) {
+        return width - 200 - (MapLayer.values().length - i) * LAYER_STEP - 4;
+    }
+
+    private @Nullable MapLayer layerAt(double mx, double my) {
+        if (my < 1 || my >= 1 + LAYER_W) return null;
+        for (MapLayer l : MapLayer.values()) {
+            int x = layerX(l.ordinal());
+            if (mx >= x && mx < x + LAYER_W) return l;
+        }
+        return null;
+    }
+
+    /** A button per overlay layer: its glyph, bright and framed while the layer is on, dim while it is off. */
+    private void layerButtons(GuiGraphicsExtractor g, int mouseX, int mouseY) {
+        MapLayer over = layerAt(mouseX, mouseY);
+        for (MapLayer l : MapLayer.values()) {
+            int x = layerX(l.ordinal()), y = 1;
+            boolean on = l.on();
+            g.fill(x, y, x + LAYER_W, y + LAYER_W, on ? 0xFF242C35 : 0xFF14191F);
+            g.outline(x, y, LAYER_W, LAYER_W, l == over ? 0xFFFFFFFF : on ? 0xFFFFA530 : 0xFF3A444F);
+            MapIcons.centred(g, l.glyph, x + LAYER_W / 2, y + LAYER_W / 2, on ? 0xFFE6E6E6 : 0xFF56606A);
+        }
+    }
+
+    /** Switches a layer as its button does (also used by the selftests). */
+    public static void toggleLayer(MapLayer l) {
+        MapClient.toggleLayer(l);
     }
 
     private boolean inMap(double x, double y) {
@@ -242,7 +291,7 @@ public class MapScreen extends Screen {
         Minecraft mc = Minecraft.getInstance();
         double best = HOVER_RADIUS * HOVER_RADIUS;
         Hover found = null;
-        for (MapMarker m : MapClient.markers) {
+        for (MapMarker m : MapLayer.MARKERS.on() ? MapClient.markers : List.<MapMarker>of()) {
             if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
             double d = sq(v.sx(m.x + 0.5) - mx, v.sy(m.z + 0.5) - my);
             if (d >= best) continue;
@@ -258,7 +307,7 @@ public class MapScreen extends Screen {
             }
             found = new Hover(lines, MapClient.markerPin(m), m);
         }
-        for (MapPoi poi : MapClient.poisIn(v.regions())) {
+        for (MapPoi poi : MapLayer.POIS.on() ? MapClient.poisIn(v.regions()) : List.<MapPoi>of()) {
             if ((!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) || !MapClient.explored(poi.x(), poi.z())) continue;
             double d = sq(v.sx(poi.x() + 0.5) - mx, v.sy(poi.z() + 0.5) - my);
             if (d >= best) continue;
@@ -269,7 +318,7 @@ public class MapScreen extends Screen {
             lines.add(Component.translatable(MapClient.pinned(poi.pinKey()) ? "mapmod.map.click_unpin" : "mapmod.map.click_pin").withColor(0x8A949E));
             found = new Hover(lines, new MapClient.Pin(poi.pinKey(), MapDraw.label(poi).getString(), poi.x(), poi.y(), poi.z(), MapDraw.icon(poi), MapDraw.colour(poi)), null);
         }
-        for (MovingPoi m : MapClient.moving) {
+        for (MovingPoi m : MapLayer.POIS.on() ? MapClient.moving : List.<MovingPoi>of()) {
             double d = sq(v.sx(m.x()) - mx, v.sy(m.z()) - my);
             if (d >= best) continue;
             best = d;
@@ -279,7 +328,7 @@ public class MapScreen extends Screen {
             where(lines, (int) Math.floor(m.x()), (int) Math.floor(m.z()));
             found = new Hover(lines, null, null);
         }
-        if (MapFilters.showsPlayers()) {
+        if (MapLayer.PLAYERS.on() && MapFilters.showsPlayers()) {
             for (MapPayloads.Mate mate : MapClient.mates) {
                 double d = sq(v.sx(mate.x()) - mx, v.sy(mate.z()) - my);
                 if (d >= best) continue;
@@ -311,6 +360,7 @@ public class MapScreen extends Screen {
         long now = System.nanoTime();
         double dt = lastFrameNanos == 0 ? 0 : Math.min(0.1, (now - lastFrameNanos) / 1e9);
         lastFrameNanos = now;
+        glideStep(dt);
         if (scale == target) {
             anchored = false;
             return;
@@ -325,11 +375,67 @@ public class MapScreen extends Screen {
         }
     }
 
+    /**
+     * One step of the glide: it slows exponentially, and each step moves by the exact integral of that over the step, so
+     * it goes the same way at any frame rate. It stops below {@link #GLIDE_STOP} screen pixels a second.
+     */
+    private void glideStep(double dt) {
+        if (dragging || (glideVx == 0 && glideVz == 0) || dt <= 0) return;
+        double[] x = glide(glideVx, dt), z = glide(glideVz, dt);
+        cx += x[0];
+        cz += z[0];
+        anchorWx += x[0];
+        anchorWz += z[0];
+        glideVx = x[1];
+        glideVz = z[1];
+        if (Math.hypot(glideVx, glideVz) * scale < GLIDE_STOP) glideVx = glideVz = 0;
+    }
+
+    /** How far a glide at speed {@code v} goes in {@code dt} seconds, and its speed after: {moved, speed}. */
+    public static double[] glide(double v, double dt) {
+        double decay = Math.exp(-GLIDE_FRICTION * dt);
+        return new double[]{v * (1 - decay) / GLIDE_FRICTION, v * decay};
+    }
+
+    /** Starts a glide at a speed in screen pixels a second, as letting go of a drag does (also used by the selftests). */
+    public void fling(double pxPerSecondX, double pxPerSecondY) {
+        double sp = Math.hypot(pxPerSecondX, pxPerSecondY), k = sp > GLIDE_MAX ? GLIDE_MAX / sp : 1;
+        glideVx = -pxPerSecondX * k / scale;
+        glideVz = -pxPerSecondY * k / scale;
+    }
+
+    /** True while the map glides after a drag. */
+    public boolean gliding() {
+        return glideVx != 0 || glideVz != 0;
+    }
+
+    /** The world position in the middle of the map. */
+    public double centreX() {
+        return cx;
+    }
+
+    public double centreZ() {
+        return cz;
+    }
+
+    /** Any click stops a glide (the first thing a click does; also used by the selftests). */
+    public void pressed() {
+        glideVx = glideVz = 0;
+    }
+
     // ------------------------------------------------------------------------------------------------ input
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         double mx = event.x(), my = event.y();
+        pressed();
+        if (!editing && event.button() == InputConstants.MOUSE_BUTTON_LEFT) {
+            MapLayer l = layerAt(mx, my);
+            if (l != null) {
+                toggleLayer(l);
+                return true;
+            }
+        }
         if (editing) {
             if (super.mouseClicked(event, doubleClick)) return true;
             formClick(mx, my);
@@ -344,6 +450,8 @@ public class MapScreen extends Screen {
                 return true;
             }
             dragging = true;
+            dragVx = dragVz = 0;
+            lastDragNanos = System.nanoTime();
             return true;
         }
         if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
@@ -360,6 +468,8 @@ public class MapScreen extends Screen {
 
     @Override
     public boolean mouseReleased(MouseButtonEvent event) {
+        // let go while still moving: it glides on
+        if (dragging && System.nanoTime() - lastDragNanos < GLIDE_WINDOW_NANOS) fling(-dragVx * scale, -dragVz * scale);
         dragging = false;
         return super.mouseReleased(event);
     }
@@ -367,6 +477,15 @@ public class MapScreen extends Screen {
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
         if (dragging && !editing) {
+            long now = System.nanoTime();
+            double dt = (now - lastDragNanos) / 1e9;
+            if (dt > 0) {
+                // the speed, smoothed over the last few moves (world blocks a second)
+                double k = Math.min(1, dt / 0.05);
+                dragVx += (-dx / scale / dt - dragVx) * k;
+                dragVz += (-dy / scale / dt - dragVz) * k;
+            }
+            lastDragNanos = now;
             cx -= dx / scale;
             cz -= dy / scale;
             // a zoom still under way stays round the same spot of the screen
@@ -411,6 +530,7 @@ public class MapScreen extends Screen {
         }
         if (event.key() == InputConstants.KEY_C) {
             Minecraft mc = Minecraft.getInstance();
+            pressed();
             if (mc.player != null) {
                 cx = mc.player.getX();
                 cz = mc.player.getZ();

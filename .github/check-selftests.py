@@ -53,7 +53,9 @@ def main():
             bad.append(f"{prefix.strip()} did not finish ({end!r} not in {log})")
     # the client's later suites (MM-4) end with lines of their own
     client = [l for l in (read(os.path.join(ci, "client.log")) or []) if "System chat:" not in l]
-    for end in ("SELFTEST client done bake", "SELFTEST client done far", "SELFTEST client done unload"):
+    # and MM-5's
+    for end in ("SELFTEST client done bake", "SELFTEST client done far", "SELFTEST client done unload",
+                "SELFTEST client done fog", "SELFTEST client done overlays", "SELFTEST client done dimension"):
         if not any(end in l for l in client):
             print(f"client: {end!r} missing, DID NOT FINISH")
             bad.append(f"{end!r} not in client.log")
@@ -80,7 +82,8 @@ def main():
         px, (w, h) = im.load(), im.size
         # a gap is a line of paper (unexplored land, and the background where no tile is drawn) between two pixels of
         # land. The paper carries a grain and a vignette that scale it evenly (MM-3), so "paper" is any pixel that is the
-        # paper colour times one brightness, within rounding; no land colour is (sand and snow differ in hue)
+        # paper colour times one brightness, within rounding; no land colour is (sand and snow differ in hue). The fog
+        # (MM-5) is the paper a shade darker with paper clouds in it, so it counts as paper too
         paper = (0xE6, 0xDC, 0xC6)
         psum = sum(paper)
 

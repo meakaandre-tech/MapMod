@@ -33,5 +33,12 @@
   "mapmod.map.filter.hostile": "Hostile mobs",
   "mapmod.map.filter.passive": "Passive mobs",
   "mapmod.map.contours_on": "Contours: on",
-  "mapmod.map.contours_off": "Contours: off"
+  "mapmod.map.contours_off": "Contours: off",
+  "mapmod.map.layer.players": "Players",
+  "mapmod.map.layer.markers": "Markers",
+  "mapmod.map.layer.pins": "Pins",
+  "mapmod.map.layer.pois": "Points of interest",
+  "mapmod.map.layer.mobs": "Mob radar",
+  "mapmod.map.layer_on": "Shown: click to hide",
+  "mapmod.map.layer_off": "Hidden: click to show"
 }

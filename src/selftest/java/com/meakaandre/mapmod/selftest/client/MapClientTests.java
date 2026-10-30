@@ -15,6 +15,8 @@ import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.client.map.MobRadar;
 import com.meakaandre.mapmod.client.capture.SurfaceTile;
 import com.meakaandre.mapmod.client.paint.BakeCheck;
+import com.meakaandre.mapmod.client.paint.FogCheck;
+import com.meakaandre.mapmod.client.map.MapLayer;
 import com.meakaandre.mapmod.client.paint.PaintMap;
 import com.meakaandre.mapmod.client.paint.PaintPalette;
 import com.meakaandre.mapmod.client.paint.TilePrep;
@@ -87,7 +89,147 @@ public final class MapClientTests {
     /** MM-2's render time at far zoom (us/frame, CPU, averaged): MM-4 must not be slower once settled. */
     private static final double MM2_MICROS = 134;
 
+    // ------------------------------------------------------------------------------------------------ MM-5
+
+    /** The fog check, stepped from the tick while it runs. */
+    private static FogCheck fogCheck;
+    /** The glide check on the open map: ticks since it started (0: not running), where it started, and its results. */
+    private static int glideTicks;
+    private static double glideX, glideZ;
+    private static int overlayPass, overlayFail;
+    /** The dimension check: armed, the frees counted and the cache held when armed, and ticks waited. */
+    private static boolean dimensionArmed;
+    private static int dimensionFreesAt, dimensionTicks;
+    private static long dimensionBytesAt;
+
+    private static void report(String suite, String what, boolean ok, String detail) {
+        MapMod.LOGGER.info("SELFTEST client {} {}{}", ok ? "PASS" : "FAIL", what, detail.isEmpty() ? "" : " (" + detail + ")");
+        if (suite.equals("overlays")) {
+            if (ok) overlayPass++;
+            else overlayFail++;
+        }
+    }
+
+    /** Overlay layer switches are saved, and the glide's arithmetic is the same at any frame rate; the glide itself follows. */
+    private static void overlays() {
+        overlayPass = overlayFail = 0;
+        Minecraft mc = Minecraft.getInstance();
+        boolean all = true;
+        StringBuilder seen = new StringBuilder();
+        for (MapLayer l : MapLayer.values()) {
+            MapScreen.toggleLayer(l);
+            String off = settings();
+            boolean savedOff = !l.on() && off.contains("\"" + l.id + "\":false");
+            MapScreen.toggleLayer(l);
+            String on = settings();
+            boolean savedOn = l.on() && on.contains("\"" + l.id + "\":true");
+            all &= savedOff && savedOn;
+            seen.append(l.id).append(savedOff && savedOn ? " ok " : " NOT SAVED ");
+        }
+        report("overlays", "each overlay layer's switch in the top bar turns it off and on and is saved in settings.json", all, seen.toString().trim());
+        // half a second at 60 frames a second, and at 20
+        double far60 = 0, far20 = 0, v60 = 500, v20 = 500;
+        for (int i = 0; i < 30; i++) {
+            double[] g = MapScreen.glide(v60, 1 / 60.0);
+            far60 += g[0];
+            v60 = g[1];
+        }
+        for (int i = 0; i < 10; i++) {
+            double[] g = MapScreen.glide(v20, 1 / 20.0);
+            far20 += g[0];
+            v20 = g[1];
+        }
+        report("overlays", "the glide after a drag goes the same way at any frame rate", Math.abs(far60 - far20) < 1e-6 * far60 && Math.abs(v60 - v20) < 1e-6 * v60,
+            String.format(Locale.ROOT, "half a second: %.4f blocks at 60 fps, %.4f at 20", far60, far20));
+        if (mc.gui.screen() instanceof MapScreen screen) {
+            glideX = screen.centreX();
+            glideZ = screen.centreZ();
+            screen.fling(900, 300);
+            glideTicks = 1;
+        } else {
+            report("overlays", "the map is open for the glide check", false, "");
+            MapMod.LOGGER.info("SELFTEST client done overlays: {} passed, {} failed", overlayPass, overlayFail);
+        }
+    }
+
+    private static String settings() {
+        try {
+            return Files.readString(MapClient.settingsPath()).replace(" ", "");
+        } catch (Exception e) {
+            return e.toString();
+        }
+    }
+
+    /** Steps the glide check: it moves, slows to a stop by itself, and a click stops another at once. */
+    private static void glideWatch(Minecraft mc) {
+        if (glideTicks == 0) return;
+        glideTicks++;
+        if (!(mc.gui.screen() instanceof MapScreen screen)) {
+            report("overlays", "the map stays open for the glide check", false, "");
+            glideTicks = 0;
+            MapMod.LOGGER.info("SELFTEST client done overlays: {} passed, {} failed", overlayPass, overlayFail);
+            return;
+        }
+        if (screen.gliding() && glideTicks < 100) return;
+        double moved = Math.hypot(screen.centreX() - glideX, screen.centreZ() - glideZ);
+        report("overlays", "letting go of a drag glides the map on a moment, then it stops by itself", !screen.gliding() && moved > 1 && glideTicks < 100,
+            String.format(Locale.ROOT, "moved %.1f blocks, stopped after %d ticks", moved, glideTicks));
+        screen.fling(900, 0);
+        boolean started = screen.gliding();
+        screen.pressed();
+        report("overlays", "a click stops a glide", started && !screen.gliding(), "");
+        glideTicks = 0;
+        MapMod.LOGGER.info("SELFTEST client done overlays: {} passed, {} failed", overlayPass, overlayFail);
+    }
+
+    /** Steps the dimension check: once the player is in another dimension, the cache must be gone. */
+    private static void dimensionWatch(Minecraft mc) {
+        if (!dimensionArmed) return;
+        dimensionTicks++;
+        boolean away = mc.level != null && !MapClient.mappedHere();
+        if (!(away && PaintMap.dimensionFrees() > dimensionFreesAt) && dimensionTicks < 1200) return;
+        dimensionArmed = false;
+        report("dimension", "going to another dimension lets the baked tiles, mips and fog masks go at once",
+            away && PaintMap.dimensionFrees() > dimensionFreesAt && PaintMap.cacheBytes() == 0 && PaintMap.bakedTiles() == 0 && PaintMap.mips() == 0
+                && dimensionBytesAt > 0, dimensionBytesAt / 1048576 + " MB held before, " + PaintMap.cacheBytes() + " bytes after, " + dimensionTicks + " ticks");
+        MapMod.LOGGER.info("SELFTEST client done dimension");
+    }
+
+    /** Clears the group's fog on the client over a disc of the made-up land, so the far view shows the fog's edge across it. */
+    private static void revealFar() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+        int cx = (SurfaceTile.tileOfBlock(mc.player.getBlockX()) + 3) * SurfaceTile.CHUNKS, cz = SurfaceTile.tileOfBlock(mc.player.getBlockZ()) * SurfaceTile.CHUNKS;
+        int r = 2600 / 16;
+        List<Long> chunks = new ArrayList<>();
+        for (int dz = -r; dz <= r; dz++) for (int dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) chunks.add(MapGrid.key(cx + dx, cz + dz));
+        MapClient.fogDelta(chunks.stream().mapToLong(Long::longValue).toArray());
+        MapMod.LOGGER.info("SELFTEST client far fog revealed: {} chunks round chunk {},{}", chunks.size(), cx, cz);
+    }
+
+    /** About where the captured land ends east of the player, in blocks: the chunks loaded round them (the close screenshot is centred on it). */
+    private static int capturedEdge(Minecraft mc) {
+        int pcx = mc.player.getBlockX() >> 4;
+        // a little inside, so the close-up shows land, the fade and the fog
+        return (pcx + mc.options.getEffectiveRenderDistance() + 1) * 16 - 24;
+    }
+
     private static void watch(Minecraft mc) {
+        if (fogCheck != null) {
+            List<BakeCheck.Result> results = fogCheck.step();
+            if (results != null) {
+                fogCheck = null;
+                int pass = 0, fail = 0;
+                for (BakeCheck.Result r : results) {
+                    MapMod.LOGGER.info("SELFTEST client {} {}{}", r.ok() ? "PASS" : "FAIL", r.what(), r.detail().isEmpty() ? "" : " (" + r.detail() + ")");
+                    if (r.ok()) pass++;
+                    else fail++;
+                }
+                MapMod.LOGGER.info("SELFTEST client done fog: {} passed, {} failed", pass, fail);
+            }
+        }
+        glideWatch(mc);
+        dimensionWatch(mc);
         if (bakeCheck != null) {
             List<BakeCheck.Result> results = bakeCheck.step();
             if (results != null) {
@@ -328,8 +470,13 @@ public final class MapClientTests {
         switch (p.action()) {
             case OPEN -> {
                 MapScreen screen = new MapScreen();
-                MapMarker m = p.arg().isEmpty() ? null : named(p.arg());
-                screen.centre(m == null ? p.x() : m.x, m == null ? p.z() : m.z, p.zoom());
+                if (p.arg().equals("edge") && mc.player != null && mc.level != null) {
+                    // centred where the captured land ends east of the player: the fog's edge, close up
+                    screen.centre(capturedEdge(mc), mc.player.getBlockZ(), p.zoom());
+                } else {
+                    MapMarker m = p.arg().isEmpty() ? null : named(p.arg());
+                    screen.centre(m == null ? p.x() : m.x, m == null ? p.z() : m.z, p.zoom());
+                }
                 MapClient.show(screen);
             }
             case CLOSE -> {
@@ -377,6 +524,10 @@ public final class MapClientTests {
                 && partial.contourStrength() == d.contourStrength() && partial.vignette() == d.vignette() && partial.grain() == d.grain()
                 && partial.edgeSoftness() == d.edgeSoftness() && partial.edgeWarp() == d.edgeWarp()
                 && partial.waterShallow() == d.waterShallow(), partial.toString());
+        PaintPalette fogged = PaintPalette.parse(JsonParser.parseString("{\"fog\": {\"edge\": 96, \"clouds\": \"lots\"}}").getAsJsonObject());
+        expect("map_palette.json carries the fog (colour, edge width, clouds), each value falling back on its own",
+            pal.fogColour() == 0xD8CFBA && pal.fogEdge() == 48 && pal.fogClouds() == 0.6f && fogged.fogEdge() == 96
+                && fogged.fogClouds() == d.fogClouds() && fogged.fogColour() == d.fogColour(), pal.fogColour() + " " + pal.fogEdge() + " " + pal.fogClouds());
         distanceField();
         String canopy = PaintMap.canopyCheck();
         expect("canopy is prepared and uploaded as the surface texture's alpha", canopy == null, canopy == null ? "" : canopy);
@@ -453,6 +604,22 @@ public final class MapClientTests {
         if (what.equals("far")) {
             // the far-zoom checks follow the next settle
             farPending = true;
+            revealFar();
+            return;
+        }
+        if (what.equals("fog")) {
+            fogCheck = new FogCheck(SyntheticTiles::make);
+            return;
+        }
+        if (what.equals("overlays")) {
+            overlays();
+            return;
+        }
+        if (what.equals("dimension")) {
+            dimensionArmed = true;
+            dimensionTicks = 0;
+            dimensionFreesAt = PaintMap.dimensionFrees();
+            dimensionBytesAt = PaintMap.cacheBytes();
             return;
         }
         if (what.equals("bake")) {

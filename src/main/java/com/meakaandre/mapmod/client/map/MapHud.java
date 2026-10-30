@@ -279,28 +279,36 @@ public final class MapHud {
      * moving things and the group's players. Returns nothing; the fullscreen map does its own hover on top.
      */
     public static void things(GuiGraphicsExtractor g, MapDraw.View v) {
-        for (MapPoi poi : MapClient.poisIn(v.regions())) {
-            if (!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) continue;
-            if (!MapClient.explored(poi.x(), poi.z())) continue;
-            double sx = v.sx(poi.x() + 0.5), sy = v.sy(poi.z() + 0.5);
-            if (!v.inside(sx, sy, ICON_MARGIN)) continue;
-            MapDraw.poi(g, poi, (int) Math.round(sx), (int) Math.round(sy));
+        if (MapLayer.POIS.on()) {
+            for (MapPoi poi : MapClient.poisIn(v.regions())) {
+                if (!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) continue;
+                if (!MapClient.explored(poi.x(), poi.z())) continue;
+                double sx = v.sx(poi.x() + 0.5), sy = v.sy(poi.z() + 0.5);
+                if (!v.inside(sx, sy, ICON_MARGIN)) continue;
+                MapDraw.poi(g, poi, (int) Math.round(sx), (int) Math.round(sy));
+            }
         }
-        for (MapMarker m : MapClient.markers) {
-            if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
-            double sx = v.sx(m.x + 0.5), sy = v.sy(m.z + 0.5);
-            if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.marker(g, m, (int) Math.round(sx), (int) Math.round(sy));
+        if (MapLayer.MARKERS.on()) {
+            for (MapMarker m : MapClient.markers) {
+                if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
+                double sx = v.sx(m.x + 0.5), sy = v.sy(m.z + 0.5);
+                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.marker(g, m, (int) Math.round(sx), (int) Math.round(sy));
+            }
         }
-        for (MapClient.Pin pin : MapClient.PINS.values()) {
-            if (!pin.key().startsWith("poi:")) continue;
-            double sx = v.sx(pin.x() + 0.5), sy = v.sy(pin.z() + 0.5);
-            if (v.inside(sx, sy, ICON_MARGIN)) MapIcons.centred(g, MapGlyphs.PIN, (int) Math.round(sx), (int) Math.round(sy) - 7, 0xFFFFA530);
+        if (MapLayer.PINS.on()) {
+            for (MapClient.Pin pin : MapClient.PINS.values()) {
+                if (!pin.key().startsWith("poi:")) continue;
+                double sx = v.sx(pin.x() + 0.5), sy = v.sy(pin.z() + 0.5);
+                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.pin(g, (int) Math.round(sx), (int) Math.round(sy) - 7);
+            }
         }
-        for (MovingPoi m : MapClient.moving) {
-            double sx = v.sx(m.x()), sy = v.sy(m.z());
-            if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.moving(g, m, (float) sx, (float) sy);
+        if (MapLayer.POIS.on()) {
+            for (MovingPoi m : MapClient.moving) {
+                double sx = v.sx(m.x()), sy = v.sy(m.z());
+                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.moving(g, m, (float) sx, (float) sy);
+            }
         }
-        if (MapFilters.showsPlayers()) {
+        if (MapLayer.PLAYERS.on() && MapFilters.showsPlayers()) {
             for (MapPayloads.Mate mate : MapClient.mates) {
                 double sx = v.sx(mate.x()), sy = v.sy(mate.z());
                 if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.mate(g, mate, (float) sx, (float) sy);

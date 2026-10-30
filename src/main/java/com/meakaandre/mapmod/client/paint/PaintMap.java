@@ -8,6 +8,7 @@ import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.textures.FilterMode;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.resource.v1.ResourceLoader;
 import net.minecraft.client.Minecraft;
@@ -31,7 +32,10 @@ import java.util.concurrent.Executors;
  * the tiles it is working on ({@link PaintTiles}, {@link TileTextures}). Each frame {@link MapPainter} paints the view
  * into a picture the size of the map on screen in real pixels, which the screen then draws as one picture with its
  * icons on top. Closing the screen lets the data, textures and pictures go and keeps the baked tiles; leaving the world
- * lets everything go.
+ * lets everything go, and so does going to another dimension (MM-5), at once.
+ * <p>
+ * The fog over unexplored land (MM-5) is the group's fog ({@link MapClient#FOG}) over what the client has captured, in
+ * masks the painter keeps ({@link FogMasks}); a change to the fog makes those masks again and bakes nothing.
  */
 public final class PaintMap {
     /** Uploads, bakes and mip copies in one frame at most, together. */
@@ -45,6 +49,10 @@ public final class PaintMap {
     /** The tile folder the index and the cache were made for. */
     private static @Nullable Path world;
     private static final GpuTimer TIMER = new GpuTimer();
+    /** The dimension the player was in last tick: going to another lets the baked tiles go at once. */
+    private static @Nullable Object dimension;
+    /** Times the cache was let go on a change of dimension (for the selftests). */
+    private static int dimensionFrees;
     private static final Stats STATS = new Stats();
     /** Works out tiles' textures off the render thread, one at a time. */
     private static final ExecutorService PREP = Executors.newSingleThreadExecutor(r -> {
@@ -79,6 +87,23 @@ public final class PaintMap {
             if (i != null) i.set(tx, tz, revision);
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(PaintMap::unload));
+        MapClient.onFogChanged((region, all) -> {
+            MapPainter p = painter;
+            if (p == null) return;
+            if (all) p.masks.reset();
+            else p.masks.changed((int) (region >> 32), (int) region);
+        });
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            Object now = client.level == null ? null : client.level.dimension();
+            if (now != null && dimension != null && !now.equals(dimension)) dimensionChanged();
+            dimension = now;
+        });
+    }
+
+    /** The player went to another dimension: the baked tiles, mips and fog masks go at once (the map covers one). */
+    private static void dimensionChanged() {
+        unload();
+        dimensionFrees++;
     }
 
     /** The index and the cache for the world being played, made (or made again for another world) if needed. */
@@ -93,7 +118,7 @@ public final class PaintMap {
             if (q != null) q.cache.tileChanged(tx, tz);
         });
         index = i;
-        painter = p = new MapPainter(i, (long) MapClient.cacheMB * 1024 * 1024, PREP);
+        painter = p = new MapPainter(i, (long) MapClient.cacheMB * 1024 * 1024, PREP, MapClient.FOG::get);
         return p;
     }
 
@@ -259,6 +284,34 @@ public final class PaintMap {
         return p == null ? 0 : p.cache.bytes();
     }
 
+    /** Times the cache was let go on a change of dimension. */
+    public static int dimensionFrees() {
+        return dimensionFrees;
+    }
+
+    /** Fog masks made, and frames painted mid-blend between two levels. */
+    public static long fogBuilds() {
+        MapPainter p = painter;
+        return p == null ? 0 : p.masks.builds;
+    }
+
+    public static long fadeFrames() {
+        MapPainter p = painter;
+        return p == null ? 0 : p.fadeFrames;
+    }
+
+    /** True while the last frame blended two levels. */
+    public static boolean fading() {
+        MapPainter p = painter;
+        return p != null && p.lastFading;
+    }
+
+    /** True if the last frame showed the last picture again. */
+    public static boolean reused() {
+        MapPainter p = painter;
+        return p != null && p.lastReused;
+    }
+
     /** True if the last frame found nothing left to do for what is on screen. */
     public static boolean idle() {
         MapPainter p = painter;
@@ -270,7 +323,7 @@ public final class PaintMap {
         MapPainter p = painter;
         if (p == null) return "none";
         return (p.lastLive ? "live" : "level " + p.lastLevel) + (p.lastReused ? " (picture shown again)" : "") + ", " + p.lastQuads + " quads, " + p.lastPainted + " painted, "
-            + p.lastPasses() + " passes, " + p.lastDraws() + " draws";
+            + p.lastPasses() + " passes, " + p.lastDraws() + " draws" + (p.idle() ? "" : "; busy: " + p.busy());
     }
 
     /** Disk-load events the open map's tiles fired (tiles read from disk). */
@@ -341,6 +394,9 @@ public final class PaintMap {
             long n = p.prepared();
             lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d",
                 n, n == 0 ? 0 : p.prepNanos.get() / 1e6 / n, p.prepMaxNanos.get() / 1e6, p.waiting()));
+            FogMasks m = p.masks;
+            lines.add(String.format(Locale.ROOT, "  fog masks %d held, %d made off-thread (%.1f ms avg, %.1f ms max), %d uploaded; %d mips made again from their parent; %d frames blended",
+                m.held(), m.builds, m.builds == 0 ? 0 : m.buildNanos.get() / 1e6 / m.builds, m.buildMaxNanos.get() / 1e6, m.uploads, c.splits, p.fadeFrames));
         }
         if (held != null) {
             lines.add(String.format(Locale.ROOT, "  tiles held %d, loading %d (read %d, from capture %d); contours %s",

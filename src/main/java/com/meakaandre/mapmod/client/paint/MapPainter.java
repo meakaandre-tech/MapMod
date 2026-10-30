@@ -1,6 +1,7 @@
 package com.meakaandre.mapmod.client.paint;
 
 import com.meakaandre.mapmod.client.capture.SurfaceTile;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
@@ -23,6 +24,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@link TileTextures}, and a tile without them yet borrows its baked texture. Either way every screen pixel gets the
  * grain and the vignette as it is written (baked tiles carry neither), so they stay screen-fine at every zoom.
  * <p>
+ * MM-5: the fog over unexplored land goes on there too, from each cell's {@link FogMasks} mask and a static cloud texture
+ * in world space, so exploring never bakes anything again. When the level shown changes, the old level is blended out
+ * over {@link #FADE_NANOS} (both drawn from the cache in one pass), and the frame after that settles like any other.
+ * <p>
  * The work that keeps all that up to date is found each frame (visible cells first, nearest the middle first, depth
  * first under each: see {@link BakeCache#need}) and done at most {@link #OPS} steps a frame, a step being an upload of a
  * tile's prepared textures, a bake of a tile, or a copy into a mip. A tile's textures are worked out on the prep thread
@@ -37,6 +42,10 @@ final class MapPainter implements AutoCloseable {
     private static final int ASKS = 12;
     /** Cells looked at in one frame at most while finding work. */
     private static final int VISITS = 20000;
+    /** How long a change of the level shown blends the old one out. */
+    static final long FADE_NANOS = 150_000_000L;
+    /** Levels apart a blend is made over at most (a bigger jump just changes). */
+    private static final int FADE_LEVELS = 2;
 
     /** Where tiles' data comes from: around a tile, once it and its neighbours are in (else asked for, and null). */
     interface Provider {
@@ -51,11 +60,27 @@ final class MapPainter implements AutoCloseable {
     record Frame(int width, int height, double wx0, double wz0, double blocksPerPixel) {
     }
 
-    private record Prepared(int generation, long key, TilePrep.Result result) {
+    /** A tile's textures worked out off-thread, and the explored samples and revisions of it and its neighbours. */
+    private record Prepared(int generation, long key, TilePrep.Result result, long[][] explored, long[] revisions) {
     }
 
     /** What a painted picture showed: if a frame would show the same, the picture is shown again. */
-    private record Shown(Frame frame, int palVersion, boolean contours, boolean terrain, long evictions) {
+    private record Shown(Frame frame, int palVersion, boolean contours, boolean terrain, long evictions, long fog) {
+    }
+
+    /**
+     * A part of the picture: a world rectangle (blocks) shown from a texture at those coordinates (v up), and the cell
+     * of the level being drawn it belongs to (whose fog mask it gets).
+     */
+    private record Piece(GpuTextureView src, double wx0, double wz0, double wx1, double wz1, float u0, float v0, float u1, float v1,
+                         int level, int cx, int cz) {
+        float u(double wx) {
+            return (float) (u0 + (u1 - u0) * (wx - wx0) / (wx1 - wx0));
+        }
+
+        float v(double wz) {
+            return (float) (v0 + (v1 - v0) * (wz - wz0) / (wz1 - wz0));
+        }
     }
 
     private @Nullable Shown lastShownKey;
@@ -69,6 +94,7 @@ final class MapPainter implements AutoCloseable {
 
     final TileIndex index;
     final BakeCache cache;
+    final FogMasks masks;
     private final MapGpu gpu = new MapGpu();
     private @Nullable Provider data;
     private final @Nullable Executor prep;
@@ -83,6 +109,13 @@ final class MapPainter implements AutoCloseable {
     private long frame;
     private int lookVersion = Integer.MIN_VALUE;
     private boolean lookContours;
+    /** The level shown last (-1 live or none), and the one being blended out with when it started (-1 none). */
+    private int shownLevel = -1, fadeFrom = -1;
+    private long fadeStart;
+    /** Frames painted mid-blend (for the selftests: a change of level does not pop). */
+    long fadeFrames;
+    /** For the selftests: the clock a blend reads (null: the real one). */
+    static java.util.function.@Nullable LongSupplier clock;
 
     /** Counted since the painter was made. */
     long uploads, frames;
@@ -90,14 +123,15 @@ final class MapPainter implements AutoCloseable {
     private final AtomicLong prepDone = new AtomicLong();
     /** The last frame's numbers. */
     int lastOps, lastUploads, lastBakes, lastMips, lastQuads, lastPainted, lastShown, lastLevel, lastWork;
-    boolean lastLive, lastContours;
+    boolean lastLive, lastContours, lastFading, lastFogPending;
 
     /**
-     * @param prep where tiles are prepared; null prepares them at once on this thread (the selftests)
+     * @param prep where tiles and fog masks are prepared; null prepares them at once on this thread (the selftests)
      */
-    MapPainter(TileIndex index, long budget, @Nullable Executor prep) {
+    MapPainter(TileIndex index, long budget, @Nullable Executor prep, FogMasks.Fog fog) {
         this.index = index;
         this.cache = new BakeCache(index, budget);
+        this.masks = new FogMasks(index, fog, prep);
         this.prep = prep;
     }
 
@@ -118,9 +152,15 @@ final class MapPainter implements AutoCloseable {
         return tex.size();
     }
 
-    /** True if the last frame found nothing to do: everything visible is up to date. */
+    /** True if the last frame found nothing to do: everything visible is up to date, its fog too, and no blend is under way. */
     boolean idle() {
-        return lastWork == 0 && preparing.isEmpty();
+        return lastWork == 0 && preparing.isEmpty() && !lastFogPending && !lastFading;
+    }
+
+    /** Why the last frame was not idle (for the selftests' logs). */
+    String busy() {
+        return lastWork + " jobs, " + preparing.size() + " preparing, " + prepared.size() + " prepared" + (lastFogPending ? ", fog masks" : "")
+            + (lastFading ? ", blending" : "");
     }
 
     /** The mip level whose texels are about a pixel at this many blocks a pixel. */
@@ -149,20 +189,32 @@ final class MapPainter implements AutoCloseable {
         lastLive = live;
         lastLevel = level;
         lastContours = contours;
+        masks.frame(frame);
+        masks.edge(pal.fogEdge());
         gpu.beginFrame(96);
 
+        // a change of the level shown blends the old one out
+        long now = clock == null ? System.nanoTime() : clock.getAsLong();
+        int shown = live ? -1 : level;
+        if (shown != shownLevel) {
+            fadeFrom = shown >= 0 && shownLevel >= 0 && Math.abs(shown - shownLevel) <= FADE_LEVELS ? shownLevel : -1;
+            fadeStart = now;
+            shownLevel = shown;
+        }
+        float fade = fadeFrom < 0 ? 0 : 1 - (float) (now - fadeStart) / FADE_NANOS;
+        if (fade <= 0) {
+            fade = 0;
+            fadeFrom = -1;
+        }
+        lastFading = fade > 0;
+
+        LongArrayList cells = visible(f, level);
         int cs = BakeCache.SIDE << level;
-        double wx1 = f.wx0() + f.width() * f.blocksPerPixel(), wz1 = f.wz0() + f.height() * f.blocksPerPixel();
-        int cx0 = Math.floorDiv((int) Math.floor(f.wx0()), cs), cx1 = Math.floorDiv((int) Math.floor(wx1), cs);
-        int cz0 = Math.floorDiv((int) Math.floor(f.wz0()), cs), cz1 = Math.floorDiv((int) Math.floor(wz1), cs);
-        double mx = (f.wx0() + wx1) / 2 / cs - 0.5, mz = (f.wz0() + wz1) / 2 / cs - 0.5;
-        LongArrayList cells = new LongArrayList();
-        for (int z = cz0; z <= cz1; z++) for (int x = cx0; x <= cx1; x++) if (index.occupied(level, x, z)) cells.add(TileIndex.key(x, z));
-        cells.sort((long a, long b) -> Double.compare(dist(a, mx, mz), dist(b, mx, mz)));
-        lastShown = (cx1 - cx0 + 1) * (cz1 - cz0 + 1);
+        lastShown = cells.size();
 
         int ops = 0;
         long bakes0 = cache.leafBakes, mips0 = cache.mipBuilds, up0 = uploads;
+        boolean fogPending = false;
         if (terrain) {
             FrameJobs jobs = new FrameJobs();
             if (live) for (int i = 0; i < cells.size(); i++) jobs.live(x(cells.getLong(i)), z(cells.getLong(i)));
@@ -172,20 +224,24 @@ final class MapPainter implements AutoCloseable {
                 if (ops >= OPS) break;
                 ops += run(j, pal, palVersion, contours, OPS - ops);
             }
+            dropUnwanted(jobs.wanted);
+            for (int i = 0; i < cells.size(); i++) fogPending |= masks.need(level, x(cells.getLong(i)), z(cells.getLong(i)));
+            fogPending |= masks.pending();
         } else {
             lastWork = 0;
         }
+        lastFogPending = fogPending;
         lastOps = ops;
         lastUploads = (int) (uploads - up0);
         lastBakes = (int) (cache.leafBakes - bakes0);
         lastMips = (int) (cache.mipBuilds - mips0);
 
-        // nothing to do, nothing done, the same view as a picture painted when there was nothing to do either: it is
-        // the picture this frame would paint (icons go on top of it on screen), so it is shown again
-        Shown shown = new Shown(f, palVersion, contours, terrain, cache.evictions);
-        boolean still = ops == 0 && lastWork == 0 && preparing.isEmpty();
+        // nothing to do, nothing done, no blend, the same view and fog as a picture painted when there was nothing to
+        // do either: it is the picture this frame would paint (icons go on top of it on screen), so it is shown again
+        Shown key = new Shown(f, palVersion, contours, terrain, cache.evictions, masks.version);
+        boolean still = ops == 0 && lastWork == 0 && preparing.isEmpty() && !fogPending && fade == 0;
         MapGpu.Target last = pictures[pictureSlot];
-        if (reuse && still && reusable && shown.equals(lastShownKey) && last != null) {
+        if (reuse && still && reusable && key.equals(lastShownKey) && last != null) {
             reused++;
             lastReused = true;
             return last;
@@ -193,36 +249,84 @@ final class MapPainter implements AutoCloseable {
         lastReused = false;
         painted++;
         reusable = still;
-        lastShownKey = shown;
+        lastShownKey = key;
+        if (fade > 0) fadeFrames++;
 
         pictureSlot = (pictureSlot + 1) % pictures.length;
         MapGpu.Target picture = pictures[pictureSlot] = sized(pictures[pictureSlot], "map picture " + pictureSlot, f.width(), f.height());
         List<MapGpu.TexQuad> quads = new ArrayList<>();
-        // paper first, under everything: where no tile lies, unexplored land
-        quads.add(MapGpu.TexQuad.paper(picture));
+        // paper first, under everything: where no tile lies, all fog
+        double wx1 = f.wx0() + f.width() * f.blocksPerPixel(), wz1 = f.wz0() + f.height() * f.blocksPerPixel();
+        quads.add(world(MapGpu.TexQuad.paper(picture), f.wx0(), f.wz0(), wx1, wz1));
         List<MapGpu.PaintQuad> paints = new ArrayList<>();
         if (terrain) {
+            List<Piece> pieces = new ArrayList<>();
             for (int i = 0; i < cells.size(); i++) {
                 int x = x(cells.getLong(i)), z = z(cells.getLong(i));
                 TileTextures t = live ? tex.get(TileIndex.key(x, z)) : null;
                 if (t != null) {
                     texUsed.put(TileIndex.key(x, z), frame);
-                    paints.add(paintQuad(t, x, z, f));
+                    double tx0 = x * (double) cs, tz0 = z * (double) cs;
+                    paints.add(paintQuad(t, x, z, f).withMask(masks.uv(0, x, z, tx0, tz0, tx0 + cs, tz0 + cs)));
                 } else {
-                    drawCell(level, x, z, f, quads);
+                    cellPieces(level, x, z, pieces);
+                }
+            }
+            for (Piece p : pieces) quads.add(quad(p, f));
+            if (fade > 0) {
+                // the old level drawn over the new where both have a picture, weighted by what is left of the blend
+                List<Piece> old = new ArrayList<>();
+                LongArrayList was = visible(f, fadeFrom);
+                for (int i = 0; i < was.size(); i++) cellPieces(fadeFrom, x(was.getLong(i)), z(was.getLong(i)), old);
+                for (Piece p : pieces) {
+                    for (Piece o : old) {
+                        double ix0 = Math.max(p.wx0, o.wx0), iz0 = Math.max(p.wz0, o.wz0), ix1 = Math.min(p.wx1, o.wx1), iz1 = Math.min(p.wz1, o.wz1);
+                        if (ix0 >= ix1 || iz0 >= iz1) continue;
+                        Piece cut = new Piece(p.src, ix0, iz0, ix1, iz1, p.u(ix0), p.v(iz0), p.u(ix1), p.v(iz1), p.level, p.cx, p.cz);
+                        quads.add(quad(cut, f).withFade(o.src, o.u(ix0), o.v(iz0), o.u(ix1), o.v(iz1), fade));
+                    }
                 }
             }
         }
         lastQuads = quads.size() - 1;
         lastPainted = paints.size();
-        // grain and the vignette go on as the screen's pixels are written, by both passes
-        gpu.quads(picture, Optional.empty(), quads, pal);
+        // the fog, grain and the vignette go on as the screen's pixels are written, by both passes
+        gpu.quads(picture, Optional.empty(), quads, pal, false);
         gpu.paint(picture, Optional.empty(), paints, pal, palVersion, contours, true);
 
         cache.evict();
+        masks.evict();
         if (data != null) data.trim();
         trimTextures();
         return picture;
+    }
+
+    /** The cells of a level over the view that hold any tile, nearest the middle first. */
+    private LongArrayList visible(Frame f, int level) {
+        int cs = BakeCache.SIDE << level;
+        double wx1 = f.wx0() + f.width() * f.blocksPerPixel(), wz1 = f.wz0() + f.height() * f.blocksPerPixel();
+        int cx0 = Math.floorDiv((int) Math.floor(f.wx0()), cs), cx1 = Math.floorDiv((int) Math.floor(wx1), cs);
+        int cz0 = Math.floorDiv((int) Math.floor(f.wz0()), cs), cz1 = Math.floorDiv((int) Math.floor(wz1), cs);
+        double mx = (f.wx0() + wx1) / 2 / cs - 0.5, mz = (f.wz0() + wz1) / 2 / cs - 0.5;
+        LongArrayList cells = new LongArrayList();
+        for (int z = cz0; z <= cz1; z++) for (int x = cx0; x <= cx1; x++) if (index.occupied(level, x, z)) cells.add(TileIndex.key(x, z));
+        cells.sort((long a, long b) -> Double.compare(dist(a, mx, mz), dist(b, mx, mz)));
+        return cells;
+    }
+
+    /** A piece on screen: its rectangle in the picture's pixels, its fog mask, and its world position for the clouds. */
+    private MapGpu.TexQuad quad(Piece p, Frame f) {
+        double bpp = f.blocksPerPixel();
+        MapGpu.TexQuad q = new MapGpu.TexQuad(p.src, (float) ((p.wx0 - f.wx0()) / bpp), (float) ((p.wz0 - f.wz0()) / bpp),
+            (float) ((p.wx1 - f.wx0()) / bpp), (float) ((p.wz1 - f.wz0()) / bpp), p.u0, p.v0, p.u1, p.v1);
+        return world(q, p.wx0, p.wz0, p.wx1, p.wz1).withMask(masks.uv(p.level, p.cx, p.cz, p.wx0, p.wz0, p.wx1, p.wz1));
+    }
+
+    /** A quad's world position at its corners, in samples, its left and top wrapped to the noise's period. */
+    private static MapGpu.TexQuad world(MapGpu.TexQuad q, double wx0, double wz0, double wx1, double wz1) {
+        double sx = wx0 / SurfaceTile.SPACING, sz = wz0 / SurfaceTile.SPACING;
+        double ox = sx - MapGpu.NOISE_PERIOD * Math.floor(sx / MapGpu.NOISE_PERIOD), oz = sz - MapGpu.NOISE_PERIOD * Math.floor(sz / MapGpu.NOISE_PERIOD);
+        return q.withWorld((float) ox, (float) oz, (float) (ox + (wx1 - wx0) / SurfaceTile.SPACING), (float) (oz + (wz1 - wz0) / SurfaceTile.SPACING));
     }
 
     private static double dist(long k, double mx, double mz) {
@@ -264,15 +368,14 @@ final class MapPainter implements AutoCloseable {
         return new MapGpu.PaintQuad(t, x0, y0, x1, y1, u0, u0, u1, u1, ox, oz);
     }
 
-    /** A cell from the cache, else from the nearest coarser level, else from the level below, else paper. */
-    private void drawCell(int level, int x, int z, Frame f, List<MapGpu.TexQuad> out) {
-        double bpp = f.blocksPerPixel(), size = (double) (BakeCache.SIDE << level) / bpp;
-        float x0 = (float) ((x * (double) (BakeCache.SIDE << level) - f.wx0()) / bpp), y0 = (float) ((z * (double) (BakeCache.SIDE << level) - f.wz0()) / bpp);
-        float x1 = (float) (x0 + size), y1 = (float) (y0 + size);
+    /** A cell from the cache, else from the nearest coarser level, else from the level below, else nothing (paper). */
+    private void cellPieces(int level, int x, int z, List<Piece> out) {
+        double size = BakeCache.SIDE << level;
+        double x0 = x * size, z0 = z * size;
         BakeCache.Baked b = cache.get(level, x, z);
         if (b != null) {
             cache.touch(b);
-            out.add(new MapGpu.TexQuad(b.target.view, x0, y0, x1, y1, 0, 1, 1, 0));
+            out.add(new Piece(b.target.view, x0, z0, x0 + size, z0 + size, 0, 1, 1, 0, level, x, z));
             return;
         }
         for (int j = level + 1; j < BakeCache.LEVELS; j++) {
@@ -281,31 +384,36 @@ final class MapPainter implements AutoCloseable {
             if (a == null) continue;
             cache.touch(a);
             float ox = x & (n - 1), oz = z & (n - 1);
-            out.add(new MapGpu.TexQuad(a.target.view, x0, y0, x1, y1, ox / n, 1 - oz / n, (ox + 1) / n, 1 - (oz + 1) / n));
+            out.add(new Piece(a.target.view, x0, z0, x0 + size, z0 + size, ox / n, 1 - oz / n, (ox + 1) / n, 1 - (oz + 1) / n, level, x, z));
             return;
         }
         if (level == 0) return;
-        float h = (float) (size / 2);
+        double h = size / 2;
         for (int q = 0; q < 4; q++) {
             BakeCache.Baked c = cache.get(level - 1, x * 2 + (q & 1), z * 2 + (q >> 1));
             if (c == null) continue;
             cache.touch(c);
-            float qx = x0 + (q & 1) * h, qy = y0 + (q >> 1) * h;
-            out.add(new MapGpu.TexQuad(c.target.view, qx, qy, qx + h, qy + h, 0, 1, 1, 0));
+            double qx = x0 + (q & 1) * h, qz = z0 + (q >> 1) * h;
+            out.add(new Piece(c.target.view, qx, qz, qx + h, qz + h, 0, 1, 1, 0, level, x, z));
         }
     }
 
     // ------------------------------------------------------------------------------------------------ the work
 
-    private enum Kind { UPLOAD, BAKE, MIP }
+    private enum Kind { UPLOAD, BAKE, MIP, SPLIT }
 
-    private record Job(Kind kind, int level, int x, int z, boolean bake) {
+    private record Job(Kind kind, int level, int x, int z, boolean bake, int quarter) {
+        Job(Kind kind, int level, int x, int z, boolean bake) {
+            this(kind, level, x, z, bake, 0);
+        }
     }
 
     /** The work found in a frame: GPU steps in the order found, and how many tiles' data was asked for. */
     private final class FrameJobs extends BakeCache.Jobs {
         final List<Job> work = new ArrayList<>();
         final LongOpenHashSet seen = new LongOpenHashSet();
+        /** Tiles whose textures this frame wanted (prepared results for any other tile are let go). */
+        final LongOpenHashSet wanted = new LongOpenHashSet();
         int asked;
 
         @Override
@@ -326,6 +434,7 @@ final class MapPainter implements AutoCloseable {
         private void tile(int tx, int tz, boolean bake) {
             long k = TileIndex.key(tx, tz);
             long want = index.key3x3(tx, tz);
+            wanted.add(k);
             TileTextures t = tex.get(k);
             if (t != null && t.key == want) {
                 texUsed.put(k, frame);
@@ -336,6 +445,11 @@ final class MapPainter implements AutoCloseable {
             if (p != null && p.generation == generation && p.key == want) {
                 if (seen.add(k ^ 0x5DEECE66DL)) work.add(new Job(Kind.UPLOAD, 0, tx, tz, bake));
                 return;
+            }
+            if (p != null) {
+                // prepared from data that has changed since: let it go, so it neither blocks nor waits forever
+                prepared.remove(k);
+                preparing.remove(k);
             }
             if (preparing.containsKey(k) && preparing.get(k) == want) return;
             if (preparing.size() >= PREP_MAX || asked >= ASKS || data == null) {
@@ -355,6 +469,25 @@ final class MapPainter implements AutoCloseable {
         void mip(int level, int x, int z) {
             if (seen.add(TileIndex.key(x, z) * 31 + level)) work.add(new Job(Kind.MIP, level, x, z, false));
         }
+
+        @Override
+        void split(int level, int x, int z, int quarter) {
+            int cx = x * 2 + (quarter & 1), cz = z * 2 + (quarter >> 1);
+            if (seen.add(TileIndex.key(cx, cz) * 37 + level - 1)) work.add(new Job(Kind.SPLIT, level, x, z, false, quarter));
+        }
+    }
+
+    /**
+     * Prepared textures for tiles no frame wants any more go, with their place among those being prepared: otherwise
+     * they wait for an upload that never comes, and count against {@link #PREP_MAX} and the painter's idleness.
+     */
+    private void dropUnwanted(LongOpenHashSet wanted) {
+        if (prepared.isEmpty()) return;
+        for (Long k : List.copyOf(prepared.keySet())) {
+            if (wanted.contains(k)) continue;
+            prepared.remove(k);
+            preparing.remove((long) k);
+        }
     }
 
     private void submit(long k, long key, @Nullable SurfaceTile[][] around) {
@@ -364,11 +497,20 @@ final class MapPainter implements AutoCloseable {
             if (gen != generation) return;
             long t0 = System.nanoTime();
             TilePrep.Result r = TilePrep.prepare(around);
+            // the explored samples of the tile and its neighbours, for the fog masks
+            long[][] explored = new long[9][];
+            long[] revisions = new long[9];
+            for (int i = 0; i < 9; i++) {
+                SurfaceTile t = around == null ? null : around[i / 3][i % 3];
+                if (t == null) continue;
+                explored[i] = t.explored.clone();
+                revisions[i] = t.revision;
+            }
             long ns = System.nanoTime() - t0;
             prepDone.incrementAndGet();
             prepNanos.addAndGet(ns);
             prepMaxNanos.accumulateAndGet(ns, Math::max);
-            if (gen == generation) prepared.put(k, new Prepared(gen, key, r));
+            if (gen == generation) prepared.put(k, new Prepared(gen, key, r, explored, revisions));
         };
         if (prep == null) job.run();
         else prep.execute(job);
@@ -386,6 +528,7 @@ final class MapPainter implements AutoCloseable {
                 if (t == null) tex.put(k, t = TileTextures.create(j.x, j.z));
                 t.upload(p.result);
                 t.key = p.key;
+                for (int i = 0; i < 9; i++) if (p.explored[i] != null) masks.coverage(j.x + i % 3 - 1, j.z + i / 3 - 1, p.explored[i], p.revisions[i]);
                 texUsed.put(k, frame);
                 uploads++;
                 if (j.bake && left > 1) return 1 + bake(j.x, j.z, t, pal, palVersion, contours);
@@ -398,6 +541,9 @@ final class MapPainter implements AutoCloseable {
             }
             case MIP -> {
                 return cache.buildMip(gpu, j.level, j.x, j.z, pal) ? 1 : 0;
+            }
+            case SPLIT -> {
+                return cache.split(gpu, j.level, j.x, j.z, j.quarter) ? 1 : 0;
             }
         }
         return 0;
@@ -434,11 +580,12 @@ final class MapPainter implements AutoCloseable {
         prepared.clear();
     }
 
-    /** The screen closed: the pictures, the tiles' textures and their data go; the baked tiles stay. */
+    /** The screen closed: the pictures, the tiles' textures and their data go; the baked tiles and fog masks stay. */
     void release() {
         closeTextures();
         lastShownKey = null;
         reusable = false;
+        shownLevel = fadeFrom = -1;
         for (int i = 0; i < pictures.length; i++) {
             if (pictures[i] != null) pictures[i].close();
             pictures[i] = null;
@@ -456,6 +603,7 @@ final class MapPainter implements AutoCloseable {
     public void close() {
         release();
         cache.close();
+        masks.close();
     }
 
     /** For the selftests: the cache's cell, or null. */
