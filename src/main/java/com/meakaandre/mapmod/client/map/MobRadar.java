@@ -24,8 +24,9 @@ import java.util.Map;
 
 /**
  * The mob radar: the mobs round the player on the fullscreen map, each drawn as its own face (read off
- * its model's head and its texture, so it works for any mob a mod adds too), with no names. Hostile and passive mobs
- * each have a filter switch (under "Mobs").
+ * its model's head and its texture, so it works for any mob a mod adds too), with no names, in a soft frame (MM-5). A
+ * mob on land the group has not explored is hidden under the fog. Hostile and passive mobs each have a filter switch
+ * (under "Mobs"), and the radar a layer switch of its own in the top bar.
  */
 public final class MobRadar {
     /** Size a face is drawn at on the fullscreen map (pixels). */
@@ -34,8 +35,8 @@ public final class MobRadar {
     private static final int HEIGHT_RANGE = 24;
     /** A mob's texture is looked up again this often (ticks): it may change (a sheared sheep, a converting zombie). */
     private static final int TEXTURE_TICKS = 40;
-    /** A dark outline round each face, so it stands out on any ground. */
-    private static final int OUTLINE = 0xC0101418;
+    /** A soft frame round each face, so it stands out on any ground: a dark ring a pixel out, a faint one past it. */
+    private static final int OUTLINE = 0x90101418, HALO = 0x30101418;
     /** A mob whose face cannot be found: a dot in its kind's colour. */
     private static final int HOSTILE_DOT = 0xFFE5533D, PASSIVE_DOT = 0xFF6BCB5A;
 
@@ -65,7 +66,7 @@ public final class MobRadar {
     public static void draw(GuiGraphicsExtractor g, MapDraw.View v) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null || !MapClient.mappedHere()) return;
-        if (!MapFilters.on(MapFilters.MOBS)) return;
+        if (!MapFilters.on(MapFilters.MOBS) || !MapLayer.MOBS.on()) return;
         boolean hostiles = MapFilters.on(MapFilters.HOSTILE), passives = MapFilters.on(MapFilters.PASSIVE);
         if (!hostiles && !passives) return;
         int size = SIZE;
@@ -78,6 +79,7 @@ public final class MobRadar {
             boolean hostile = hostile(e);
             if (hostile ? !hostiles : !passives) continue;
             double x = e.xo + (e.getX() - e.xo) * pt, z = e.zo + (e.getZ() - e.zo) * pt;
+            if (!MapClient.explored((int) Math.floor(x), (int) Math.floor(z))) continue;
             double sx = v.sx(x), sy = v.sy(z);
             if (!v.inside(sx, sy, size)) continue;
             int x0 = (int) Math.round(sx) - size / 2, y0 = (int) Math.round(sy) - size / 2;
@@ -94,6 +96,9 @@ public final class MobRadar {
             SKINS.put(e.getId(), skin);
         }
         Face face = skin.texture == null ? null : face(mc, e);
+        // rounded: the faint ring leaves its corners out
+        g.fill(x0 - 2, y0 - 1, x0 + size + 2, y0 + size + 1, HALO);
+        g.fill(x0 - 1, y0 - 2, x0 + size + 1, y0 + size + 2, HALO);
         g.fill(x0 - 1, y0 - 1, x0 + size + 1, y0 + size + 1, OUTLINE);
         if (face == null) {
             g.fill(x0 + 1, y0 + 1, x0 + size - 1, y0 + size - 1, hostile ? HOSTILE_DOT : PASSIVE_DOT);

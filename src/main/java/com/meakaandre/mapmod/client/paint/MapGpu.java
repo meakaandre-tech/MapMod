@@ -62,6 +62,7 @@ final class MapGpu implements AutoCloseable {
             .withUniform("ClassA", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("ClassB", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("Shore", UniformType.COMBINED_IMAGE_SAMPLER)
+            .withUniform("Fog", UniformType.COMBINED_IMAGE_SAMPLER)
             .build())
         .withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
         .withColorTargetState(ColorTargetState.DEFAULT)
@@ -75,15 +76,17 @@ final class MapGpu implements AutoCloseable {
         .withBindGroupLayout(BindGroupLayout.builder()
             .withUniform("MapQuad", UniformType.UNIFORM_BUFFER)
             .withUniform("Src", UniformType.COMBINED_IMAGE_SAMPLER)
+            .withUniform("Src2", UniformType.COMBINED_IMAGE_SAMPLER)
+            .withUniform("Fog", UniformType.COMBINED_IMAGE_SAMPLER)
             .build())
         .withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
         .withColorTargetState(ColorTargetState.DEFAULT)
         .withCull(false)
         .build();
-    /** Bytes of the palette block: 8 class colours and 11 more vec4s. */
-    private static final int PALETTE_SIZE = (8 + 11) * 16;
-    /** Bytes of one draw's block, and the stride between them (the strictest offset alignment). */
-    private static final int BLOCK_SIZE = 5 * 16, BLOCK_STRIDE = 256;
+    /** Bytes of the palette block: 8 class colours and 12 more vec4s. */
+    private static final int PALETTE_SIZE = (8 + 12) * 16;
+    /** Bytes of one draw's block (the larger of a quad's 9 vec4s and a tile's 6), and the stride between them (the strictest offset alignment). */
+    private static final int BLOCK_SIZE = 9 * 16, BLOCK_STRIDE = 256;
     /** The shader's noise repeats every this many samples; tile origins are wrapped to it. */
     static final int NOISE_PERIOD = 2048;
     private static final String[] SAMPLERS = {"Fields", "Surface", "ClassA", "ClassB", "Shore"};
@@ -119,19 +122,49 @@ final class MapGpu implements AutoCloseable {
 
     /**
      * One tile to paint: its textures, its corners in the target's pixels, the texels at those corners, and the world
-     * position of its texel (0, 0) in samples, wrapped to {@link #NOISE_PERIOD}.
+     * position of its texel (0, 0) in samples, wrapped to {@link #NOISE_PERIOD}. On screen (MM-5) also its fog mask (null:
+     * all unexplored) and the mask's texture coordinates at the corners.
      */
-    record PaintQuad(TileTextures tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float ox, float oz) {
+    record PaintQuad(TileTextures tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float ox, float oz,
+                     @Nullable GpuTextureView mask, float m0, float n0, float m1, float n1) {
+        PaintQuad(TileTextures tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float ox, float oz) {
+            this(tex, x0, y0, x1, y1, u0, v0, u1, v1, ox, oz, null, 0, 0, 0, 0);
+        }
+
+        PaintQuad withMask(FogMasks.@Nullable Uv m) {
+            return m == null ? this : new PaintQuad(tex, x0, y0, x1, y1, u0, v0, u1, v1, ox, oz, m.view(), m.u0(), m.v0(), m.u1(), m.v1());
+        }
     }
 
     /**
      * One texture to copy: its corners in the target's pixels and its texture coordinates there (v up, see above). A
-     * null source lays plain paper.
+     * null source lays plain paper. On screen (MM-5) it can also blend a second source over it ({@code fade} of it: the
+     * cross-fade between mip levels), and carries its fog mask (null: all unexplored) with the mask's coordinates at the
+     * corners, and its world position at the corners in samples (wrapped to {@link #NOISE_PERIOD}) for the clouds.
      */
-    record TexQuad(@Nullable GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1) {
+    record TexQuad(@Nullable GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1,
+                   @Nullable GpuTextureView src2, float s0, float t0, float s1, float t1, float fade,
+                   @Nullable GpuTextureView mask, float m0, float n0, float m1, float n1,
+                   float wx0, float wz0, float wx1, float wz1) {
+        TexQuad(@Nullable GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1) {
+            this(src, x0, y0, x1, y1, u0, v0, u1, v1, null, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
         /** Paper over the whole of a target. */
         static TexQuad paper(Target t) {
             return new TexQuad(null, 0, 0, t.width, t.height, 0, 1, 1, 0);
+        }
+
+        TexQuad withFade(@Nullable GpuTextureView from, float s0, float t0, float s1, float t1, float fade) {
+            return new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, from, s0, t0, s1, t1, fade, mask, m0, n0, m1, n1, wx0, wz0, wx1, wz1);
+        }
+
+        TexQuad withMask(FogMasks.@Nullable Uv m) {
+            return m == null ? this : new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, src2, s0, t0, s1, t1, fade, m.view(), m.u0(), m.v0(), m.u1(), m.v1(), wx0, wz0, wx1, wz1);
+        }
+
+        TexQuad withWorld(float wx0, float wz0, float wx1, float wz1) {
+            return new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, src2, s0, t0, s1, t1, fade, mask, m0, n0, m1, n1, wx0, wz0, wx1, wz1);
         }
     }
 
@@ -237,7 +270,7 @@ final class MapGpu implements AutoCloseable {
         return paper == null ? Optional.empty() : colour(paper.paper());
     }
 
-    /** Paints tiles into the target with the full shader; {@code clear} as {@link #clear}; on screen with grain and vignette. */
+    /** Paints tiles into the target with the full shader; {@code clear} as {@link #clear}; on screen with the fog, grain and vignette. */
     void paint(Target t, Optional<Vector4fc> clear, List<PaintQuad> quads, PaintPalette pal, int version, boolean contours, boolean screen) {
         if (quads.isEmpty() && clear.isEmpty()) return;
         GpuDevice device = RenderSystem.getDevice();
@@ -250,8 +283,10 @@ final class MapGpu implements AutoCloseable {
         float flag = contours ? 1f : 0f, finish = screen ? 1f : 0f;
         int first = quads.isEmpty() ? 0 : write(encoder, quads.size(), (b, i) -> {
             PaintQuad q = quads.get(i);
-            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(q.ox, q.oz, 0, 0).putVec4(t.width, t.height, finish, flag);
+            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(q.ox, q.oz, 0, 0).putVec4(t.width, t.height, finish, flag)
+                .putVec4(q.m0, q.n0, q.m1, q.n1).putVec4(q.mask == null ? 0 : 1, 0, 0, 0);
         });
+        GpuTextureView none = blank();
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
         // everything that writes to a buffer happens before the pass opens: no other command may run while it is open
         GpuBufferSlice projection = projected(t.width, t.height);
@@ -263,37 +298,54 @@ final class MapGpu implements AutoCloseable {
             pass.setUniform("Projection", projection);
             pass.setUniform("MapPaint", palette);
             for (int i = 0; i < quads.size(); i++) {
-                TileTextures tex = quads.get(i).tex;
+                PaintQuad q = quads.get(i);
+                TileTextures tex = q.tex;
                 pass.setUniform("MapTile", block(first + i));
                 for (int s = 0; s < SAMPLERS.length; s++) pass.setUniform(SAMPLERS[s], tex.textures[s].getTextureView(), smooth);
+                pass.setUniform("Fog", q.mask == null ? none : q.mask, smooth);
                 pass.draw(6, 1, 0, 0);
                 draws++;
             }
         }
     }
 
-    /**
-     * Copies textures (or lays paper) into the target with linear filtering; {@code clear} as {@link #clear}. With a
-     * palette ({@code screen}) every pixel also gets its grain and the vignette.
-     */
-    void quads(Target t, Optional<Vector4fc> clear, List<TexQuad> quads, @Nullable PaintPalette screen) {
-        if (quads.isEmpty() && clear.isEmpty()) return;
-        GpuDevice device = RenderSystem.getDevice();
+    /** A 1x1 texture of zeros: bound where a quad has no second source or no fog mask (all unexplored). */
+    private GpuTextureView blank() {
         if (blank == null) {
-            blank = new DynamicTexture(() -> MapMod.ID + " map blank", new NativeImage(1, 1, false));
+            NativeImage image = new NativeImage(1, 1, false);
+            image.setPixel(0, 0, 0);
+            blank = new DynamicTexture(() -> MapMod.ID + " map blank", image);
             blank.upload();
         }
-        GpuTextureView none = blank.getTextureView();
+        return blank.getTextureView();
+    }
+
+    /**
+     * Copies textures (or lays paper) into the target with linear filtering, or nearest ({@code nearest}: a mip's
+     * child made again from it, texel for texel); {@code clear} as {@link #clear}. With a palette ({@code screen}) every
+     * pixel also gets the fog, its grain and the vignette.
+     */
+    void quads(Target t, Optional<Vector4fc> clear, List<TexQuad> quads, @Nullable PaintPalette screen, boolean nearest) {
+        if (quads.isEmpty() && clear.isEmpty()) return;
+        GpuDevice device = RenderSystem.getDevice();
+        GpuTextureView none = blank();
         CommandEncoder encoder = device.createCommandEncoder();
         float grain = screen == null ? 0 : screen.grain(), vignette = screen == null ? 0 : screen.vignette();
         int paper = screen == null ? 0 : screen.paper();
+        int fog = screen == null ? 0 : screen.fogColour();
+        float clouds = screen == null ? 0 : screen.fogClouds();
         int first = quads.isEmpty() ? 0 : write(encoder, quads.size(), (b, i) -> {
             TexQuad q = quads.get(i);
             float mode = q.src == null ? 2 : screen == null ? 0 : 1;
-            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(mode, grain, vignette, 0).putVec4(t.width, t.height, 0, 0);
+            float fade = q.src2 == null ? 0 : q.fade;
+            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(mode, grain, vignette, fade)
+                .putVec4(t.width, t.height, q.mask == null ? 0 : 1, 0);
             colour(b, paper, 0);
+            b.putVec4(q.s0, q.t0, q.s1, q.t1).putVec4(q.m0, q.n0, q.m1, q.n1).putVec4(q.wx0, q.wz0, q.wx1, q.wz1);
+            colour(b, fog, clouds);
         });
-        GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
+        GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(nearest ? FilterMode.NEAREST : FilterMode.LINEAR);
+        GpuSampler linear = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
         GpuBufferSlice projection = projected(t.width, t.height);
         CompiledRenderPipeline compiled = RenderSystem.getCompiledPipelineNullable(QUAD);
         passes++;
@@ -303,8 +355,10 @@ final class MapGpu implements AutoCloseable {
             pass.setUniform("Projection", projection);
             for (int i = 0; i < quads.size(); i++) {
                 pass.setUniform("MapQuad", block(first + i));
-                GpuTextureView src = quads.get(i).src;
-                pass.setUniform("Src", src == null ? none : src, smooth);
+                TexQuad q = quads.get(i);
+                pass.setUniform("Src", q.src == null ? none : q.src, smooth);
+                pass.setUniform("Src2", q.src2 == null ? none : q.src2, smooth);
+                pass.setUniform("Fog", q.mask == null ? none : q.mask, linear);
                 pass.draw(6, 1, 0, 0);
                 draws++;
             }
@@ -326,6 +380,7 @@ final class MapGpu implements AutoCloseable {
             b.putVec4(p.forestDarken(), p.forestStipple(), 0, 0);
             b.putVec4(p.contourInterval(), p.contourStrength(), 0, 0);
             b.putVec4(p.grain(), p.vignette(), 0, 0);
+            colour(b, p.fogColour(), p.fogClouds());
             return device.createBuffer(() -> MapMod.ID + " map palette", GpuBuffer.USAGE_UNIFORM, b.get());
         }
     }

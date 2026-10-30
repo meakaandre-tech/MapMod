@@ -20,11 +20,31 @@ final class TileIndex {
 
     private final Long2LongOpenHashMap versions = new Long2LongOpenHashMap();
     private final LongOpenHashSet[] occupied = new LongOpenHashSet[LEVELS];
+    /**
+     * MM-5: per level, the clock at which anything a cell's bakes are made from last changed (a tile and the eight
+     * whose aprons it is in), so a mip re-made from its parent's picture knows which of its quarters are out of date.
+     */
+    private final Long2LongOpenHashMap[] changed = new Long2LongOpenHashMap[LEVELS];
+    /** Counts changes; 0 is "never". */
+    private long clock;
     private final Listener listener;
 
     TileIndex(Listener listener) {
         this.listener = listener;
-        for (int k = 0; k < LEVELS; k++) occupied[k] = new LongOpenHashSet();
+        for (int k = 0; k < LEVELS; k++) {
+            occupied[k] = new LongOpenHashSet();
+            changed[k] = new Long2LongOpenHashMap();
+        }
+    }
+
+    /** The change clock now: a picture made now is up to date as of this. */
+    long clock() {
+        return clock;
+    }
+
+    /** The clock of the last change to anything the cell's bakes are made from (0 if none since the index was made). */
+    long changedAt(int level, int x, int z) {
+        return changed[level].get(key(x, z));
     }
 
     static long key(int x, int z) {
@@ -44,6 +64,12 @@ final class TileIndex {
         if (old == revision) return;
         if (old == 0) {
             for (int lv = 0; lv < LEVELS; lv++) occupied[lv].add(key(tx >> lv, tz >> lv));
+        }
+        clock++;
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int lv = 0; lv < LEVELS; lv++) changed[lv].put(key((tx + dx) >> lv, (tz + dz) >> lv), clock);
+            }
         }
         listener.changed(tx, tz);
     }

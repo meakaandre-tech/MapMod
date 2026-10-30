@@ -23,5 +23,7 @@
   "_contours": "only drawn when contours are switched on in the map (off by default); interval in blocks of height",
   "contours": { "interval": 16, "strength": 0.3 },
   "_finish": "grain: paper grain over the whole map; vignette: how much the corners of the fullscreen map darken",
-  "finish": { "grain": 0.035, "vignette": 0.18 }
+  "finish": { "grain": 0.035, "vignette": 0.18 },
+  "_fog": "the fog over unexplored land: colour (paper a shade darker by default), edge: how far, in blocks, the explored land fades into it (8-256), clouds: how strong the static cloud texture in it is, and how much it roughens the edge (0-1)",
+  "fog": { "colour": "#d8cfba", "edge": 48, "clouds": 0.6 }
 }

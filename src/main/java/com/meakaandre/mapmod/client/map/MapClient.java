@@ -61,6 +61,8 @@ public final class MapClient {
     public static final Map<String, Pin> PINS = new LinkedHashMap<>();
     /** Filter switches that are off (see {@link MapFilters}). */
     public static final Set<String> HIDDEN = new HashSet<>();
+    /** Overlay layers switched off in the fullscreen map's top bar (MM-5), kept in settings.json as {@code layers}. */
+    public static final Set<MapLayer> LAYERS_OFF = java.util.EnumSet.noneOf(MapLayer.class);
     /** Contour lines on the painted map: off by default, switched in the map screen, kept in settings.json. */
     public static boolean contours;
     /** GPU memory for the painted map's baked tiles and mips (MB), kept in settings.json as {@code cache_mb}. */
@@ -68,6 +70,27 @@ public final class MapClient {
     /** Markers seen since joining, so a new death marker can be pinned at once. */
     private static final Set<String> SEEN = new HashSet<>();
     private static boolean firstMarkers = true;
+
+    /** Told when the group's fog changes (MM-5): a region (a tile), or all of it at once. */
+    public interface FogListener {
+        void changed(long region, boolean all);
+    }
+
+    private static final List<FogListener> FOG_LISTENERS = new ArrayList<>();
+
+    /** Hears every change to {@link #FOG} from now on (the painted map's fog masks). */
+    public static void onFogChanged(FogListener l) {
+        FOG_LISTENERS.add(l);
+    }
+
+    /** All of {@link #FOG} was replaced (also by the client's own map when it loads its fog). */
+    public static void fogReplaced() {
+        for (FogListener l : FOG_LISTENERS) l.changed(0, true);
+    }
+
+    private static void fogChanged(long region) {
+        for (FogListener l : FOG_LISTENERS) l.changed(region, false);
+    }
 
     /** A pinned thing: shown on the compass with its distance. */
     public record Pin(String key, String label, int x, int y, int z, int icon, int argb) {
@@ -121,6 +144,7 @@ public final class MapClient {
         LocalMap.stop();
         mapId = null;
         FOG.clear();
+        fogReplaced();
         POIS.clear();
         markers = List.of();
         mates = List.of();
@@ -146,15 +170,24 @@ public final class MapClient {
             POIS.clear();
         }
         for (MapPayloads.FogRegion r : p.regions()) FOG.put(r.region(), r.bits());
+        if (p.replace()) fogReplaced();
+        else for (MapPayloads.FogRegion r : p.regions()) fogChanged(r.region());
     }
 
-    static void fogDelta(long[] chunks) {
+    /** Clears the fog over chunks (as the server says, or the client's own map); the regions changed are told once each. */
+    public static void fogDelta(long[] chunks) {
+        long last = Long.MIN_VALUE;
+        java.util.Set<Long> changed = new java.util.HashSet<>();
         for (long c : chunks) {
             int cx = MapGrid.keyX(c), cz = MapGrid.keyZ(c);
             long region = MapGrid.regionOfChunk(cx, cz);
             long[] bits = FOG.computeIfAbsent(region, k -> new long[MapGrid.FOG_LONGS]);
-            MapGrid.set(bits, MapGrid.fogBit(cx, cz));
+            if (MapGrid.set(bits, MapGrid.fogBit(cx, cz)) && region != last) {
+                changed.add(region);
+                last = region;
+            }
         }
+        for (long region : changed) fogChanged(region);
     }
 
     static void markers(List<MapMarker> list) {
@@ -261,9 +294,22 @@ public final class MapClient {
             if (o.has("hidden")) for (JsonElement e : o.getAsJsonArray("hidden")) HIDDEN.add(e.getAsString());
             if (o.has("contours")) contours = o.get("contours").getAsBoolean();
             if (o.has("cache_mb")) cacheMB = Math.clamp(o.get("cache_mb").getAsInt(), 16, 4096);
+            if (o.has("layers") && o.get("layers").isJsonObject()) {
+                JsonObject layers = o.getAsJsonObject("layers");
+                for (MapLayer l : MapLayer.values()) {
+                    JsonElement e = layers.get(l.id);
+                    if (e != null && e.isJsonPrimitive() && e.getAsJsonPrimitive().isBoolean() && !e.getAsBoolean()) LAYERS_OFF.add(l);
+                }
+            }
         } catch (IOException | RuntimeException e) {
             MapMod.LOGGER.warn("unreadable map file {}", file, e);
         }
+    }
+
+    /** Switches an overlay layer on or off and saves the setting. */
+    public static void toggleLayer(MapLayer layer) {
+        if (!LAYERS_OFF.remove(layer)) LAYERS_OFF.add(layer);
+        saveSettings();
     }
 
     /** Switches contour lines on or off and saves the setting. */
@@ -284,6 +330,9 @@ public final class MapClient {
         o.add("hidden", hidden);
         o.addProperty("contours", contours);
         o.addProperty("cache_mb", cacheMB);
+        JsonObject layers = new JsonObject();
+        for (MapLayer l : MapLayer.values()) layers.addProperty(l.id, l.on());
+        o.add("layers", layers);
         try {
             Path file = settingsFile();
             Files.createDirectories(file.getParent());

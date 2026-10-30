@@ -145,13 +145,24 @@ public final class MapDraw {
         MapIcons.centred(g, kind.glyph(poi.sub()), x, y, kind.colour(poi.sub()));
     }
 
+    /** A marker (a waypoint): its icon in its colour over a soft shadow. */
     public static void marker(GuiGraphicsExtractor g, MapMarker m, int x, int y) {
-        MapIcons.centred(g, m.death ? MapGlyphs.SKULL : m.icon, x, y, markerColour(m));
+        int icon = m.death ? MapGlyphs.SKULL : m.icon;
+        MapIcons.shadow(g, icon, x, y);
+        MapIcons.centred(g, icon, x, y, markerColour(m));
     }
 
-    /** Another player of the group: an arrow turned the way they face. */
+    /** A pin over a pinned POI, over a soft shadow. */
+    public static void pin(GuiGraphicsExtractor g, int x, int y) {
+        MapIcons.shadow(g, MapGlyphs.PIN, x, y);
+        MapIcons.centred(g, MapGlyphs.PIN, x, y, 0xFFFFA530);
+    }
+
+    /** Another player of the group: an arrow turned the way they face, with a soft outline. */
     public static void mate(GuiGraphicsExtractor g, MapPayloads.Mate mate, float x, float y) {
-        MapIcons.turned(g, MapGlyphs.ARROW, x, y, (float) Math.toRadians(mate.yaw() + 180), MATE);
+        float turn = (float) Math.toRadians(mate.yaw() + 180);
+        MapIcons.softOutline(g, MapGlyphs.ARROW, x, y, turn);
+        MapIcons.turned(g, MapGlyphs.ARROW, x, y, turn, MATE);
     }
 
     /** A moving thing: its glyph, dimmer where it is only where it would be. */
@@ -166,11 +177,13 @@ public final class MapDraw {
         return kind == null ? Component.literal(m.kind()) : kind.label();
     }
 
-    /** The player themself. */
+    /** The player themself: an arrow turned the way they face, with a soft outline. */
     public static void self(GuiGraphicsExtractor g, float x, float y) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
-        MapIcons.turned(g, MapGlyphs.ARROW, x, y, (float) Math.toRadians(mc.player.getYRot() + 180), PLAYER);
+        float turn = (float) Math.toRadians(mc.player.getYRot() + 180);
+        MapIcons.softOutline(g, MapGlyphs.ARROW, x, y, turn);
+        MapIcons.turned(g, MapGlyphs.ARROW, x, y, turn, PLAYER);
     }
 
     public static String distance(double blocks) {

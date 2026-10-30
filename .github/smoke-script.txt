@@ -4,6 +4,8 @@ cmd mapmod worldtest check bigworld
 wait 120 SELFTEST client bigworld written
 cmd mapmod worldtest check bake
 wait 300 SELFTEST client done bake
+cmd mapmod worldtest check fog
+wait 300 SELFTEST client done fog
 cmd time set noon
 cmd weather clear
 cmd difficulty easy
@@ -31,7 +33,7 @@ cmd mapmod worldtest open 0.6
 cmd mapmod worldtest check settle live
 wait 300 SELFTEST client settled live
 shot
-cmd mapmod worldtest open 8
+cmd mapmod worldtest open 8 edge
 cmd mapmod worldtest check settle close
 wait 300 SELFTEST client settled close
 shot
@@ -63,6 +65,8 @@ sleep 5
 move 780 362
 sleep 2
 shot
+cmd mapmod worldtest check overlays
+wait 60 SELFTEST client done overlays
 cmd mapmod worldtest edit
 sleep 2
 shot
@@ -72,6 +76,11 @@ cmd mapmod worldtest check all
 wait 30 SELFTEST client done all
 cmd mapmod worldtest stamp
 wait 40 SELFTEST smoke stamp done.
+cmd mapmod worldtest check dimension
+cmd execute in minecraft:the_nether run tp @p 0 100 0
+wait 90 SELFTEST client done dimension
+cmd execute in minecraft:overworld run tp @p ~ ~ ~
+sleep 5
 cmd mapmod worldtest lock
 sleep 3
 cmd mapmod worldtest check locked

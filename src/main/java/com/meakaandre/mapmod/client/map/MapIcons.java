@@ -62,6 +62,22 @@ public final class MapIcons {
         draw(g, icon, x - SIZE / 2, y - SIZE / 2, argb);
     }
 
+    /** A shadow for an upright glyph centred on x, y: its own shape a pixel down and right, faint (MM-5). */
+    public static void shadow(GuiGraphicsExtractor g, int icon, int x, int y) {
+        centred(g, icon, x + 1, y + 1, 0x70000000);
+    }
+
+    /**
+     * A soft outline round a turned glyph (MM-5): its own shape eight times round it, a pixel and a half out and faint,
+     * so it reads on any ground and still stays pixel-sharp.
+     */
+    public static void softOutline(GuiGraphicsExtractor g, int icon, float x, float y, float radians) {
+        for (int i = 0; i < 8; i++) {
+            double a = i * Math.PI / 4;
+            turned(g, icon, x + 1.5f * (float) Math.cos(a), y + 1.5f * (float) Math.sin(a), radians, 0x38101418);
+        }
+    }
+
     /** Draws a glyph centred on x, y, turned by an angle (radians, clockwise on screen). */
     public static void turned(GuiGraphicsExtractor g, int icon, float x, float y, float radians, int argb) {
         g.pose().pushMatrix();
