@@ -269,7 +269,7 @@ public final class PaintMap {
     public static String lastFrame() {
         MapPainter p = painter;
         if (p == null) return "none";
-        return (p.lastLive ? "live" : "level " + p.lastLevel) + ", " + p.lastQuads + " quads, " + p.lastPainted + " painted, "
+        return (p.lastLive ? "live" : "level " + p.lastLevel) + (p.lastReused ? " (picture shown again)" : "") + ", " + p.lastQuads + " quads, " + p.lastPainted + " painted, "
             + p.lastPasses() + " passes, " + p.lastDraws() + " draws";
     }
 
@@ -277,6 +277,11 @@ public final class PaintMap {
     public static int diskEvents() {
         PaintTiles t = tiles;
         return t == null ? 0 : t.diskEvents;
+    }
+
+    /** Shows an unchanged picture again instead of painting it (on by default; the selftests time a redraw without). */
+    public static void reusePictures(boolean on) {
+        MapPainter.reuse = on;
     }
 
     /** The GPU timer (the selftests switch it off to see the fallback). */
@@ -332,7 +337,7 @@ public final class PaintMap {
             BakeCache c = p.cache;
             lines.add(String.format(Locale.ROOT, "  baked tiles %d, mips %d, cache %.1f / %d MB, evicted %d; tiles known %d",
                 c.count(0), c.mips(), c.bytes() / 1048576.0, c.budget() / 1048576, c.evictions, p.index.size()));
-            lines.add("  last frame: " + lastFrame() + ", textures " + p.textures());
+            lines.add("  last frame: " + lastFrame() + ", textures " + p.textures() + "; pictures painted " + p.painted + ", shown again " + p.reused);
             long n = p.prepared();
             lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d",
                 n, n == 0 ? 0 : p.prepNanos.get() / 1e6 / n, p.prepMaxNanos.get() / 1e6, p.waiting()));

@@ -54,6 +54,19 @@ final class MapPainter implements AutoCloseable {
     private record Prepared(int generation, long key, TilePrep.Result result) {
     }
 
+    /** What a painted picture showed: if a frame would show the same, the picture is shown again. */
+    private record Shown(Frame frame, int palVersion, boolean contours, boolean terrain, long evictions) {
+    }
+
+    private @Nullable Shown lastShownKey;
+    /** True if the last painted picture was painted with nothing left to do. */
+    private boolean reusable;
+    /** Frames painted, and frames that showed the last picture again. */
+    long painted, reused;
+    boolean lastReused;
+    /** Whether an unchanged picture is shown again (the selftests switch it off to time a redraw). */
+    static boolean reuse = true;
+
     final TileIndex index;
     final BakeCache cache;
     private final MapGpu gpu = new MapGpu();
@@ -166,6 +179,21 @@ final class MapPainter implements AutoCloseable {
         lastUploads = (int) (uploads - up0);
         lastBakes = (int) (cache.leafBakes - bakes0);
         lastMips = (int) (cache.mipBuilds - mips0);
+
+        // nothing to do, nothing done, the same view as a picture painted when there was nothing to do either: it is
+        // the picture this frame would paint (icons go on top of it on screen), so it is shown again
+        Shown shown = new Shown(f, palVersion, contours, terrain, cache.evictions);
+        boolean still = ops == 0 && lastWork == 0 && preparing.isEmpty();
+        MapGpu.Target last = pictures[pictureSlot];
+        if (reuse && still && reusable && shown.equals(lastShownKey) && last != null) {
+            reused++;
+            lastReused = true;
+            return last;
+        }
+        lastReused = false;
+        painted++;
+        reusable = still;
+        lastShownKey = shown;
 
         pictureSlot = (pictureSlot + 1) % pictures.length;
         MapGpu.Target picture = pictures[pictureSlot] = sized(pictures[pictureSlot], "map picture " + pictureSlot, f.width(), f.height());
@@ -409,6 +437,8 @@ final class MapPainter implements AutoCloseable {
     /** The screen closed: the pictures, the tiles' textures and their data go; the baked tiles stay. */
     void release() {
         closeTextures();
+        lastShownKey = null;
+        reusable = false;
         for (int i = 0; i < pictures.length; i++) {
             if (pictures[i] != null) pictures[i].close();
             pictures[i] = null;

@@ -81,6 +81,7 @@ public final class MapClientTests {
     private static boolean farPending;
     private static int farTicks;
     private static String farGpu = "";
+    private static double farRedraw = -1;
     /** Ticks the open map must have had nothing to do before it counts as settled, and ticks to give up after. */
     private static final int SETTLE = 20, SETTLE_GIVE_UP = 3600;
     /** MM-2's render time at far zoom (us/frame, CPU, averaged): MM-4 must not be slower once settled. */
@@ -110,17 +111,26 @@ public final class MapClientTests {
                 if (farPending) farTicks = 1;
             }
         }
-        // after settling at far zoom: two seconds timing the GPU, then two with the timer asleep, so the last second's
-        // CPU numbers are settled frames without its queries
+        // after settling at far zoom, two seconds each: redrawing every frame with the GPU timed, redrawing with the
+        // timer asleep (a redraw's CPU time), then as in play, the picture shown again while nothing changes
         if (farTicks > 0) {
             farTicks++;
-            if (farTicks == 2) PaintMap.timer().wake();
+            if (farTicks == 2) {
+                PaintMap.reusePictures(false);
+                PaintMap.timer().wake();
+            }
             if (farTicks == 42) {
                 farGpu = Capture.statsLines().stream().filter(l -> l.contains("GPU ")).findFirst().orElse("no GPU line");
-                MapMod.LOGGER.info("map stats far, GPU timed: {}", farGpu);
+                MapMod.LOGGER.info("map stats far, redrawn, GPU timed: {}", farGpu);
                 PaintMap.timer().sleep();
             }
             if (farTicks == 82) {
+                farRedraw = renderMicros(Capture.statsLines());
+                MapMod.LOGGER.info("map stats far, redrawn, timer asleep: render {} us/frame avg", farRedraw);
+                PaintMap.timer().sleep();
+                PaintMap.reusePictures(true);
+            }
+            if (farTicks == 122) {
                 farTicks = 0;
                 farPending = false;
                 far();
@@ -137,7 +147,8 @@ public final class MapClientTests {
         expect("far zoom draws a large explored area from the mip pyramid as a few dozen quads", frame.startsWith("level ") && !frame.startsWith("level 0")
             && quads(frame) > 0 && quads(frame) <= 64, frame);
         expect(String.format(Locale.ROOT, "far zoom, settled, renders in no more CPU time than MM-2 (%.0f us/frame)", MM2_MICROS),
-            micros >= 0 && micros <= MM2_MICROS, micros + " us/frame avg; with the GPU timer on:" + farGpu.substring(Math.max(0, farGpu.indexOf(" render") )));
+            micros >= 0 && micros <= MM2_MICROS, micros + " us/frame avg; redrawing every frame " + farRedraw + " us; redrawing with the GPU timed:"
+                + farGpu.substring(Math.max(0, farGpu.indexOf(" render"))));
         expect("tiles read from disk fire the map's disk-load event", PaintMap.diskEvents() > 0, PaintMap.diskEvents() + " events");
         expect("the cache keeps within its budget, evicting as it goes", PaintMap.cacheBytes() <= (long) MapClient.cacheMB * 1048576,
             PaintMap.cacheBytes() / 1048576 + " MB of " + MapClient.cacheMB + "; " + PaintMap.bakedTiles() + " tiles, " + PaintMap.mips() + " mips");
