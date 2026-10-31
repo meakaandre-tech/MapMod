@@ -8,7 +8,7 @@
 layout(std140) uniform MapTile {
     vec4 Rect;      // x0, y0, x1, y1
     vec4 Samples;   // u0, v0, u1, v1: texel coordinates of the tile's textures at those corners
-    vec4 Origin;    // xy: world position of texel (0, 0), in samples, wrapped to the noise period
+    vec4 Origin;    // xy: world position of texel (0, 0) in noise units (4 blocks), wrapped to the noise period  z: noise units a texel
     vec4 View;      // xy: size of the painted picture (pixels)  z: 1 on screen  w: 1 with contours on
     vec4 MaskUv;    // the fog mask's u0, v0, u1, v1 at the corners (MM-5)
     vec4 Mask;      // x: 1 with a fog mask

@@ -3,24 +3,26 @@
 
 // The painted map (MM-3; MM-4 bakes it once per tile and adds grain and the vignette in a pass of their own). Relief: smooth height (Catmull-Rom, unwarped), a hillshade from the northwest, darker lowlands
 // and paler peaks, snow above a height, optional contour lines. Everything else is read at a position warped by
-// low-frequency noise in world space (seamless across tiles, still when panning or zooming) with cubic B-spline weights:
-// blurred class weights blended into soft, wandering borders; the biome tint; forests darkened by canopy with a soft
-// brush; water from a signed distance to the shore (a smooth coast and ribbon rivers), deep to shallow with a pale band
-// along the shore. Unexplored land is paper. There is no
+// low-frequency noise in world space (seamless across tiles, still when panning or zooming) with cubic B-spline weights.
+// MM-8, the land's colour: the real block colours, brushed into patches on the CPU (TilePrep's Kuwahara filter), read
+// with B-spline weights and split in two where the 4x4 texels round a pixel hold two colours: each side's mean, blended
+// across a soft, wandering border where their weights cross, so flat land is smooth, borders between blocks are crisp,
+// and no sample's square shows. Forests are darkened by canopy with a soft brush; water from a signed distance to the
+// shore (a smooth coast and ribbon rivers), deep to shallow with a pale band along the shore, tinted by the water's own
+// colour. Unexplored land is paper. There is no
 // nearest-neighbour look-up anywhere, so no sample's square or block edge ever shows. Painted live on screen, the paper
 // grain and the vignette go on from the screen position (as map_quad does); baked, they are left out. On screen the fog
 // over unexplored land goes on too (MM-5), from the tile's fog mask and the same static clouds as map_quad's; baked,
 // unexplored samples only fade softly to paper (the fog, not the bake, decides what is hidden, so exploring bakes nothing).
 
 uniform sampler2D Fields;   // r, g: height + 32768 (high, low byte)   b: water depth   a: explored
-uniform sampler2D Surface;  // rgb: biome tint   a: canopy
-uniform sampler2D ClassA;   // blurred weights of classes 0-3
-uniform sampler2D ClassB;   // blurred weights of classes 4-7
-uniform sampler2D Shore;    // r: signed distance to the shore in samples, 128 + 8 d (water positive)
+uniform sampler2D Surface;  // rgb: the land's painted colour (MM-8)   a: canopy
+uniform sampler2D Effects;  // r: share of forest floor   g: share of snow (MM-8)
+uniform sampler2D Water;    // rgb: the water's own colour   a: 1 on water (MM-8)
+uniform sampler2D Shore;    // r: signed distance to the shore in samples, 128 + 4 d (water positive)
 uniform sampler2D Fog;      // r: explored, 0 to 1 (MM-5; on screen only)
 
 layout(std140) uniform MapPaint {
-    vec4 ClassColour[8];    // rgb, a: how much the biome tint tints it
     vec4 WaterShallow;      // rgb, a: depth (blocks) at which water is fully deep
     vec4 WaterDeep;         // rgb, a: distance from the shore (blocks) at which water is fully deep
     vec4 Paper;             // rgb
@@ -33,12 +35,13 @@ layout(std140) uniform MapPaint {
     vec4 Contour;           // x: interval (blocks)  y: strength
     vec4 Finish;            // x: paper grain  y: vignette
     vec4 FogColour;         // rgb, a: cloud strength
+    vec4 Colour;            // x: how much the water's own colour tints it  y: blocks a sample (MM-8)
 };
 
 layout(std140) uniform MapTile {
     vec4 Rect;
     vec4 Samples;
-    vec4 Origin;            // xy: world position of texel (0, 0), in samples, wrapped to PERIOD
+    vec4 Origin;            // xy: world position of texel (0, 0) in noise units (4 blocks), wrapped to PERIOD  z: noise units a texel
     vec4 View;              // xy: picture size (pixels)  z: 1 on screen (fog, grain and vignette)  w: 1 with contours on
     vec4 MaskUv;
     vec4 Mask;              // x: 1 with a fog mask
@@ -49,8 +52,9 @@ layout(location = 1) in vec2 maskUv;
 
 layout(location = 0) out vec4 fragColor;
 
-// world-space noise repeats every PERIOD samples (8192 blocks), so tile origins can be wrapped on the CPU and the
-// numbers here stay small at any distance from spawn
+// world-space noise is laid out in noise units of 4 blocks (MM-8: no longer a sample, which is 2 blocks now, so it looks
+// as before) and repeats every PERIOD of them (8192 blocks), so tile origins can be wrapped on the CPU and the numbers
+// here stay small at any distance from spawn
 const float PERIOD = 2048.0;
 // how much the hillshade's slope is sharpened against the smoothed slope (MM-7)
 const float SHARPEN = 0.6;
@@ -74,7 +78,7 @@ float vnoise(vec2 p, float n) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// the warp at a world position (samples), in samples: two octaves, 64 and 16 blocks across
+// the warp at a world position (noise units), in noise units: two octaves, 64 and 16 blocks across
 vec2 warp(vec2 ws) {
     vec2 big = vec2(vnoise(ws / 16.0, PERIOD / 16.0), vnoise(ws / 16.0 + vec2(53.0, 17.0), PERIOD / 16.0));
     vec2 small = vec2(vnoise(ws / 4.0 + vec2(7.0, 91.0), PERIOD / 4.0), vnoise(ws / 4.0 + vec2(29.0, 3.0), PERIOD / 4.0));
@@ -111,7 +115,7 @@ vec3 finish(vec3 c) {
     return c * (1.0 - Finish.y * smoothstep(0.45, 1.0, r));
 }
 
-// static clouds in world space (samples), 0 to 1: the same as map_quad's
+// static clouds in world space (noise units), 0 to 1: the same as map_quad's
 float clouds(vec2 ws) {
     float spp = max(length(fwidth(ws)), 1e-4);
     float c = 0.5 * mix(vnoise(ws / 64.0, PERIOD / 64.0), 0.5, smoothstep(16.0, 48.0, spp));
@@ -129,12 +133,9 @@ vec3 fog(vec3 c, float mask, vec2 ws) {
     return mix(f, c, shown);
 }
 
-vec3 classColour(int c, vec3 biome) {
-    return ClassColour[c].rgb * mix(vec3(1.0), biome, ClassColour[c].a);
-}
-
 void main() {
     ivec2 lim = textureSize(Fields, 0) - 1;
+    float bps = Colour.y;
 
     // relief and the explored mask, where the sample is
     vec2 base = floor(samplePos);
@@ -157,33 +158,42 @@ void main() {
     }
 
     // everything else at the warped position
-    vec2 ws = Origin.xy + samplePos;
-    vec2 wp = samplePos + warp(ws);
+    vec2 ws = Origin.xy + samplePos * Origin.z;
+    vec2 wp = samplePos + warp(ws) / Origin.z;
     vec2 wbase = floor(wp);
     vec2 wt = wp - wbase;
     ivec2 wb = ivec2(wbase);
     vec4 wx = bspline(wt.x), wz = bspline(wt.y);
-    vec4 wA = vec4(0.0), wB = vec4(0.0);
-    vec3 tint = vec3(0.0);
-    float canopy = 0.0, landW = 0.0, wetW = 0.0, depth = 0.0, sdf = 0.0;
+    vec3 land;
+    vec3 cols[16];
+    float wts[16];
+    vec3 mean = vec3(0.0), wtint = vec3(0.0);
+    vec2 fx = vec2(0.0);
+    float canopy = 0.0, landW = 0.0, wetW = 0.0, depth = 0.0, sdf = 0.0, tintW = 0.0;
     for (int j = 0; j < 4; j++) {
         for (int i = 0; i < 4; i++) {
+            int k = i + j * 4;
             ivec2 p = clamp(wb + ivec2(i - 1, j - 1), ivec2(0), lim);
             float m = wx[i] * wz[j];
             vec4 f = texelFetch(Fields, p, 0);
             vec4 s = texelFetch(Surface, p, 0);
-            wA += m * texelFetch(ClassA, p, 0);
-            wB += m * texelFetch(ClassB, p, 0);
-            sdf += m * (texelFetch(Shore, p, 0).r * 255.0 - 128.0) / 8.0;
+            sdf += m * (texelFetch(Shore, p, 0).r * 255.0 - 128.0) / 4.0;
             float e = f.a > 0.5 ? m : 0.0;
             float d = floor(f.b * 255.0 + 0.5);
+            cols[k] = s.rgb;
+            wts[k] = 0.0;
             if (d > 0.0) {
                 wetW += e;
                 depth += e * d;
+                vec4 wc = texelFetch(Water, p, 0);
+                wtint += e * wc.rgb;
+                tintW += e * wc.a;
             } else {
+                wts[k] = e;
                 landW += e;
-                tint += e * s.rgb;
+                mean += e * s.rgb;
                 canopy += e * s.a;
+                fx += e * texelFetch(Effects, p, 0).rg;
             }
         }
     }
@@ -191,20 +201,56 @@ void main() {
     // unexplored samples fade softly to paper: the fog's mask, not this, decides what is shown
     float shown = smoothstep(0.5, 0.9, explored);
 
-    // land: the two strongest classes, blended across a soft border where their weights cross
-    float w[8] = float[8](wA.r, wA.g, wA.b, wA.a, wB.r, wB.g, wB.b, wB.a);
-    int b1 = 0;
-    for (int c = 1; c < 8; c++) if (w[c] > w[b1]) b1 = c;
-    int b2 = b1 == 0 ? 1 : 0;
-    for (int c = 0; c < 8; c++) if (c != b1 && w[c] > w[b2]) b2 = c;
-    float diff = w[b1] - w[b2];
-    float soft = max(Edges.x, 1.5 * fwidth(diff));
-    float tb = 0.5 + 0.5 * smoothstep(0.0, soft, diff);
-    vec3 biome = landW > 0.0 ? tint / landW : vec3(1.0);
-    biome /= max(max(biome.r, biome.g), max(biome.b, 0.001));
-    vec3 land = mix(classColour(b2, biome), classColour(b1, biome), tb);
+    // land: the colours round the pixel, smooth where they agree; where they hold two, each side's mean, blended across
+    // a soft border where their weights cross. The split is along the colours' main axis (the farthest from the mean,
+    // refined twice against their spread), so it follows a border between any two colours, not only light and dark
+    // (no branch round this: fwidth below needs every pixel of the quad to run it)
+    {
+        mean /= max(landW, 1e-6);
+        vec3 axis = vec3(0.0);
+        float far = -1.0;
+        for (int k = 0; k < 16; k++) {
+            vec3 dv = cols[k] - mean;
+            float q = wts[k] > 0.0 ? dot(dv, dv) : -1.0;
+            if (q > far) {
+                far = q;
+                axis = dv;
+            }
+        }
+        for (int it = 0; it < 2; it++) {
+            vec3 next = vec3(0.0);
+            for (int k = 0; k < 16; k++) {
+                vec3 dv = cols[k] - mean;
+                next += wts[k] * dot(dv, axis) * dv;
+            }
+            axis = dot(next, next) > 1e-12 ? next : axis;
+        }
+        vec3 ca = vec3(0.0), cb = vec3(0.0);
+        float wa = 0.0, wb2 = 0.0;
+        for (int k = 0; k < 16; k++) {
+            if (dot(cols[k] - mean, axis) > 0.0) {
+                ca += wts[k] * cols[k];
+                wa += wts[k];
+            } else {
+                cb += wts[k] * cols[k];
+                wb2 += wts[k];
+            }
+        }
+        ca = wa > 0.0 ? ca / wa : mean;
+        cb = wb2 > 0.0 ? cb / wb2 : mean;
+        float share = wa / max(wa + wb2, 1e-6);
+        float soft = max(Edges.x, 1.5 * fwidth(share));
+        vec3 crisp = mix(cb, ca, smoothstep(0.5 - soft, 0.5 + soft, share));
+        // two colours only where they truly differ: a gentle gradient (a biome's tint) stays smooth
+        float split = smoothstep(0.03, 0.10, length(ca - cb));
+        land = mix(mean, crisp, split);
+    }
+    if (landW <= 0.0) land = vec3(1.0);
     land *= mix(HeightTint.z, HeightTint.w, smoothstep(HeightTint.x, HeightTint.y, h));
     land = mix(land, SnowColour.rgb, smoothstep(Params.y - Params.z, Params.y + Params.z, h));
+    vec2 effect = landW > 0.0 ? fx / landW : vec2(0.0);
+    // snow keeps its brightness
+    land = mix(land, max(land, SnowColour.rgb * 0.96), 0.5 * effect.y);
 
     // forests: darker under canopy, with a soft brush in world space that fades out before it would alias
     float cov = landW > 0.0 ? canopy / landW : 0.0;
@@ -212,14 +258,14 @@ void main() {
     float brush = (vnoise(ws / 2.0 + vec2(11.0, 5.0), PERIOD / 2.0) - 0.5) * (1.0 - smoothstep(0.3, 0.9, spp))
         + 0.6 * (vnoise(ws + vec2(3.0, 41.0), PERIOD) - 0.5) * (1.0 - smoothstep(0.15, 0.45, spp));
     land *= 1.0 - Forest.x * cov;
-    land *= 1.0 + Forest.y * cov * brush * 2.0;
+    land *= 1.0 + Forest.y * max(cov, effect.x) * brush * 2.0;
 
-    // hillshade: normals from the slope (a sample is 4 blocks), lit from the northwest. MM-7: the slope is sharpened
-    // against its B-spline-smoothed self (an unsharp mask on the height's gradient), so ridges and cliffs read crisp
-    // without any sample's square showing
+    // hillshade: normals from the slope (a sample is Colour.y blocks), lit from the northwest. MM-7: the slope is
+    // sharpened against its B-spline-smoothed self (an unsharp mask on the height's gradient), so ridges and cliffs read
+    // crisp without any sample's square showing
     dhdx += SHARPEN * (dhdx - smoothX);
     dhdz += SHARPEN * (dhdz - smoothZ);
-    vec3 n = normalize(vec3(-dhdx / 4.0 * Params.w, -dhdz / 4.0 * Params.w, 1.0));
+    vec3 n = normalize(vec3(-dhdx / bps * Params.w, -dhdz / bps * Params.w, 1.0));
     vec3 light = normalize(vec3(-1.0, -1.0, 1.4));
     float shade = clamp(dot(n, light) / light.z, 0.0, 1.6);
     land *= mix(1.0, shade, Params.x);
@@ -233,16 +279,23 @@ void main() {
         land *= 1.0 - Contour.y * line;
     }
 
-    // water: deep to shallow by depth and distance from the shore, a pale band along it, the coast where the distance
-    // field crosses zero
-    float dist = sdf * 4.0;
+    // water: deep to shallow by depth and distance from the shore, tinted by the water's own colour, a pale band along
+    // the shore, the coast where the distance field crosses zero
+    float dist = sdf * bps;
     float avgDepth = wetW > 0.0 ? depth / wetW : 0.0;
     float deep = clamp(0.5 * avgDepth / WaterShallow.a + 0.5 * max(dist, 0.0) / WaterDeep.a, 0.0, 1.0);
     vec3 sea = mix(WaterShallow.rgb, WaterDeep.rgb, smoothstep(0.0, 1.0, deep));
+    if (tintW > 0.0) {
+        vec3 own = wtint / tintW;
+        float lum = dot(own, vec3(0.299, 0.587, 0.114));
+        vec3 hue = lum > 0.001 ? own / lum : vec3(1.0);
+        float seaLum = dot(sea, vec3(0.299, 0.587, 0.114));
+        sea = mix(sea, clamp(hue * seaLum, 0.0, 1.0), Colour.x);
+    }
     float band = 1.0 - smoothstep(0.0, max(ShoreColour.a, 0.01), dist);
     sea = mix(sea, ShoreColour.rgb, 0.8 * band);
-    float wa = max(fwidth(sdf), 0.0001);
-    float water = smoothstep(-wa, wa, sdf);
+    float wa2 = max(fwidth(sdf), 0.0001);
+    float water = smoothstep(-wa2, wa2, sdf);
 
     vec3 colour = mix(land, sea, water);
     vec3 c = mix(Paper.rgb, colour, shown);

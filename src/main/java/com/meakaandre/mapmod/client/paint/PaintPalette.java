@@ -19,7 +19,10 @@ import java.util.Optional;
 
 /**
  * The painted map's colours, from {@code assets/mapmod/map_palette.json} (resource packs can replace it; F3+T reloads
- * it): one colour and tint strength per surface class, water by depth and distance from the shore with a pale shore
+ * it). MM-8: the land is painted in its real block colours ({@code SurfaceTile.colour}), pulled toward a muted painted
+ * palette ({@code colour.saturation}, {@code colour.value}) and brushed into patches ({@code colour.brush_size}); a
+ * surface class's colour, when the palette sets one ({@code classes.<id>.colour}, none by default), overrides the real
+ * colour of that class's ground, tinted by the biome as much as its {@code tint} says. Then water by depth and distance from the shore with a pale shore
  * band, the paper of unexplored land, the height tint and the snow line, the hillshade's share, how soft and wavy class
  * borders are, the forests' darkening and brush, contour lines, the paper grain and vignette, and the fog over unexplored
  * land (MM-5: its colour, how wide its edge fades, and how strong its clouds are). Each value that is
@@ -31,15 +34,21 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
                            float snowBlend, int snow, float hillshade, float deepDist, int shore, float shoreWidth,
                            float edgeSoftness, float edgeWarp, float forestDarken, float forestStipple,
                            float contourInterval, float contourStrength, float grain, float vignette,
-                           int fogColour, float fogEdge, float fogClouds) {
+                           int fogColour, float fogEdge, float fogClouds,
+                           float colourSaturation, float colourValue, float brushSize, float waterTint) {
+    /** A class colour that is not overridden. */
+    public static final int NONE = -1;
+    /** The mid tone {@code colour.value} pulls brightness toward. */
+    static final float MID = 0.62f;
     public static final Identifier FILE = MapMod.id("map_palette.json");
     /** The built-in palette: the same values as the mod's own map_palette.json. */
     public static final PaintPalette DEFAULT = new PaintPalette(
-        new int[]{0xAAB38E, 0x879471, 0xDCCB9E, 0x9C978D, 0xECEEEC, 0x93805F, 0xBCD3DE, 0xC8642C},
+        new int[]{NONE, NONE, NONE, NONE, NONE, NONE, NONE, NONE},
         new float[]{0.4f, 0.4f, 0, 0, 0, 0.15f, 0, 0},
         0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.5f,
-        40, 0xB0CCD0, 3, 0.12f, 5, 0.28f, 0.18f, 16, 0.3f, 0.035f, 0.18f,
-        0xD8CFBA, 48, 0.6f);
+        40, 0xB0CCD0, 3, 0.12f, 5, 0.12f, 0.18f, 16, 0.3f, 0.035f, 0.18f,
+        0xD8CFBA, 48, 0.6f,
+        0.8f, 0.2f, 6, 0.5f);
 
     private static volatile PaintPalette current = DEFAULT;
     /** Bumped on every load and every change of the overrides, so the renderer bakes its tiles again. */
@@ -104,7 +113,7 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
         for (String n : new String[]{"water.deep_at", "water.deep_dist", "water.shore_width", "height_tint.low", "height_tint.high",
             "height_tint.low_shade", "height_tint.high_light", "snow.above", "snow.blend", "hillshade", "edges.softness", "edges.warp",
             "forest.darken", "forest.stipple", "contours.interval", "contours.strength", "finish.grain", "finish.vignette", "fog.edge",
-            "fog.clouds"}) k.put(n, false);
+            "fog.clouds", "colour.saturation", "colour.value", "colour.brush_size", "water.tint"}) k.put(n, false);
         return Collections.unmodifiableMap(k);
     }
 
@@ -160,6 +169,7 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
         JsonObject contours = object(o, "contours");
         JsonObject finish = object(o, "finish");
         JsonObject fog = object(o, "fog");
+        JsonObject colour = object(o, "colour");
         return new PaintPalette(colours, tints,
             colour(water, "shallow", d.waterShallow), colour(water, "deep", d.waterDeep), Math.max(1, number(water, "deep_at", d.deepAt)),
             colour(o, "paper", d.paper),
@@ -173,20 +183,55 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
             Math.max(1, number(contours, "interval", d.contourInterval)), Math.clamp(number(contours, "strength", d.contourStrength), 0f, 1f),
             Math.clamp(number(finish, "grain", d.grain), 0f, 0.5f), Math.clamp(number(finish, "vignette", d.vignette), 0f, 1f),
             colour(fog, "colour", d.fogColour), Math.clamp(number(fog, "edge", d.fogEdge), 8f, 256f),
-            Math.clamp(number(fog, "clouds", d.fogClouds), 0f, 1f));
+            Math.clamp(number(fog, "clouds", d.fogClouds), 0f, 1f),
+            Math.clamp(number(colour, "saturation", d.colourSaturation), 0f, 2f), Math.clamp(number(colour, "value", d.colourValue), 0f, 1f),
+            Math.clamp(number(colour, "brush_size", d.brushSize), 0f, 16f), Math.clamp(number(water, "tint", d.waterTint), 0f, 1f));
     }
 
     /**
-     * The colour the painted map gives open, flat land of one class with a stored tint, as {@code map_paint.fsh} works it
-     * out before relief, forest, water and the finish (for {@code /mapmod probe} and the selftests). 0xRRGGBB.
+     * The colour a land sample starts from (MM-8): its real colour, or, where the palette overrides its class's colour,
+     * that colour tinted by the biome as much as the class's tint says. Colours are 0xRRGGBB.
      */
-    public int landColour(int cls, int tint, int height) {
+    public int landBase(int cls, int colour, int tint) {
         int c = Math.clamp(cls, 0, SurfaceClass.COUNT - 1);
+        if (classColour[c] == NONE) return colour & 0xFFFFFF;
         float[] base = rgb(classColour[c]), t = rgb(tint);
         float k = classTint[c];
-        float[] out = new float[3];
         float max = Math.max(Math.max(t[0], t[1]), Math.max(t[2], 0.001f));
+        float[] out = new float[3];
         for (int i = 0; i < 3; i++) out[i] = base[i] * (1 + (t[i] / max - 1) * k);
+        return pack(out);
+    }
+
+    /**
+     * The light pull toward a muted painted palette (MM-8): saturation scaled by {@code colour.saturation}, brightness
+     * pulled toward a mid tone by {@code colour.value}, the hue kept. 0xRRGGBB.
+     */
+    public int paint(int rgb) {
+        float[] c = rgb(rgb);
+        float max = Math.max(c[0], Math.max(c[1], c[2])), min = Math.min(c[0], Math.min(c[1], c[2]));
+        float v = max, s = max > 0 ? (max - min) / max : 0;
+        float v2 = v + (MID - v) * colourValue, s2 = Math.clamp(s * colourSaturation, 0f, 1f);
+        float[] out = new float[3];
+        for (int i = 0; i < 3; i++) {
+            float k = max > min ? (max - c[i]) / (max - min) : 0;
+            out[i] = v2 * (1 - s2 * k);
+        }
+        return pack(out);
+    }
+
+    /** The brush's windows, in samples across (1: no brush). */
+    public int brushSamples() {
+        return Math.clamp(Math.round(brushSize / com.meakaandre.mapmod.client.capture.SurfaceTile.SPACING), 1, TilePrep.MAX_BRUSH);
+    }
+
+    /**
+     * The colour the painted map gives open, flat land of one class with a stored colour and tint, as the prep and
+     * {@code map_paint.fsh} work it out before the brush, relief, forest, water and the finish (for {@code /mapmod probe}
+     * and the selftests). 0xRRGGBB.
+     */
+    public int landColour(int cls, int colour, int tint, int height) {
+        float[] out = rgb(paint(landBase(cls, colour, tint)));
         float h = smooth(lowHeight, highHeight, height), shade = lowShade + (highLight - lowShade) * h;
         float s = smooth(snowAbove - snowBlend, snowAbove + snowBlend, height);
         float[] sn = rgb(snow);

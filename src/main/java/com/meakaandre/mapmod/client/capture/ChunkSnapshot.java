@@ -29,7 +29,7 @@ final class ChunkSnapshot {
     private final @Nullable PalettedContainer<BlockState>[] sections;
     /** y of the first air above the top block, per column (x + z * 16); {@code bottomY} for an empty column. */
     final int[] top = new int[256];
-    /** The biome at the surface of each sample (sx + sz * 4). */
+    /** The biome at the surface of each quart, the game's 4x4 biome cell (qx + qz * 4). */
     final Holder<Biome>[] biomes;
 
     @SuppressWarnings("unchecked")
@@ -72,12 +72,17 @@ final class ChunkSnapshot {
         int qx0 = s.cx << 2, qz0 = s.cz << 2;
         for (int sz = 0; sz < 4; sz++) {
             for (int sx = 0; sx < 4; sx++) {
-                // the quart (4x4x4 biome cell) just above the sample's middle column
+                // the quart (4x4x4 biome cell) just above its middle column
                 int y = heights[(sx * 4 + 2) + (sz * 4 + 2) * 16];
                 s.biomes[sx + sz * 4] = chunk.getNoiseBiome(qx0 + sx, y >> 2, qz0 + sz);
             }
         }
         return s;
+    }
+
+    /** The biome over a column (0-15), from its quart. */
+    @Nullable Holder<Biome> biome(int x, int z) {
+        return biomes[(x >> 2) + (z >> 2) * 4];
     }
 
     /** The block at a column (0-15) and a world y in the copied range (air outside it). Worker-safe. */

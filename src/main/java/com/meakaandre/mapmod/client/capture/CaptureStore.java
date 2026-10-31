@@ -38,6 +38,34 @@ final class CaptureStore {
         return (int) key;
     }
 
+    /**
+     * Deletes the tiles of an older format (MM-8: 4-block samples without colour), so they are captured again as the
+     * player explores; the map's index then never lists a file nobody can read. Worker only (it alone writes tiles).
+     * Returns how many went.
+     */
+    int dropOldFormats() {
+        if (!Files.isDirectory(dir)) return 0;
+        int n = 0;
+        try (var files = Files.list(dir)) {
+            for (Path f : (Iterable<Path>) files::iterator) {
+                String name = f.getFileName().toString();
+                if (!name.endsWith(".mmt")) continue;
+                byte[] head = new byte[7];
+                int got;
+                try (var in = Files.newInputStream(f)) {
+                    got = in.readNBytes(head, 0, head.length);
+                }
+                if (got == head.length && SurfaceTile.currentFormat(head)) continue;
+                Files.deleteIfExists(f);
+                n++;
+            }
+        } catch (IOException e) {
+            MapMod.LOGGER.warn("could not sweep old map tiles in {}: {}", dir, e.toString());
+        }
+        if (n > 0) MapMod.LOGGER.info("dropped {} map tiles of an older format in {}; they are captured again as you explore", n, dir);
+        return n;
+    }
+
     private Path file(int tx, int tz) {
         return dir.resolve(tx + "_" + tz + ".mmt");
     }

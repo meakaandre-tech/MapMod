@@ -298,24 +298,31 @@ public final class MapClientTests {
             "told by " + LocalMap.serverHasMapBy());
         expect("the terrain tile payloads are gone: the client cannot ask the server for tiles",
             !ClientPlayNetworking.canSend(new CustomPacketPayload.Type<>(MapMod.id("tile_request"))), "");
-        // a tile MM-1 wrote (its own SurfaceTile code and aircompressor 0.27), read with this release's
+        // a tile MM-1 wrote (its own SurfaceTile code and aircompressor 0.27): MM-8's format (2-block samples with colour)
+        // refuses it, so old tiles are dropped and captured again; a tile written now reads back the same
         String fixture = "";
-        boolean old = false, again = false, header = false;
+        boolean refused = false, again = false, header = false;
         try (var in = MapClientTests.class.getResourceAsStream("/mapmod_selftest/mm1-tile.mmt")) {
             byte[] bytes = in == null ? new byte[0] : in.readAllBytes();
-            SurfaceTile t = SurfaceTile.unpack(3, -2, bytes);
-            SurfaceTile want = mm1Fixture();
-            old = t.sameData(want) && t.exploredCount() == want.exploredCount();
+            try {
+                SurfaceTile.unpack(3, -2, bytes);
+            } catch (java.io.IOException e) {
+                refused = bytes.length > 0 && e.getMessage().contains("format");
+                fixture = e.getMessage();
+            }
+            SurfaceTile want = fixture();
             byte[] packed = want.pack();
             again = SurfaceTile.unpack(3, -2, packed).sameData(want);
-            // the header (magic, format, spacing, side, body length) is the same bytes as MM-1 wrote
-            header = java.util.Arrays.equals(java.util.Arrays.copyOf(bytes, 13), java.util.Arrays.copyOf(packed, 13));
-            fixture = bytes.length + " bytes from MM-1, " + packed.length + " now, " + t.exploredCount() + " explored";
+            // the header keeps MM-1's layout (magic, format, spacing, side, body length), with format 2 and 2-block samples
+            java.nio.ByteBuffer h = java.nio.ByteBuffer.wrap(packed).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            header = java.util.Arrays.equals(java.util.Arrays.copyOf(bytes, 4), java.util.Arrays.copyOf(packed, 4))
+                && h.getInt(0) == SurfaceTile.MAGIC && (h.getShort(4) & 0xFFFF) == 2 && h.get(6) == 2 && (h.getShort(7) & 0xFFFF) == 256;
+            fixture += "; " + bytes.length + " bytes from MM-1, " + packed.length + " now, " + want.exploredCount() + " explored";
         } catch (Exception e) {
             fixture = e.toString();
         }
-        expect("a tile MM-1 wrote reads back the same with this release's zstd", old, fixture);
-        expect("a tile written now reads back the same, with MM-1's header (the tile format did not change)", again && header, fixture);
+        expect("a tile MM-1 wrote (format 1, 4-block samples, no colour) is refused, so it is dropped and captured again", refused, fixture);
+        expect("a tile written now (format 2: 2-block samples with an RGB colour plane) reads back the same", again && header, fixture);
         String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT), arch = System.getProperty("os.arch", "");
         boolean nativeHere = (os.contains("linux") && (arch.equals("amd64") || arch.equals("aarch64") || arch.equals("ppc64le")))
             || (os.contains("mac") && arch.equals("aarch64"));
@@ -323,8 +330,8 @@ public final class MapClientTests {
             SurfaceTile.codec().equals(nativeHere ? "native" : "java"), SurfaceTile.codec() + " on " + os + " " + arch);
     }
 
-    /** The tile MM-1 wrote for the fixture: the same formula as the generator that wrote it. */
-    private static SurfaceTile mm1Fixture() {
+    /** A tile in this release's format, every plane filled. */
+    private static SurfaceTile fixture() {
         SurfaceTile t = new SurfaceTile(3, -2);
         for (int i = 0; i < SurfaceTile.AREA; i++) {
             int sx = i % SurfaceTile.SIDE, sz = i / SurfaceTile.SIDE;
@@ -334,6 +341,7 @@ public final class MapClientTests {
             t.surface[i] = (byte) ((sx / 16 + sz / 16 + (sx * sz % 3 == 0 ? 1 : 0)) % 8);
             t.tint[i] = (short) (0x5A60 + sx * 3 + sz * 5);
             t.canopy[i] = (byte) ((sx * 31 + sz * 17) % 256);
+            t.colour[i] = (sx * 97 + sz * 13) % 256 << 16 | (sx * 5 + sz * 71) % 256 << 8 | (sx * sz) % 256;
             if ((sx + sz) % 9 != 0) t.explored[i >>> 6] |= 1L << i;
         }
         return t;
@@ -504,6 +512,10 @@ public final class MapClientTests {
             PaintMap.cacheBytes() / 1048576 + " MB of " + MapClient.cacheMB + "; " + PaintMap.bakedTiles() + " tiles, " + PaintMap.mips() + " mips");
         expect("at most " + PaintMap.UPLOADS_PER_FRAME + " uploads, bakes and mip copies a frame", PaintMap.maxUploadsPerFrame() <= PaintMap.UPLOADS_PER_FRAME,
             PaintMap.maxUploadsPerFrame() + " at most");
+        String bakeTime = PaintMap.bakeTimeLine();
+        MapMod.LOGGER.info("SELFTEST client{}", bakeTime.replace("  bake time per tile", " bake time per tile"));
+        expect("/mapmod stats reports the bake time per tile (prep with the brush off-thread, the bake pass on the render thread)",
+            stats.stream().anyMatch(l -> l.contains("bake time per tile") && l.contains("brush")), bakeTime.trim());
         expect("/mapmod stats shows GPU time (or n/a), baked tiles, mips, cache MB and bakes per frame",
             stats.stream().anyMatch(l -> l.contains("GPU ")) && stats.stream().anyMatch(l -> l.contains("baked tiles") && l.contains("mips") && l.contains(" MB"))
                 && stats.stream().anyMatch(l -> l.contains("bakes") && l.contains("/frame")), String.join(" | ", stats));
@@ -810,15 +822,17 @@ public final class MapClientTests {
         expect("the painted map's shaders compile (paint, and quads for baked tiles, mips and the finish)", compiled == null, compiled == null ? "" : compiled);
         PaintPalette pal = PaintPalette.current();
         expect("map_palette.json is read from the resources", PaintPalette.loads() > 0 && PaintPalette.lastError().isEmpty()
-            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == 0xAAB38E && pal.snowAbove() == 190 && pal.hillshade() == 0.5f,
+            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == PaintPalette.NONE && pal.snowAbove() == 190 && pal.hillshade() == 0.5f,
             PaintPalette.loads() + " loads " + PaintPalette.lastError());
         PaintPalette broken = PaintPalette.parse(JsonParser.parseString(
             "{\"classes\": {\"2\": {\"colour\": \"#123456\"}, \"3\": {\"colour\": \"not a colour\"}}, \"snow\": {\"above\": 150}}").getAsJsonObject());
         expect("a palette keeps the built-in value for whatever it leaves out or gets wrong",
             broken.classColour()[2] == 0x123456 && broken.classColour()[3] == PaintPalette.DEFAULT.classColour()[3]
                 && broken.snowAbove() == 150 && broken.paper() == PaintPalette.DEFAULT.paper(), "");
-        expect("map_palette.json carries the MM-3 values (edges, forest, contours, finish) and MM-7's (a shore band half as strong and narrower)",
-            pal.shore() == 0xB0CCD0 && pal.shoreWidth() == 3 && pal.deepDist() == 40 && pal.edgeWarp() == 5 && pal.forestDarken() == 0.28f
+        expect("map_palette.json carries the MM-3 values (edges, forest, contours, finish), MM-7's (a shore band half as strong and narrower) and MM-8's (real colours: no class colours, the painted pull, the brush, the water's tint)",
+            pal.shore() == 0xB0CCD0 && pal.shoreWidth() == 3 && pal.deepDist() == 40 && pal.edgeWarp() == 5 && pal.forestDarken() == 0.12f
+                && pal.colourSaturation() == 0.8f && pal.colourValue() == 0.2f && pal.brushSize() == 6 && pal.waterTint() == 0.5f
+                && java.util.Arrays.stream(pal.classColour()).allMatch(c -> c == PaintPalette.NONE)
                 && pal.contourInterval() == 16 && pal.grain() == 0.035f && pal.vignette() == 0.18f, pal.toString());
         PaintPalette partial = PaintPalette.parse(JsonParser.parseString(
             "{\"water\": {\"shore\": \"#102030\", \"shore_width\": \"wide\"}, \"forest\": {\"stipple\": 0.5}, \"contours\": {\"interval\": 8},"
@@ -835,9 +849,60 @@ public final class MapClientTests {
             pal.fogColour() == 0xD8CFBA && pal.fogEdge() == 48 && pal.fogClouds() == 0.6f && fogged.fogEdge() == 96
                 && fogged.fogClouds() == d.fogClouds() && fogged.fogColour() == d.fogColour(), pal.fogColour() + " " + pal.fogEdge() + " " + pal.fogClouds());
         distanceField();
+        realColours();
         String canopy = PaintMap.canopyCheck();
         expect("canopy is prepared and uploaded as the surface texture's alpha", canopy == null, canopy == null ? "" : canopy);
         contourToggle();
+    }
+
+    /**
+     * MM-8 on the CPU: the painted pull keeps hues and mutes them, a class colour override replaces the real colour of
+     * its class only, and the brush settles speckle into patches while a border between two colours stays where it is
+     * and stays sharp.
+     */
+    private static void realColours() {
+        PaintPalette d = PaintPalette.DEFAULT;
+        int grass = d.paint(0x4E7A2C), stone = d.paint(0x7D7D7D), mycelium = d.paint(0x6F6369);
+        expect("the painted pull keeps each colour's hue and mutes it: grass stays green, stone grey, mycelium purple-grey",
+            ColourClientTests.green(grass) && ColourClientTests.grey(stone) && ColourClientTests.purpleGrey(mycelium)
+                && saturation(grass) < saturation(0x4E7A2C),
+            ColourClientTests.hex(grass) + " " + ColourClientTests.hex(stone) + " " + ColourClientTests.hex(mycelium));
+        PaintPalette over = PaintPalette.parse(JsonParser.parseString("{\"classes\": {\"3\": {\"colour\": \"#204080\", \"tint\": 0}}}").getAsJsonObject());
+        expect("a class colour override replaces the real colour of that class only",
+            over.landBase(SurfaceClass.ROCK, 0x7D7D7D, 0x91BD59) == 0x204080 && over.landBase(SurfaceClass.GRASS, 0x4E7A2C, 0x91BD59) == 0x4E7A2C
+                && d.landBase(SurfaceClass.ROCK, 0x7D7D7D, 0x91BD59) == 0x7D7D7D, "");
+        // a tile: west half grass, east half stone, a speckle of dirt in the grass every few samples
+        SurfaceTile t = new SurfaceTile(0, 0);
+        int speck = 0x866043, half = SurfaceTile.SIDE / 2;
+        for (int i = 0; i < SurfaceTile.AREA; i++) {
+            int sx = i % SurfaceTile.SIDE, sz = i / SurfaceTile.SIDE;
+            boolean west = sx < half;
+            t.surface[i] = west ? SurfaceClass.GRASS : SurfaceClass.ROCK;
+            t.colour[i] = west ? (sx % 5 == 2 && sz % 5 == 2 ? speck : 0x4E7A2C) : 0x7D7D7D;
+            t.height[i] = 70;
+            t.explored[i >>> 6] |= 1L << i;
+        }
+        SurfaceTile[][] around = new SurfaceTile[3][3];
+        around[1][1] = t;
+        long t0 = System.nanoTime();
+        TilePrep.Result r = TilePrep.prepare(around, d);
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+        int a = TilePrep.APRON, z = 100 + a;
+        int specked = r.pixel(TilePrep.SURFACE, 52 + a, 52 + a) & 0xFFFFFF, plain = r.pixel(TilePrep.SURFACE, 50 + a, 50 + a) & 0xFFFFFF;
+        int left = r.pixel(TilePrep.SURFACE, half - 1 + a, z) & 0xFFFFFF, right = r.pixel(TilePrep.SURFACE, half + a, z) & 0xFFFFFF;
+        expect("the brush settles a speckle of another block into the patch round it", ColourClientTests.diff(specked, plain) <= 24,
+            ColourClientTests.hex(specked) + " where the speckle was, " + ColourClientTests.hex(plain) + " beside it");
+        expect("the brush keeps a border between two blocks where it is and sharp: the samples either side keep their own colours",
+            ColourClientTests.diff(left, d.paint(0x4E7A2C)) <= 24 && ColourClientTests.diff(right, d.paint(0x7D7D7D)) <= 6 && ColourClientTests.diff(left, right) >= 40,
+            ColourClientTests.hex(left) + " | " + ColourClientTests.hex(right));
+        MapMod.LOGGER.info("SELFTEST client brush: a tile prepared in {} ms, the brush {} ms", ms, r.brushNanos() / 1_000_000);
+        expect("the brush is cheap enough to run once per tile off the render thread (under 150 ms here)", r.brushNanos() < 150_000_000L,
+            r.brushNanos() / 1_000_000 + " ms for the brush, " + ms + " ms for the whole prep");
+    }
+
+    private static float saturation(int c) {
+        int r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255, max = Math.max(r, Math.max(g, b)), min = Math.min(r, Math.min(g, b));
+        return max == 0 ? 0 : (max - min) / (float) max;
     }
 
     /** The shore distance field on a small grid: a straight coast, a one-sample river, open land and the cap. */

@@ -1,6 +1,7 @@
 package com.meakaandre.mapmod.selftest.client;
 
 import com.meakaandre.mapmod.MapMod;
+import com.meakaandre.mapmod.client.capture.Capture;
 import com.meakaandre.mapmod.client.capture.Probe;
 import com.meakaandre.mapmod.client.capture.SurfaceClass;
 import com.meakaandre.mapmod.client.map.LocalMap;
@@ -8,32 +9,49 @@ import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.client.map.MobRadar;
+import com.meakaandre.mapmod.client.paint.PaintMap;
+import com.mojang.blaze3d.platform.NativeImage;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.SharedConstants;
 import net.minecraft.client.Minecraft;
+import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.metadata.pack.PackFormat;
+import net.minecraft.server.packs.repository.PackRepository;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * MM-7, on the server without MapMod: the smoke run builds a flat patch at y 150 round 0,0 in a mushroom fields biome
- * (mycelium west, grass blocks in the middle, stone east) and puts the player on it. Once the client has captured it,
- * the three paint as three clearly different colours (grass green, mycelium as dirt, stone grey; real block colours are
- * MM-8's); the run then
- * replaces the mycelium with grass blocks on the server, and the client's map must follow through its own block-change
- * hook alone. A dozen mooshrooms on the patch must show as a few faces with counts, not a dozen. Then the map's top bar
- * at GUI scales 3 and 4 (the run is 1920x1080): nothing in it overlaps, and the hint fits. Logs "SELFTEST colours shot
- * ..." where the run takes a screenshot, and "SELFTEST colours done" at the end.
+ * MM-7 and MM-8, on the server without MapMod: the smoke run builds a flat patch at y 150 round 0,0 in a mushroom fields
+ * biome, five strips 16 blocks wide from west to east (mycelium, grass blocks, sand, stone, orange terracotta), and puts
+ * the player on it. Once the client has captured it, each strip is stored and painted in its block's real colour
+ * (mycelium purple-grey, grass green, sand sandy, stone grey, terracotta orange). The map is then opened on the patch at
+ * three zooms (live close up, baked at a pixel a block, far): the run takes a screenshot of each, and check-selftests.py
+ * reads the strips' colours off them, and that each is a soft area with sharp borders and no block grid, from the
+ * geometry logged here ("SELFTEST colours geometry ..."). The run then replaces the mycelium with grass blocks on the
+ * server, and the client's map must follow through its own block-change hook alone. A resource pack that turns stone's
+ * texture blue is switched on: the stone strip must turn blue on the map, and back when it is switched off. A dozen
+ * mooshrooms on the patch must show as a few faces with counts, not a dozen. Then the map's top bar at GUI scales 3 and
+ * 4 (the run is 1920x1080): nothing in it overlaps, and the hint fits. Logs "SELFTEST colours shot ..." where the run
+ * takes a screenshot, and "SELFTEST colours done" at the end.
  */
 final class ColourClientTests {
-    /** The patch's three spots (z 0): a cell wholly inside each strip. */
-    static final int MYCELIUM_X = -16, GRASS_X = 0, STONE_X = 16, Z = 0, TOP = 150;
-    /** Ticks of the client's own map before giving up on the patch being captured, and on the replacement reaching it. */
-    private static final int CAPTURE_PATIENCE = 2400, REPLACE_PATIENCE = 1200;
+    /** The patch's five strips (west to east) and the middle of each; the probes are on row Z. */
+    static final int MYCELIUM_X = -32, GRASS_X = -16, SAND_X = 0, STONE_X = 16, TERRACOTTA_X = 32, Z = 0, TOP = 150;
+    private static final int[] XS = {MYCELIUM_X, GRASS_X, SAND_X, STONE_X, TERRACOTTA_X};
+    private static final String[] NAMES = {"mycelium", "grass", "sand", "stone", "terracotta"};
+    /** Ticks of the client's own map before giving up on the patch being captured, the replacement, and the resource pack. */
+    private static final int CAPTURE_PATIENCE = 2400, REPLACE_PATIENCE = 1200, PACK_PATIENCE = 2400, SETTLE_PATIENCE = 900;
+    /** The test resource pack: stone's texture made one plain blue. */
+    static final String PACK = "mapmod_selftest_stone";
+    static final int PACK_BLUE = 0x2850C8;
 
-    private static int state, waited, pass, fail, guiBefore = 2;
-    private static int colourMycelium = -1;
-    private static boolean asked;
+    private static int state, waited, pass, fail, guiBefore = 2, idleTicks;
+    private static int colourMycelium = -1, stoneBefore = -1, stonePainted = -1, recaptures;
     private static CompletableFuture<Probe.Result[]> pending;
+    private static CompletableFuture<Void> reload;
 
     private ColourClientTests() {
     }
@@ -49,12 +67,63 @@ final class ColourClientTests {
     }
 
     private static CompletableFuture<Probe.Result[]> probeAll(Minecraft mc) {
-        CompletableFuture<Probe.Result> m = Probe.at(mc.level, MYCELIUM_X, Z), g = Probe.at(mc.level, GRASS_X, Z), s = Probe.at(mc.level, STONE_X, Z);
-        return CompletableFuture.allOf(m, g, s).thenApply(v -> new Probe.Result[]{m.join(), g.join(), s.join()});
+        @SuppressWarnings("unchecked") CompletableFuture<Probe.Result>[] f = new CompletableFuture[XS.length];
+        for (int i = 0; i < XS.length; i++) f[i] = Probe.at(mc.level, XS[i], Z);
+        return CompletableFuture.allOf(f).thenApply(v -> {
+            Probe.Result[] r = new Probe.Result[XS.length];
+            for (int i = 0; i < r.length; i++) r[i] = f[i].join();
+            return r;
+        });
     }
 
     private static boolean onPatch(Probe.Result r) {
         return r != null && r.captured() && r.storedHeight() >= TOP - 1 && r.storedHeight() <= TOP + 1;
+    }
+
+    /** Probes every few ticks; the latest finished results, else null. */
+    private static Probe.Result[] poll(Minecraft mc, int every) {
+        if (pending == null && waited % every == 0) pending = probeAll(mc);
+        if (pending == null || !pending.isDone()) return null;
+        Probe.Result[] r = pending.getNow(null);
+        pending = null;
+        return r;
+    }
+
+    /** True once the open map has had nothing to do for a second (or after a while anyway). */
+    private static boolean settled() {
+        idleTicks = PaintMap.idle() ? idleTicks + 1 : 0;
+        return idleTicks >= 20 || waited >= SETTLE_PATIENCE;
+    }
+
+    private static void open(float scale) {
+        if (Minecraft.getInstance().gui.screen() instanceof MapScreen screen) {
+            screen.centre(0, 0, scale);
+            return;
+        }
+        MapScreen screen = new MapScreen();
+        screen.centre(0, 0, scale);
+        MapClient.show(screen);
+    }
+
+    /**
+     * Where the patch is on screen, in real pixels: x of world x 0, y of world z 0, and pixels a block. The smoke run's
+     * check reads the strips off the screenshot with it.
+     */
+    private static void geometry(String shot) {
+        Minecraft mc = Minecraft.getInstance();
+        if (!(mc.gui.screen() instanceof MapScreen screen)) {
+            check("the map is open for the " + shot + " shot", false, "");
+            return;
+        }
+        MapDraw.View v = screen.view();
+        int gs = Math.max(1, mc.getWindow().getGuiScale());
+        MapMod.LOGGER.info(String.format(Locale.ROOT, "SELFTEST colours geometry %s x0 %.2f z0 %.2f ppb %.4f", shot, v.sx(0) * gs, v.sy(0) * gs, v.scale() * gs));
+    }
+
+    private static void next() {
+        state++;
+        waited = 0;
+        idleTicks = 0;
     }
 
     private static void tick(Minecraft mc) {
@@ -68,18 +137,17 @@ final class ColourClientTests {
                     finish();
                     return;
                 }
-                if (pending == null && t % 20 == 0) pending = probeAll(mc);
-                if (pending == null || !pending.isDone()) return;
-                Probe.Result[] r = pending.getNow(null);
-                pending = null;
-                if (r == null || !onPatch(r[0]) || !onPatch(r[1]) || !onPatch(r[2])) return;
+                waited = t;
+                Probe.Result[] r = poll(mc, 20);
+                if (r == null) return;
+                for (Probe.Result p : r) if (!onPatch(p)) return;
                 colours(r);
-                state = 1;
+                next();
             }
             case 1 -> {
-                // after the client's own checks have opened and closed the map, a close look at the patch
+                // after the client's own checks have opened and closed the map, a close look at the patch (painted live)
                 if (!MapClientTests.localDone) return;
-                if (++waited == 100) {
+                if (++waited == 1) {
                     // three markers of one icon and colour a block or two apart: one icon with a count
                     for (int i = 0; i < 3; i++) {
                         com.meakaandre.mapmod.map.MapMarker m = new com.meakaandre.mapmod.map.MapMarker();
@@ -91,48 +159,114 @@ final class ColourClientTests {
                         m.colour = 2;
                         LocalMap.apply(com.meakaandre.mapmod.map.MapPayloads.ADD, m);
                     }
-                    MapScreen screen = new MapScreen();
-                    screen.centre(0, 0, 3f);
-                    MapClient.show(screen);
-                }
-                if (waited == 220) {
-                    stacking();
-                    MapMod.LOGGER.info("SELFTEST colours shot patch");
-                    state = 2;
-                    waited = 0;
-                }
-            }
-            case 2 -> {
-                // the run replaces the mycelium with grass blocks on the server: the map follows by itself
-                if (++waited > REPLACE_PATIENCE) {
-                    check("replacing mycelium with grass changes the painted colour", false, "no change after " + waited + " ticks");
-                    state = 3;
-                    waited = 0;
+                    open(3f);
                     return;
                 }
-                if (pending == null && waited % 10 == 0) pending = probeAll(mc);
-                if (pending == null || !pending.isDone()) return;
-                Probe.Result[] r = pending.getNow(null);
-                pending = null;
+                if (waited < 100 || !settled()) return;
+                stacking();
+                geometry("patch");
+                MapMod.LOGGER.info("SELFTEST colours shot patch");
+                next();
+            }
+            case 2, 3 -> {
+                // baked at a pixel a block, then far (level 2)
+                String shot = state == 2 ? "patch-mid" : "patch-far";
+                if (++waited == 40) open(state == 2 ? 0.5f : 0.125f);
+                if (waited < 80 || !settled()) return;
+                check("the map settles on the patch " + (state == 2 ? "baked at a pixel a block" : "far out"), PaintMap.idle(), PaintMap.lastFrame());
+                geometry(shot);
+                MapMod.LOGGER.info("SELFTEST colours shot {}", shot);
+                next();
+            }
+            case 4 -> {
+                // the run replaces the mycelium with grass blocks on the server: the map follows by itself
+                if (++waited == 40) open(3f);
+                if (waited > REPLACE_PATIENCE) {
+                    check("replacing mycelium with grass changes the painted colour", false, "no change after " + waited + " ticks");
+                    next();
+                    return;
+                }
+                Probe.Result[] r = poll(mc, 10);
                 if (r == null || r[0].storedClass() != SurfaceClass.GRASS) return;
                 for (Probe.Result p : r) for (String line : p.lines()) MapMod.LOGGER.info("SELFTEST colours probe after: {}", line);
                 check("replacing mycelium with grass changes the painted colour", r[0].colour() != colourMycelium && green(r[0].colour()),
-                    String.format(Locale.ROOT, "#%06X -> #%06X after %d ticks", colourMycelium, r[0].colour(), waited));
-                state = 3;
-                waited = 0;
+                    String.format(Locale.ROOT, "%s -> %s after %d ticks", hex(colourMycelium), hex(r[0].colour()), waited));
+                next();
             }
-            case 3 -> {
-                if (++waited == 160) {
+            case 5 -> {
+                if (++waited >= 160 && settled()) {
                     MapMod.LOGGER.info("SELFTEST colours shot replaced");
-                    state = 4;
-                    waited = 0;
+                    next();
                 }
             }
-            case 4, 5 -> {
+            case 6 -> {
+                // a resource pack that turns stone blue: the stone strip turns blue on the map
+                if (++waited == 1) {
+                    recaptures = Capture.colourRecaptures();
+                    String err = switchPack(mc, true);
+                    check("a test resource pack that changes stone's texture is written and switched on", err.isEmpty(), err);
+                    if (!err.isEmpty()) {
+                        state = 9;
+                        waited = 0;
+                        return;
+                    }
+                }
+                if (reload != null && !reload.isDone()) return;
+                if (waited > PACK_PATIENCE) {
+                    check("a resource pack that changes stone's texture changes the stone's colour on the map", false,
+                        "no change after " + waited + " ticks; " + (Capture.colourRecaptures() - recaptures) + " recaptures");
+                    next();
+                    return;
+                }
+                if (Capture.colourRecaptures() == recaptures) return;
+                Probe.Result[] r = poll(mc, 10);
+                if (r == null || diff(r[3].storedColour(), stoneBefore) < 40) return;
+                Probe.Result s = r[3];
+                for (String line : s.lines()) MapMod.LOGGER.info("SELFTEST colours probe with the pack: {}", line);
+                check("a resource pack that changes stone's texture changes the stone's colour on the map",
+                    blue(s.average()) && blue(s.storedColour()) && blue(s.colour()) && diff(s.colour(), stonePainted) >= 60,
+                    String.format(Locale.ROOT, "texture average %s, stored %s -> %s, painted %s -> %s after %d ticks",
+                        hex(s.average()), hex(stoneBefore), hex(s.storedColour()), hex(stonePainted), hex(s.colour()), waited));
+                check("the other strips keep their colours", green(r[1].colour()) && sandy(r[2].colour()) && orange(r[4].colour()),
+                    hex(r[1].colour()) + ", " + hex(r[2].colour()) + ", " + hex(r[4].colour()));
+                next();
+            }
+            case 7 -> {
+                if (++waited == 1) open(3f);
+                if (waited < 60 || !settled()) return;
+                MapMod.LOGGER.info("SELFTEST colours shot pack");
+                next();
+            }
+            case 8 -> {
+                // the pack off again: stone is grey again
+                if (++waited == 1) {
+                    recaptures = Capture.colourRecaptures();
+                    String err = switchPack(mc, false);
+                    if (!err.isEmpty()) {
+                        check("the test resource pack is switched off again", false, err);
+                        next();
+                        return;
+                    }
+                }
+                if (reload != null && !reload.isDone()) return;
+                if (waited > PACK_PATIENCE) {
+                    check("switching the pack off brings stone's own colour back", false, "no change after " + waited + " ticks");
+                    next();
+                    return;
+                }
+                if (Capture.colourRecaptures() == recaptures) return;
+                Probe.Result[] r = poll(mc, 10);
+                if (r == null || diff(r[3].storedColour(), stoneBefore) > 6) return;
+                check("switching the pack off brings stone's own colour back", grey(r[3].colour()),
+                    hex(r[3].storedColour()) + ", painted " + hex(r[3].colour()));
+                next();
+            }
+            case 9, 10 -> {
                 // the top bar at GUI scale 3, then 4, with the map open (the run's mouse is over the map, so the
                 // position under it shows too)
-                int gui = state == 4 ? 3 : 4;
+                int gui = state == 9 ? 3 : 4;
                 if (++waited == 1) {
+                    if (!(mc.gui.screen() instanceof MapScreen)) open(3f);
                     guiBefore = mc.options.guiScale().get();
                     mc.options.guiScale().set(gui);
                     mc.resizeGui();
@@ -141,10 +275,7 @@ final class ColourClientTests {
                     bar(mc, gui);
                     MapMod.LOGGER.info("SELFTEST colours shot gui{}", gui);
                 }
-                if (waited == 100) {
-                    state++;
-                    waited = 0;
-                }
+                if (waited == 100) next();
             }
             default -> {
                 mc.options.guiScale().set(guiBefore);
@@ -152,6 +283,38 @@ final class ColourClientTests {
                 layouts(mc);
                 finish();
             }
+        }
+    }
+
+    /**
+     * Writes the test pack into the resource pack folder (pack.mcmeta for this game's resource format, and stone's
+     * texture as one plain blue) and switches it on, or off again, and reloads the resources. "" if all went well.
+     */
+    private static String switchPack(Minecraft mc, boolean on) {
+        try {
+            Path dir = mc.getResourcePackDirectory().resolve(PACK);
+            if (on) {
+                PackFormat f = SharedConstants.getCurrentVersion().packVersion(PackType.CLIENT_RESOURCES);
+                String format = f.minor() == 0 ? Integer.toString(f.major()) : "[" + f.major() + ", " + f.minor() + "]";
+                Files.createDirectories(dir.resolve("assets/minecraft/textures/block"));
+                Files.writeString(dir.resolve("pack.mcmeta"), "{\"pack\": {\"description\": \"MapMod selftest: blue stone\", \"min_format\": "
+                    + format + ", \"max_format\": " + format + "}}");
+                try (NativeImage image = new NativeImage(16, 16, false)) {
+                    for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) image.setPixel(x, y, 0xFF000000 | PACK_BLUE);
+                    image.writeToFile(dir.resolve("assets/minecraft/textures/block/stone.png"));
+                }
+            }
+            PackRepository repo = mc.getResourcePackRepository();
+            repo.reload();
+            String id = "file/" + PACK;
+            if (on && !repo.isAvailable(id)) return "the pack " + id + " is not found; available: " + repo.getAvailableIds();
+            boolean changed = on ? repo.addPack(id) : repo.removePack(id);
+            if (!changed) return "the pack " + id + " could not be switched " + (on ? "on" : "off") + "; selected: " + repo.getSelectedIds();
+            MapMod.LOGGER.info("SELFTEST colours resource pack {} {}, reloading", id, on ? "on" : "off");
+            reload = mc.reloadResourcePacks();
+            return "";
+        } catch (Exception e) {
+            return e.toString();
         }
     }
 
@@ -227,18 +390,40 @@ final class ColourClientTests {
 
     private static void colours(Probe.Result[] r) {
         for (Probe.Result p : r) for (String line : p.lines()) MapMod.LOGGER.info("SELFTEST colours probe: {}", line);
-        Probe.Result m = r[0], g = r[1], s = r[2];
-        check("each sample is the top block itself, not the one under it", m.storedHeight() == TOP && g.storedHeight() == TOP && s.storedHeight() == TOP,
-            "heights " + m.storedHeight() + ", " + g.storedHeight() + ", " + s.storedHeight() + "; top at " + TOP);
+        Probe.Result m = r[0], g = r[1], sa = r[2], s = r[3], te = r[4];
+        boolean top = true;
+        for (Probe.Result p : r) top &= p.storedHeight() == TOP;
+        check("each sample is the top block itself, not the one under it", top, "heights at " + TOP + "?");
         check("grass blocks are classed as grass", g.storedClass() == SurfaceClass.GRASS, g.block() + " is " + SurfaceClass.name(g.storedClass()));
         check("mycelium is classed as dirt/mud", m.storedClass() == SurfaceClass.DIRT, m.block() + " is " + SurfaceClass.name(m.storedClass()));
         check("stone is classed as rock", s.storedClass() == SurfaceClass.ROCK, s.block() + " is " + SurfaceClass.name(s.storedClass()));
-        check("grass paints green", green(g.colour()), hex(g.colour()) + ", tint " + hex(g.storedTint()));
+        check("sand is classed as sand", sa.storedClass() == SurfaceClass.SAND, sa.block() + " is " + SurfaceClass.name(sa.storedClass()));
+        // MM-8: the real colours, from the top faces' textures
+        check("the probe reads each top face's own texture, and grass is tinted by the biome",
+            m.texture().contains("mycelium_top") && g.texture().contains("grass_block_top") && g.tintKind().equals("biome grass")
+                && sa.texture().contains("block/sand") && s.texture().contains("block/stone") && te.texture().contains("orange_terracotta"),
+            m.texture() + ", " + g.texture() + " (" + g.tintKind() + "), " + sa.texture() + ", " + s.texture() + ", " + te.texture());
+        check("the stored colour is what the capture reads from the ground now", m.storedColour() == m.liveStored() && s.storedColour() == s.liveStored(),
+            hex(m.storedColour()) + " / " + hex(m.liveStored()));
+        check("mycelium paints purple-grey (its own colour, no longer dirt brown)", purpleGrey(m.colour()) && purpleGrey(m.storedColour()),
+            "stored " + hex(m.storedColour()) + ", painted " + hex(m.colour()));
+        check("grass paints green", green(g.colour()), hex(g.colour()) + ", stored " + hex(g.storedColour()));
+        check("sand paints sandy", sandy(sa.colour()), hex(sa.colour()));
         check("stone paints grey", grey(s.colour()), hex(s.colour()));
-        int gm = diff(g.colour(), m.colour()), gs = diff(g.colour(), s.colour()), ms = diff(m.colour(), s.colour());
-        check("grass, mycelium and stone are three clearly different colours", gm >= 40 && gs >= 40 && ms >= 40,
-            "differences " + gm + ", " + gs + ", " + ms);
+        check("orange terracotta paints orange", orange(te.colour()), hex(te.colour()));
+        StringBuilder diffs = new StringBuilder();
+        int least = Integer.MAX_VALUE;
+        for (int i = 0; i < r.length; i++) {
+            for (int j = i + 1; j < r.length; j++) {
+                int d = diff(r[i].colour(), r[j].colour());
+                least = Math.min(least, d);
+                diffs.append(NAMES[i]).append('/').append(NAMES[j]).append(' ').append(d).append(", ");
+            }
+        }
+        check("the five strips are five clearly different colours", least >= 30, diffs.toString());
         colourMycelium = m.colour();
+        stoneBefore = s.storedColour();
+        stonePainted = s.colour();
     }
 
     static String hex(int c) {
@@ -264,6 +449,24 @@ final class ColourClientTests {
     static boolean grey(int c) {
         int max = Math.max(r(c), Math.max(g(c), b(c))), min = Math.min(r(c), Math.min(g(c), b(c)));
         return max - min <= 24;
+    }
+
+    /** Mycelium's colour: a muted grey with a purple cast (red and blue a little over green). */
+    static boolean purpleGrey(int c) {
+        int max = Math.max(r(c), Math.max(g(c), b(c))), min = Math.min(r(c), Math.min(g(c), b(c)));
+        return r(c) >= g(c) + 4 && b(c) >= g(c) + 2 && max - min <= 48;
+    }
+
+    static boolean sandy(int c) {
+        return r(c) >= b(c) + 25 && g(c) >= b(c) + 15 && r(c) + g(c) + b(c) >= 420;
+    }
+
+    static boolean orange(int c) {
+        return r(c) >= g(c) + 30 && g(c) >= b(c) + 10;
+    }
+
+    static boolean blue(int c) {
+        return b(c) >= r(c) + 40 && b(c) >= g(c) + 20;
     }
 
     /** Sum of the channel differences. */

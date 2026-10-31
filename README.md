@@ -24,23 +24,29 @@ the server keeps no terrain of its own); client tiles, pins and settings: `mapmo
 
 ## Surface capture and the painted map (client)
 
-The client captures the surface itself, on any server and with any world generator: every chunk it loads, and every chunk whose surface changes, is sampled every 4 blocks on a
-background thread (height, water depth, one of eight surface classes from block tags then map colour, biome tint as
-RGB565, canopy density). Huge mushrooms count as canopy over the ground, like trees, without making it forest floor. Samples go into 512x512-block tiles, zstd-compressed, in
+The client captures the surface itself, on any server and with any world generator: every chunk it loads, and every chunk whose surface changes, is sampled every 2 blocks on a
+background thread (height, water depth, the colour seen from above, one of eight surface classes from block tags then
+map colour, biome tint as RGB565, canopy density). The colour is each block's real one: the average colour of its top
+face's texture, as the loaded resource packs give it (any mod's blocks too, read off their models), times its tint (the
+biome's grass, foliage or water colour), averaged over the 2x2 columns; leaves and mushroom caps over the ground show,
+and snow layers. It is worked out once per block state and again after every resource reload, when the loaded chunks
+are sampled again. Huge mushrooms count as canopy over the ground, like trees, without making it forest floor. Samples go into 512x512-block tiles, zstd-compressed, in
 `mapmod/<server address or world folder>/<dimension>/<x>_<z>.mmt` in the game folder; the layout is documented in
 `SurfaceTile`. zstd is [aircompressor](https://github.com/airlift/aircompressor)'s v3 line, bundled: it calls the zstd
 library it carries for Linux (x64, arm64, ppc64le) and macOS (arm64) through `java.lang.foreign`, and its pure-Java codec
 on other platforms (Windows among them), which still uses `sun.misc.Unsafe`. Both read and write the same files.
 
 The fullscreen map reads the saved tiles it shows on a background thread (and takes newer ones from the capture), works
-out each tile's textures on another (class weights blurred five samples wide, a signed distance to the shore, canopy),
+out each tile's textures on another (the land's colour pulled toward a muted painted palette and run through a
+Kuwahara filter, so mixed ground settles into soft brush patches while borders between blocks stay sharp; forest and
+snow weights; a signed distance to the shore; canopy),
 lets them go when it closes, uploads one or two a frame to the GPU and paints them with one fragment shader per tile
 (`assets/mapmod/shaders/core/map_paint.*`): bicubic height, a hillshade lit from the northwest (its slope sharpened against a smoothed one, so ridges and cliffs
-read crisp), soft class borders that
-wander with low-frequency noise in world space (no straight runs, no chunk edges, the same across tiles and at any
-zoom), one muted colour per surface class tinted by the biome, darker lowlands and paler peaks, snow above a height,
-forests darkened by canopy with a soft brush, water deep to shallow by depth and distance from the shore with a pale
-band along it (coasts and rivers as smooth curves), optional contour lines (off by default; the switch is in the map's
+read crisp), the colours read smoothly (never nearest) and split in two where two meet, so borders between blocks are
+crisp but wander with low-frequency noise in world space (no straight runs, no chunk edges, no block grid, the same
+across tiles and at any zoom), darker lowlands and paler peaks, snow above a height,
+forests darkened by canopy with a soft brush, water deep to shallow by depth and distance from the shore, tinted by its
+biome's water colour, with a pale band along it (coasts and rivers as smooth curves), optional contour lines (off by default; the switch is in the map's
 top bar and kept in `mapmod/settings.json` as `contours`), and a light paper grain and vignette over it all.
 
 Unexplored land fades into fog: what is shown is everything this client has captured, on any server and in any group
@@ -52,16 +58,20 @@ stops it). Icons shrink as the map zooms out, and mobs of one kind (as mob faces
 (boats, vehicles) of one kind that would overlap are drawn once with a count. The top bar has a switch per overlay layer (players, markers, pins, POIs, mob radar), kept in
 `mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.
 
-Resource packs restyle it through `assets/mapmod/map_palette.json` (colours per class 0-7, water,
-shore band, paper, height tint, snow line, hillshade share, `edges`, `forest`, `contours`, `finish`, `fog`: colour,
-edge width in blocks, cloud strength); every value is optional and falls back on its own; F3+T reloads it.
+Resource packs restyle it through `assets/mapmod/map_palette.json` (`colour`: the pull toward a muted painted palette,
+`saturation` and `value`, and the brush's `brush_size` in blocks; optional class colour overrides `classes` 0-7, none
+by default, each replacing the real colours of its class; water, shore band, paper, height tint, snow line, hillshade
+share, `edges`, `forest`, `contours`, `finish`, `fog`: colour, edge width in blocks, cloud strength); every value is
+optional and falls back on its own; F3+T reloads it. A resource pack that changes a block's texture changes its colour
+on the map as well.
 
-`/mapmod probe` shows what the map makes of the ground under you: the block, its surface class, the tint and class the
-capture would store now, what is stored (class, tint, height, tile revision) and the colour the map paints it. If the
+`/mapmod probe` shows what the map makes of the ground under you: the block, its surface class, its top face's texture,
+that texture's average colour and its tint, the colour, tint and class the capture would store now, what is stored
+(class, colour, tint, height, tile revision) and the colour the map paints it. If the
 stored sample differs from the ground now, the tile was not captured again after a change.
 
 `/mapmod stats` shows tiles cached, dirty tiles, the worker queue, samples per second, and with the map open its render
-time, uploads per frame and the off-thread preparation time per tile, the fog masks made and held, mips made again from
+time, uploads per frame, the off-thread preparation time per tile and the bake time per tile (prep with the brush, and the bake pass), the fog masks made and held, mips made again from
 their parent after an eviction, and frames cross-faded.
 
 ## For other mods: `com.meakaandre.mapmod.api`
@@ -98,9 +108,9 @@ for them: a mod that bases a lock, marker or overlay on server state syncs that 
 | --- | --- |
 | **Overlay layers** drawn over the painted map, each with a top-bar switch (kept in `settings.json`'s `layers`); never baked, no grain or vignette | `MapOverlay.register(id, label, glyph, (graphics, MapView view) -> ...)`; `enabled`, `setEnabled`, `shown`; `warpX`/`warpZ` and `WARP_PERIOD` (8192 blocks) to follow the painted borders |
 | **Markers** (glyph, colour, optional label, per dimension; hover and pin like a player's) | `MapMarkers.add(new Marker(id, dimension, x, z, glyph, argb, label))`, `move(id, [dimension,] x, z)`, `remove(id)`, `removeAll(namespace)`, `get`, `in(dimension)`; cleared on leaving a world |
-| **Palette overrides** over the resource packs' `map_palette.json`, kept across F3+T | `MapPalette.classColour(classId, rgb)`, `classTint`, `colour(key, rgb)`, `number(key, value)`, `edit()...apply()`, `clear(key)`, `clearAll()`; `keys()`, `version()` |
+| **Palette overrides** over the resource packs' `map_palette.json`, kept across F3+T. Since MM-8 the land is painted in real block colours, and a class colour is an optional override on top of them | `MapPalette.classColour(classId, rgb)` (paints that class in it instead of its real colours), `classTint`, `colour(key, rgb)`, `number(key, value)` (`colour.saturation`, `colour.value`, `colour.brush_size`, `water.tint`...), `edit()...apply()`, `clear(key)`, `clearAll()`; `keys()`, `version()` |
 | **Locks**: the only way to hide things on purpose | `MapLock.lockMap(owner, reason)` / `unlockMap(owner)`: a "map locked" panel instead of the map; `lockLayer(owner, layer)` / `unlockLayer` for `CONTOURS`, `PLAYERS`, `MARKERS`, `PINS`, `POIS`, `MOB_RADAR` or an overlay's id (hidden on the map and the compass); `unlockAll(owner)`. The fog rule does not change |
-| **Surface classes** (ids 0-7 as `MapSurface.GRASS`...`LAVA`, fixed by the tile format) | `MapSurface.override(block or tag, classId)`, `clear`, `classOf(state)`: thread-safe, new samples only |
+| **Surface classes** (ids 0-7 as `MapSurface.GRASS`...`LAVA`, fixed by the tile format; since MM-8 they decide effects and class colour overrides, not the colour) | `MapSurface.override(block or tag, classId)`, `clear`, `classOf(state)`: thread-safe, new samples only |
 | **Tile events** | `MapTiles.addListener((tileX, tileZ, revision) -> ...)`: client thread, merged per tile, `long` revisions (ms, never going down); tiles are `MapTiles.BLOCKS` (512) blocks |
 
 A layer of your own, following the painted coasts:
@@ -138,7 +148,8 @@ MapLock.unlockMap(me);
 Restyle from code, and put a mod's blocks in a class:
 
 ```java
-MapPalette.edit().classColour(MapSurface.GRASS, 0x9AB37E).colour("water.deep", 0x2E5F7E).number("edges.warp", 3).apply();
+MapPalette.edit().number("colour.saturation", 0.6f).colour("water.deep", 0x2E5F7E).number("edges.warp", 3).apply();
+MapPalette.classColour(MapSurface.SNOW, 0xE8F0F4); // an override: all snow in one colour instead of its blocks' own
 MapSurface.override(MyBlocks.ASH, MapSurface.DIRT);
 MapSurface.override(MyTags.SALT_FLATS, MapSurface.SNOW);
 ```
