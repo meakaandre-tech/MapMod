@@ -15,12 +15,13 @@ import java.util.Set;
  * Keys are the JSON's paths, dotted ({@link #keys()}): {@code classes.<id>.colour} and {@code classes.<id>.tint} for the
  * surface classes ({@link MapSurface}'s ids 0-7), and {@code water.shallow}, {@code water.deep}, {@code water.shore},
  * {@code paper}, {@code snow.colour}, {@code fog.colour} (colours) and the numbers ({@code hillshade}, {@code edges.warp},
- * {@code fog.edge}, {@code colour.saturation}, {@code colour.value}, {@code colour.brush_size}, {@code water.tint}...).
+ * {@code fog.edge}, {@code colour.saturation}, {@code colour.value}, {@code colour.brush_size}, {@code colour.merge}, {@code water.tint}...).
  * One change at a time with {@link #colour}/{@link #number}, or several at once with {@link #edit()}. Client thread.
  * <p>
  * Since MM-8 the map paints the land in each block's real colour (the average of its top texture, as the resource packs
  * give it, times its biome tint), pulled toward a muted painted palette by {@code colour.saturation} and
- * {@code colour.value} and brushed into patches {@code colour.brush_size} blocks across. A class colour
+ * {@code colour.value}, with colours closer than {@code colour.merge} merged into one (MM-8b), and brushed into
+ * patches {@code colour.brush_size} blocks across. A class colour
  * ({@link #classColour}, {@code classes.<id>.colour}) is now an optional override on top of that: none is set by
  * default, and one that is set replaces the real colour of every sample of that class (tinted by its biome as much as
  * {@link #classTint} says), until it is cleared. {@code classes.<id>.tint} only matters with a class colour set. Nothing

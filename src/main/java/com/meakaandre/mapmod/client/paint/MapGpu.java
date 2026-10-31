@@ -63,6 +63,7 @@ final class MapGpu implements AutoCloseable {
             .withUniform("Effects", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("Water", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("Shore", UniformType.COMBINED_IMAGE_SAMPLER)
+            .withUniform("Region", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("Fog", UniformType.COMBINED_IMAGE_SAMPLER)
             .build())
         .withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
@@ -95,7 +96,7 @@ final class MapGpu implements AutoCloseable {
     static final int NOISE_UNIT = 4;
     /** The shader's noise repeats every this many noise units (8192 blocks); tile origins are wrapped to it. */
     static final int NOISE_PERIOD = 2048;
-    private static final String[] SAMPLERS = {"Fields", "Surface", "Effects", "Water", "Shore"};
+    private static final String[] SAMPLERS = {"Fields", "Surface", "Effects", "Water", "Shore", "Region"};
     /** How much the relief is exaggerated for the hillshade. */
     private static final float RELIEF = 3.5f;
 

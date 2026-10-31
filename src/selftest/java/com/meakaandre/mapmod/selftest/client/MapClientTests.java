@@ -829,9 +829,9 @@ public final class MapClientTests {
         expect("a palette keeps the built-in value for whatever it leaves out or gets wrong",
             broken.classColour()[2] == 0x123456 && broken.classColour()[3] == PaintPalette.DEFAULT.classColour()[3]
                 && broken.snowAbove() == 150 && broken.paper() == PaintPalette.DEFAULT.paper(), "");
-        expect("map_palette.json carries the MM-3 values (edges, forest, contours, finish), MM-7's (a shore band half as strong and narrower) and MM-8's (real colours: no class colours, the painted pull, the brush, the water's tint)",
+        expect("map_palette.json carries the MM-3 values (edges, forest, contours, finish), MM-7's (a shore band half as strong and narrower), MM-8's (real colours: no class colours, the painted pull, the water's tint) and MM-8b's (a wider brush, colours merged)",
             pal.shore() == 0xB0CCD0 && pal.shoreWidth() == 3 && pal.deepDist() == 40 && pal.edgeWarp() == 5 && pal.forestDarken() == 0.12f
-                && pal.colourSaturation() == 0.8f && pal.colourValue() == 0.2f && pal.brushSize() == 6 && pal.waterTint() == 0.5f
+                && pal.colourSaturation() == 0.8f && pal.colourValue() == 0.2f && pal.brushSize() == 12 && pal.colourMerge() == 0.1f && pal.waterTint() == 0.5f
                 && java.util.Arrays.stream(pal.classColour()).allMatch(c -> c == PaintPalette.NONE)
                 && pal.contourInterval() == 16 && pal.grain() == 0.035f && pal.vignette() == 0.18f, pal.toString());
         PaintPalette partial = PaintPalette.parse(JsonParser.parseString(
@@ -850,6 +850,7 @@ public final class MapClientTests {
                 && fogged.fogClouds() == d.fogClouds() && fogged.fogColour() == d.fogColour(), pal.fogColour() + " " + pal.fogEdge() + " " + pal.fogClouds());
         distanceField();
         realColours();
+        organicBorders();
         String canopy = PaintMap.canopyCheck();
         expect("canopy is prepared and uploaded as the surface texture's alpha", canopy == null, canopy == null ? "" : canopy);
         contourToggle();
@@ -898,6 +899,106 @@ public final class MapClientTests {
         MapMod.LOGGER.info("SELFTEST client brush: a tile prepared in {} ms, the brush {} ms", ms, r.brushNanos() / 1_000_000);
         expect("the brush is cheap enough to run once per tile off the render thread (under 150 ms here)", r.brushNanos() < 150_000_000L,
             r.brushNanos() / 1_000_000 + " ms for the brush, " + ms + " ms for the whole prep");
+    }
+
+    /**
+     * MM-8b on the CPU: near colours merge into one, a stray sample or two inside a region joins it, and the region
+     * texture the shader cuts borders from runs straight through a staircase of blocks: its half-way line between two
+     * colours follows the staircase's diagonal, not its steps.
+     */
+    private static void organicBorders() {
+        PaintPalette d = PaintPalette.DEFAULT;
+        SurfaceTile t = new SurfaceTile(0, 0);
+        int sand = 0xDBCFA3, stone = 0x7D7D7D, side = SurfaceTile.SIDE;
+        for (int i = 0; i < SurfaceTile.AREA; i++) {
+            int sx = i % side, sz = i / side;
+            // the border steps 2 samples (4 blocks) west every 4 rows: a staircase along a diagonal
+            int edge = 200 - 2 * (sz / 4);
+            boolean east = sx >= edge;
+            t.surface[i] = east ? SurfaceClass.ROCK : SurfaceClass.SAND;
+            // the sand in two shades a checkerboard apart (as grass variants are)
+            t.colour[i] = east ? stone : ((sx + sz) % 2 == 0 ? sand : 0xD5C99D);
+            t.height[i] = 70;
+            t.explored[i >>> 6] |= 1L << i;
+        }
+        // strays in the sand: one stone sample, two side by side
+        int[][] strays = {{40, 40}, {60, 60}, {61, 60}};
+        for (int[] p : strays) t.colour[SurfaceTile.index(p[0], p[1])] = stone;
+        SurfaceTile[][] around = new SurfaceTile[3][3];
+        around[1][1] = t;
+        TilePrep.Result r = TilePrep.prepare(around, d);
+        int a = TilePrep.APRON;
+        StringBuilder bad = new StringBuilder();
+        for (int[] p : strays) {
+            int at = r.pixel(TilePrep.SURFACE, p[0] + a, p[1] + a) & 0xFFFFFF, beside = r.pixel(TilePrep.SURFACE, p[0] - 5 + a, p[1] + a) & 0xFFFFFF;
+            if (ColourClientTests.diff(at, beside) > 12) bad.append(ColourClientTests.hex(at)).append(" at ").append(p[0]).append(',').append(p[1])
+                .append(" beside ").append(ColourClientTests.hex(beside)).append("; ");
+        }
+        expect("stray blocks inside a region are merged into it (one sample, and two side by side)", bad.isEmpty(), bad.toString());
+        int lo = 255 * 3, hi = 0;
+        for (int z = 100; z < 110; z++) {
+            for (int x = 20; x < 30; x++) {
+                int c = r.pixel(TilePrep.SURFACE, x + a, z + a);
+                int sum = (c >> 16 & 255) + (c >> 8 & 255) + (c & 255);
+                lo = Math.min(lo, sum);
+                hi = Math.max(hi, sum);
+            }
+        }
+        expect("two near shades of one ground merge into one colour", hi - lo <= 6, (hi - lo) + " apart (r + g + b)");
+        // the half-way line between the two sides along each row, in the region texture and in the brushed colour
+        int sandP = r.pixel(TilePrep.SURFACE, 100 + a, 20 + a) & 0xFFFFFF, stoneP = r.pixel(TilePrep.SURFACE, 240 + a, 20 + a) & 0xFFFFFF;
+        java.util.List<double[]> reg = new java.util.ArrayList<>(), raw = new java.util.ArrayList<>();
+        for (int z = 16; z < 240; z++) {
+            double xr = crossing(r, TilePrep.REGION, z + a, sandP, stoneP), xs = crossing(r, TilePrep.SURFACE, z + a, sandP, stoneP);
+            if (!Double.isNaN(xr)) reg.add(new double[]{z, xr - a});
+            if (!Double.isNaN(xs)) raw.add(new double[]{z, xs - a});
+        }
+        double[] fr = lineFit(reg), fs = lineFit(raw);
+        expect("the region texture's border runs straight through a staircase of blocks (a curve, not steps)",
+            reg.size() > 200 && fr[0] <= 0.08 && fr[1] <= 0.2 && Math.abs(fr[2] + 0.5) < 0.05,
+            String.format(Locale.ROOT, "%d rows, off the line by %.3f samples (rms), %.3f at most, slope %.3f; the brushed colour's border %.3f rms, %.3f at most",
+                reg.size(), fr[0], fr[1], fr[2], fs[0], fs[1]));
+    }
+
+    /** Where along row {@code z} a texture first passes half way from {@code from} to {@code to} (texels, interpolated), or NaN. */
+    private static double crossing(TilePrep.Result r, int texture, int z, int from, int to) {
+        double prev = Double.NaN;
+        for (int x = 0; x < TilePrep.SIZE; x++) {
+            double p = along(r.pixel(texture, x, z), from, to);
+            if (!Double.isNaN(prev) && prev < 0.5 && p >= 0.5) return x - 1 + (0.5 - prev) / (p - prev);
+            prev = p;
+        }
+        return Double.NaN;
+    }
+
+    private static double along(int c, int from, int to) {
+        double num = 0, den = 0;
+        for (int sh = 0; sh <= 16; sh += 8) {
+            int a = from >> sh & 255, b = to >> sh & 255, v = c >> sh & 255;
+            num += (double) (v - a) * (b - a);
+            den += (double) (b - a) * (b - a);
+        }
+        return den == 0 ? 0 : num / den;
+    }
+
+    /** A least-squares line x = a + b z through the points: rms and largest distance off it, and b. */
+    private static double[] lineFit(java.util.List<double[]> pts) {
+        int n = pts.size();
+        if (n < 2) return new double[]{99, 99, 0};
+        double sz = 0, sx = 0, szz = 0, szx = 0;
+        for (double[] p : pts) {
+            sz += p[0];
+            sx += p[1];
+            szz += p[0] * p[0];
+            szx += p[0] * p[1];
+        }
+        double b = (n * szx - sz * sx) / (n * szz - sz * sz), a0 = (sx - b * sz) / n, ss = 0, worst = 0;
+        for (double[] p : pts) {
+            double e = p[1] - (a0 + b * p[0]);
+            ss += e * e;
+            worst = Math.max(worst, Math.abs(e));
+        }
+        return new double[]{Math.sqrt(ss / n), worst, b};
     }
 
     private static float saturation(int c) {

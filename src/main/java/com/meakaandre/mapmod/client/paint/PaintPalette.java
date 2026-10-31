@@ -20,7 +20,8 @@ import java.util.Optional;
 /**
  * The painted map's colours, from {@code assets/mapmod/map_palette.json} (resource packs can replace it; F3+T reloads
  * it). MM-8: the land is painted in its real block colours ({@code SurfaceTile.colour}), pulled toward a muted painted
- * palette ({@code colour.saturation}, {@code colour.value}) and brushed into patches ({@code colour.brush_size}); a
+ * palette ({@code colour.saturation}, {@code colour.value}), similar colours merged ({@code colour.merge}, MM-8b) and
+ * brushed into patches ({@code colour.brush_size}); a
  * surface class's colour, when the palette sets one ({@code classes.<id>.colour}, none by default), overrides the real
  * colour of that class's ground, tinted by the biome as much as its {@code tint} says. Then water by depth and distance from the shore with a pale shore
  * band, the paper of unexplored land, the height tint and the snow line, the hillshade's share, how soft and wavy class
@@ -35,7 +36,7 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
                            float edgeSoftness, float edgeWarp, float forestDarken, float forestStipple,
                            float contourInterval, float contourStrength, float grain, float vignette,
                            int fogColour, float fogEdge, float fogClouds,
-                           float colourSaturation, float colourValue, float brushSize, float waterTint) {
+                           float colourSaturation, float colourValue, float brushSize, float waterTint, float colourMerge) {
     /** A class colour that is not overridden. */
     public static final int NONE = -1;
     /** The mid tone {@code colour.value} pulls brightness toward. */
@@ -48,7 +49,7 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
         0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.5f,
         40, 0xB0CCD0, 3, 0.12f, 5, 0.12f, 0.18f, 16, 0.3f, 0.035f, 0.18f,
         0xD8CFBA, 48, 0.6f,
-        0.8f, 0.2f, 6, 0.5f);
+        0.8f, 0.2f, 12, 0.5f, 0.10f);
 
     private static volatile PaintPalette current = DEFAULT;
     /** Bumped on every load and every change of the overrides, so the renderer bakes its tiles again. */
@@ -113,7 +114,7 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
         for (String n : new String[]{"water.deep_at", "water.deep_dist", "water.shore_width", "height_tint.low", "height_tint.high",
             "height_tint.low_shade", "height_tint.high_light", "snow.above", "snow.blend", "hillshade", "edges.softness", "edges.warp",
             "forest.darken", "forest.stipple", "contours.interval", "contours.strength", "finish.grain", "finish.vignette", "fog.edge",
-            "fog.clouds", "colour.saturation", "colour.value", "colour.brush_size", "water.tint"}) k.put(n, false);
+            "fog.clouds", "colour.saturation", "colour.value", "colour.brush_size", "water.tint", "colour.merge"}) k.put(n, false);
         return Collections.unmodifiableMap(k);
     }
 
@@ -185,7 +186,8 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
             colour(fog, "colour", d.fogColour), Math.clamp(number(fog, "edge", d.fogEdge), 8f, 256f),
             Math.clamp(number(fog, "clouds", d.fogClouds), 0f, 1f),
             Math.clamp(number(colour, "saturation", d.colourSaturation), 0f, 2f), Math.clamp(number(colour, "value", d.colourValue), 0f, 1f),
-            Math.clamp(number(colour, "brush_size", d.brushSize), 0f, 16f), Math.clamp(number(water, "tint", d.waterTint), 0f, 1f));
+            Math.clamp(number(colour, "brush_size", d.brushSize), 0f, 16f), Math.clamp(number(water, "tint", d.waterTint), 0f, 1f),
+            Math.clamp(number(colour, "merge", d.colourMerge), 0f, 0.5f));
     }
 
     /**
