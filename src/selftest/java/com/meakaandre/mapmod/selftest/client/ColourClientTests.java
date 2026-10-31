@@ -170,12 +170,17 @@ final class ColourClientTests {
             }
             case 2, 3 -> {
                 // baked at a pixel a block, then far (level 2)
+                // MM-8b: with every layer and overlay off, so the run reads the paint's borders under where the icons sit
                 String shot = state == 2 ? "patch-mid" : "patch-far";
-                if (++waited == 40) open(state == 2 ? 0.5f : 0.125f);
+                if (++waited == 40) {
+                    if (state == 2) layers(false);
+                    open(state == 2 ? 0.5f : 0.125f);
+                }
                 if (waited < 80 || !settled()) return;
                 check("the map settles on the patch " + (state == 2 ? "baked at a pixel a block" : "far out"), PaintMap.idle(), PaintMap.lastFrame());
                 geometry(shot);
                 MapMod.LOGGER.info("SELFTEST colours shot {}", shot);
+                if (state == 3) layers(true);
                 next();
             }
             case 4 -> {
@@ -318,7 +323,31 @@ final class ColourClientTests {
         }
     }
 
+    private static final java.util.Set<com.meakaandre.mapmod.client.map.MapLayer> layersHidden = java.util.EnumSet.noneOf(com.meakaandre.mapmod.client.map.MapLayer.class);
+    private static final java.util.List<net.minecraft.resources.Identifier> overlaysHidden = new java.util.ArrayList<>();
+
+    /** Switches every map layer and overlay off (remembering which were on), or back on. */
+    private static void layers(boolean on) {
+        if (!on) {
+            for (com.meakaandre.mapmod.client.map.MapLayer l : com.meakaandre.mapmod.client.map.MapLayer.values()) {
+                if (MapClient.LAYERS_OFF.add(l)) layersHidden.add(l);
+            }
+            for (com.meakaandre.mapmod.api.MapOverlay.Registered o : com.meakaandre.mapmod.api.MapOverlay.layers()) {
+                if (com.meakaandre.mapmod.api.MapOverlay.enabled(o.id())) {
+                    com.meakaandre.mapmod.api.MapOverlay.setEnabled(o.id(), false);
+                    overlaysHidden.add(o.id());
+                }
+            }
+            return;
+        }
+        MapClient.LAYERS_OFF.removeAll(layersHidden);
+        layersHidden.clear();
+        for (net.minecraft.resources.Identifier id : overlaysHidden) com.meakaandre.mapmod.api.MapOverlay.setEnabled(id, true);
+        overlaysHidden.clear();
+    }
+
     private static void finish() {
+        layers(true);
         if (mcScreenOpen()) Minecraft.getInstance().gui.setScreen(null);
         MapMod.LOGGER.info("SELFTEST colours done: {} passed, {} failed", pass, fail);
         state = -1;
