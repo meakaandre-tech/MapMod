@@ -1,0 +1,40 @@
+fabric api: https://cdn.modrinth.com/data/P7dR8mSH/versions/bNnaTiuM/fabric-api-0.161.0%2B26.3.jar
+total 5456
+-rw-r--r-- 1 runner runner 2620967 Oct 31 20:31 fabric-api.jar
+-rw-r--r-- 1 runner runner 2841875 Oct 31 20:31 mapmod-0.1.0+26.3.jar
+-rw-r--r-- 1 runner runner  120219 Oct 31 20:31 mapmod-selftest-0.1.0+26.3.jar
+waited 3s for: SELFTEST map done (later checks)
+total 432
+-rw-r--r-- 1 runner runner 441732 Oct 31 20:32 quicksilver-26.3.jar
+waited 4s for: SELFTEST client ready 0.
+waited 3s for: SELFTEST client done join
+waited 6s for: SELFTEST client bigworld written
+waited 9s for: SELFTEST client done bake
+waited 2s for: SELFTEST client done fog
+waited 2s for: SELFTEST smoke setup done.
+waited 13s for: SELFTEST client settled level2
+waited 4s for: SELFTEST client settled live
+waited 3s for: SELFTEST client settled close
+waited 16s for: SELFTEST client done far
+waited 3s for: SELFTEST client settled level1
+waited 3s for: SELFTEST client settled level0
+waited 2s for: SELFTEST client done ownfog
+waited 3s for: SELFTEST client done overlays
+waited 6s for: SELFTEST api locked shown
+waited 2s for: SELFTEST api done:
+waited 2s for: SELFTEST client done all
+waited 3s for: SELFTEST smoke stamp done.
+waited 2s for: SELFTEST client done dimension
+waited 2s for: SELFTEST client done locked
+waited 2s for: SELFTEST client done unload
+waited 1s for: SELFTEST restart done
+waited 7s for: SELFTEST local ready.
+waited 12s for: SELFTEST local done
+waited 1s for: SELFTEST colours shot patch
+waited 6s for: SELFTEST colours shot patch-mid
+waited 14s for: SELFTEST colours shot patch-far
+waited 12s for: SELFTEST colours shot replaced
+waited 8s for: SELFTEST colours shot pack
+waited 4s for: SELFTEST colours shot gui3
+waited 3s for: SELFTEST colours shot gui4
+waited 1s for: SELFTEST colours done

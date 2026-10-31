@@ -1,0 +1,4 @@
+total 3080
+-rw-r--r-- 1 runner runner  186303 Oct 31 20:30 mapmod-0.1.0+26.3-sources.jar
+-rw-r--r-- 1 runner runner 2841875 Oct 31 20:30 mapmod-0.1.0+26.3.jar
+-rw-r--r-- 1 runner runner  120219 Oct 31 20:30 mapmod-selftest-0.1.0+26.3.jar

@@ -1,0 +1,41 @@
+SELFTEST map: 37 passed, 0 failed
+SELFTEST smoke: 2 passed, 0 failed
+SELFTEST client: 92 passed, 0 failed
+SELFTEST restart: 6 passed, 0 failed
+SELFTEST local: 20 passed, 0 failed
+SELFTEST colours: 26 passed, 0 failed
+SELFTEST api: 31 passed, 0 failed
+screenshots: 11 (client-01.png, client-02.png, client-03.png, client-04.png, client-05.png, client-06.png, client-07.png, client-08.png, client-09.png, client-10.png, client-11.png)
+screenshots on a server without MapMod: 9 (local-01.png, local-02.png, local-03.png, local-04.png, local-05.png, local-06.png, local-07.png, local-08.png, local-09.png)
+client-02.png: 0 lines of paper between tiles
+client-03.png: 0 lines of paper between tiles
+client-04.png: 0 lines of paper between tiles
+client-05.png: 0 lines of paper between tiles
+client-06.png: 0 lines of paper between tiles
+client-07.png: 0 lines of paper between tiles
+client-08.png: 0 lines of paper between tiles
+local-02.png: 1 lines of paper between tiles at [1162]
+local-03.png: 1 lines of paper between tiles at [1162]
+local-04.png: 0 lines of paper between tiles
+local-05.png: 0 lines of paper between tiles
+local-03.png (patch): mycelium #7C7174 ok
+local-03.png (patch): grass #457F3A ok
+local-03.png (patch): sand #D6CDAB ok
+local-03.png (patch): stone #888888 ok
+local-03.png (patch): terracotta #A66640 ok
+local-03.png: mycelium pixel steps 5.1 on average, 24.2 at worst of 12 phases GRID
+local-03.png: grass pixel steps 2.2 on average, 3.9 at worst of 12 phases
+local-03.png: sand pixel steps 4.4 on average, 10.3 at worst of 12 phases
+local-03.png: stone pixel steps 3.0 on average, 5.6 at worst of 12 phases
+local-03.png: terracotta pixel steps 2.1 on average, 5.0 at worst of 12 phases
+local-03.png: the mycelium/grass border is 0.5 blocks wide (median of 24 rows)
+local-03.png: the grass/sand border is 0.5 blocks wide (median of 24 rows)
+local-03.png: the sand/stone border is 0.3 blocks wide (median of 24 rows)
+local-03.png: the stone/terracotta border is 0.5 blocks wide (median of 24 rows)
+local-04.png (patch-mid): mycelium #7C7174 ok
+local-04.png (patch-mid): grass #477E3A ok
+local-04.png (patch-mid): sand #D5CBA9 ok
+local-04.png (patch-mid): stone #898989 ok
+local-04.png (patch-mid): terracotta #A66640 ok
+total: 214 passed, 0 failed
+NOT GREEN: lines between map tiles in local-02.png; lines between map tiles in local-03.png; a block grid shows in the mycelium strip in local-03.png
