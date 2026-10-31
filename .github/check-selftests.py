@@ -149,10 +149,11 @@ def patch(ci, Image, bad):
                 bad.append(f"{strip} is not its real colour in {shot}")
         # MM-8b: every border between strips is a smooth curve, with no 1- or 2-block steps, where it is straight in the
         # blocks and where the blocks step in a staircase: from one pixel row to the next it moves little, and it keeps
-        # close to its own 4-block moving average (a staircase of 1-block steps is 0.29 blocks off it rms, 2-block 0.58).
-        # A block is 6 pixels close up, 1 at a pixel a block and a quarter far out, so the limits never go under what a
+        # close to its own 4-block moving average. MM-8's crisp borders traced the staircases at 0.13-0.18 blocks rms
+        # off it and moved up to 0.3 blocks from one pixel row to the next close up (a smooth diagonal moves 0.1). A
+        # block is 6 pixels close up, 1 at a pixel a block and a quarter far out, so the limits never go under what a
         # pixel can show
-        jump_lim, rms_lim = max(0.5, 1.5 / ppb), max(0.2, 0.22 / ppb)
+        jump_lim, rms_lim = max(0.15, 0.9 / ppb), max(0.08, 0.09 / ppb)
         for (sa, sb), expect in BORDERS.items():
             for part, (za, zb) in (("straight", STRAIGHT), ("stairs", STAIRS)):
                 if part == "stairs" and (sa, sb) not in (("grass", "sand"), ("sand", "stone")):
