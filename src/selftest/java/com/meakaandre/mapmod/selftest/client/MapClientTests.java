@@ -885,6 +885,8 @@ public final class MapClientTests {
         }
         SurfaceTile[][] around = new SurfaceTile[3][3];
         around[1][1] = t;
+        // once to warm the JIT up (MM-8b: the first, cold run timed the compiler as much as the brush), then timed
+        TilePrep.prepare(around, d);
         long t0 = System.nanoTime();
         TilePrep.Result r = TilePrep.prepare(around, d);
         long ms = (System.nanoTime() - t0) / 1_000_000;
@@ -897,7 +899,7 @@ public final class MapClientTests {
             ColourClientTests.diff(left, d.paint(0x4E7A2C)) <= 24 && ColourClientTests.diff(right, d.paint(0x7D7D7D)) <= 6 && ColourClientTests.diff(left, right) >= 40,
             ColourClientTests.hex(left) + " | " + ColourClientTests.hex(right));
         MapMod.LOGGER.info("SELFTEST client brush: a tile prepared in {} ms, the brush {} ms", ms, r.brushNanos() / 1_000_000);
-        expect("the brush is cheap enough to run once per tile off the render thread (under 150 ms here)", r.brushNanos() < 150_000_000L,
+        expect("the brush (with MM-8b's merge and region blur) is cheap enough to run once per tile off the render thread (under 150 ms here, warm)", r.brushNanos() < 150_000_000L,
             r.brushNanos() / 1_000_000 + " ms for the brush, " + ms + " ms for the whole prep");
     }
 

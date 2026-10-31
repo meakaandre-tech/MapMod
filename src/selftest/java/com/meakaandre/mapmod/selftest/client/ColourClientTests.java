@@ -172,11 +172,12 @@ final class ColourClientTests {
                 // baked at a pixel a block, then far (level 2)
                 // MM-8b: with every layer and overlay off, so the run reads the paint's borders under where the icons sit
                 String shot = state == 2 ? "patch-mid" : "patch-far";
-                if (++waited == 40) {
+                // MM-8b: each view is held a good while after its shot is logged, as the run's screenshot can lag
+                if (++waited == 100) {
                     if (state == 2) layers(false);
                     open(state == 2 ? 0.5f : 0.125f);
                 }
-                if (waited < 80 || !settled()) return;
+                if (waited < 140 || !settled()) return;
                 check("the map settles on the patch " + (state == 2 ? "baked at a pixel a block" : "far out"), PaintMap.idle(), PaintMap.lastFrame());
                 geometry(shot);
                 MapMod.LOGGER.info("SELFTEST colours shot {}", shot);
@@ -185,7 +186,7 @@ final class ColourClientTests {
             }
             case 4 -> {
                 // the run replaces the mycelium with grass blocks on the server: the map follows by itself
-                if (++waited == 40) open(3f);
+                if (++waited == 100) open(3f);
                 if (waited > REPLACE_PATIENCE) {
                     check("replacing mycelium with grass changes the painted colour", false, "no change after " + waited + " ticks");
                     next();
