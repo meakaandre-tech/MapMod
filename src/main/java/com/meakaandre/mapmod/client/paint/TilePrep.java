@@ -18,6 +18,7 @@ import org.jspecify.annotations.Nullable;
  *   effects  r     blurred share of forest floor       g  blurred share of snow   (of the land round it, 0-255)
  *   water    rgb   the water's own colour (its biome's) a  255 on water, 0 elsewhere
  *   shore    r     signed distance to the shore in samples, 128 + 4 * d (water positive, land negative, ±31 at most)
+ *   region   rgb   the brushed land colour blurred over about 3.5 samples (MM-8b; where borders between colours run)
  * </pre>
  * Everything is computed over a wider window ({@link #PAD} more samples on each side) and cropped, so the blur, the
  * brush and the distance field are the same in a tile's apron as in the neighbour it copies.
@@ -29,6 +30,14 @@ import org.jspecify.annotations.Nullable;
  * of one colour while the border between two colours stays where it is and stays sharp. It runs here, once per tile on
  * the prep thread, with summed-area tables (a few milliseconds a tile): bakes and live paint both read its result, and
  * no shader pass pays for it.
+ * <p>
+ * MM-8b, organic borders: before the brush, similar colours are merged ({@code colour.merge}): each sample takes the mean
+ * of the samples round it whose colour is within that distance of its own (twice), so grass variants, path and dirt or
+ * a few flowers become one colour; then a sample that too few round it agree with (a stray block, one or two samples
+ * of noise, the mixed samples along a block staircase) takes the colour of the neighbour most of the area agrees
+ * with. The brush is wider by default, so flat land reads as broad strokes. The brushed colour is then blurred into the
+ * region texture: the shader decides which side of a border a pixel is on from it, so borders follow a smooth curve
+ * through the blur instead of the block-by-block staircase of the terrain.
  */
 public final class TilePrep {
     public static final int APRON = 6, SIZE = SurfaceTile.SIDE + 2 * APRON;
@@ -47,7 +56,17 @@ public final class TilePrep {
     private static final int NO_HEIGHT = 63;
     private static final float FAR = 1e9f;
 
-    public static final int FIELDS = 0, SURFACE = 1, EFFECTS = 2, WATER = 3, SHORE = 4, TEXTURES = 5;
+    public static final int FIELDS = 0, SURFACE = 1, EFFECTS = 2, WATER = 3, SHORE = 4, REGION = 5, TEXTURES = 6;
+    /**
+     * Merge: the averaging's reach (samples each way) and rounds, the reach over which samples must agree with one, and
+     * how many must.
+     */
+    static final int SHIFT_R = 1, MERGE_ROUNDS = 2, MERGE_R = 2, MERGE_AGREE = 4;
+    /** A brushed colour this far (r g b 0-1) from every merged colour beside it is a blend across a border: it is snapped back. */
+    static final float SNAP = 0.05f;
+    /** The region blur: a Gaussian of this sigma (samples), cut off this many samples each way. */
+    static final float REGION_SIGMA = 1.75f;
+    static final int REGION_R = 4;
 
     private TilePrep() {
     }
@@ -95,7 +114,9 @@ public final class TilePrep {
         surfaceAndFields(around, out);
         effects(known, wet, cls, out);
         long t0 = System.nanoTime();
-        brush(known, wet, colour, pal.brushSamples(), out);
+        merge(known, wet, colour, pal.colourMerge());
+        float[] brushed = brush(known, wet, colour, pal.brushSamples(), out);
+        region(known, wet, brushed, out);
         long brush = System.nanoTime() - t0;
         float[] sdf = signedDistance(wet, GRID, GRID, SHORE_CAP);
         heights(known, height, out);
@@ -131,9 +152,10 @@ public final class TilePrep {
      * summed-area tables: their mean colour and how much the colour varies in them. Each mean is weighted by
      * 1 / (variance + e)^2, so where one window is flat and another straddles a border, the flat one all but wins: the
      * border stays where it is and stays sharp, and speckle inside a patch is averaged away. Water and unexplored
-     * samples take no part. Writes the surface texture's rgb.
+     * samples take no part. Writes the surface texture's rgb, and returns the brushed colour over the grid ({@link
+     * #REGION_R} samples beyond the textures each way; 0 elsewhere) for the region blur.
      */
-    static void brush(boolean[] known, boolean[] wet, float[] colour, int w, int[][] out) {
+    static float[] brush(boolean[] known, boolean[] wet, float[] colour, int w, int[][] out) {
         int stride = GRID + 1;
         // summed-area tables: land count, r, g, b, and r^2 + g^2 + b^2
         double[] sn = new double[stride * stride], sr = new double[stride * stride], sg = new double[stride * stride],
@@ -164,9 +186,10 @@ public final class TilePrep {
             {-r, -r, 0, 0}, {0, -r, r, 0}, {-r, 0, 0, r}, {0, 0, r, r},
             {-h, -r, r - h, 0}, {-h, 0, r - h, r}, {-r, -h, 0, r - h}, {0, -h, r, r - h}};
         double[] sum = new double[5];
-        for (int az = 0; az < SIZE; az++) {
-            for (int ax = 0; ax < SIZE; ax++) {
-                int gx = ax + PAD, gz = az + PAD, g = gx + gz * GRID, a = ax + az * SIZE;
+        float[] brushed = new float[GRID * GRID * 3];
+        for (int gz = PAD - REGION_R; gz < PAD + SIZE + REGION_R; gz++) {
+            for (int gx = PAD - REGION_R; gx < PAD + SIZE + REGION_R; gx++) {
+                int g = gx + gz * GRID;
                 if (!known[g] || wet[g]) continue;
                 double cr, cg, cb;
                 if (r == 0) {
@@ -193,10 +216,184 @@ public final class TilePrep {
                     cr /= wsum;
                     cg /= wsum;
                     cb /= wsum;
+                    // MM-8b: where every window straddles a border (a diagonal one, a staircase) the brush blends the
+                    // two sides into a colour of neither; such a blend goes back to the nearest merged colour beside it
+                    double near = Double.MAX_VALUE;
+                    int pick = g;
+                    for (int dz = -1; dz <= 1; dz++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int q = g + dx + dz * GRID;
+                            if (!known[q] || wet[q]) continue;
+                            double er = colour[q * 3] - cr, eg = colour[q * 3 + 1] - cg, eb = colour[q * 3 + 2] - cb;
+                            double e = er * er + eg * eg + eb * eb;
+                            if (e < near) {
+                                near = e;
+                                pick = q;
+                            }
+                        }
+                    }
+                    if (near > SNAP * SNAP) {
+                        cr = colour[pick * 3];
+                        cg = colour[pick * 3 + 1];
+                        cb = colour[pick * 3 + 2];
+                    }
                 }
-                int ir = (int) Math.clamp(Math.round(cr * 255), 0, 255), ig = (int) Math.clamp(Math.round(cg * 255), 0, 255),
-                    ib = (int) Math.clamp(Math.round(cb * 255), 0, 255);
-                out[SURFACE][a] = out[SURFACE][a] & 0xFF000000 | ir << 16 | ig << 8 | ib;
+                brushed[g * 3] = (float) cr;
+                brushed[g * 3 + 1] = (float) cg;
+                brushed[g * 3 + 2] = (float) cb;
+                int ax = gx - PAD, az = gz - PAD;
+                if (ax < 0 || az < 0 || ax >= SIZE || az >= SIZE) continue;
+                int a = ax + az * SIZE;
+                out[SURFACE][a] = out[SURFACE][a] & 0xFF000000 | rgb8(cr, cg, cb);
+            }
+        }
+        return brushed;
+    }
+
+    private static int rgb8(double r, double g, double b) {
+        int ir = (int) Math.clamp(Math.round(r * 255), 0, 255), ig = (int) Math.clamp(Math.round(g * 255), 0, 255),
+            ib = (int) Math.clamp(Math.round(b * 255), 0, 255);
+        return ir << 16 | ig << 8 | ib;
+    }
+
+    /**
+     * Merges similar colours (MM-8b), in place over the whole grid: {@link #MERGE_ROUNDS} times, each land sample takes
+     * the mean of the land samples in the {@code 2 * SHIFT_R + 1} square round it whose colour is within {@code thr} of
+     * its own (r g b 0-1, straight-line distance), so near colours settle into one. Then each sample that fewer than
+     * {@link #MERGE_AGREE} samples in the {@code 2 * MERGE_R + 1} square round it agree with (itself included) takes the colour of the sample in the
+     * square that most agree with: stray blocks, one or two samples of noise and the mixed samples along a staircase
+     * join the region round them. Off (as before) at {@code thr <= 0}.
+     */
+    static void merge(boolean[] known, boolean[] wet, float[] colour, float thr) {
+        if (thr <= 0) return;
+        int n = GRID * GRID;
+        float t2 = thr * thr;
+        boolean[] land = new boolean[n];
+        for (int g = 0; g < n; g++) land[g] = known[g] && !wet[g];
+        float[] next = new float[n * 3];
+        for (int round = 0; round < MERGE_ROUNDS; round++) {
+            for (int z = 0; z < GRID; z++) {
+                for (int x = 0; x < GRID; x++) {
+                    int g = x + z * GRID;
+                    if (!land[g]) continue;
+                    float r = colour[g * 3], gg = colour[g * 3 + 1], b = colour[g * 3 + 2], sr = 0, sg = 0, sb = 0;
+                    int cnt = 0;
+                    for (int dz = -SHIFT_R; dz <= SHIFT_R; dz++) {
+                        int zz = z + dz;
+                        if (zz < 0 || zz >= GRID) continue;
+                        for (int dx = -SHIFT_R; dx <= SHIFT_R; dx++) {
+                            int xx = x + dx;
+                            if (xx < 0 || xx >= GRID) continue;
+                            int h = xx + zz * GRID;
+                            if (!land[h]) continue;
+                            float cr = colour[h * 3], cg = colour[h * 3 + 1], cb = colour[h * 3 + 2];
+                            float d = (cr - r) * (cr - r) + (cg - gg) * (cg - gg) + (cb - b) * (cb - b);
+                            if (d > t2) continue;
+                            sr += cr;
+                            sg += cg;
+                            sb += cb;
+                            cnt++;
+                        }
+                    }
+                    next[g * 3] = sr / cnt;
+                    next[g * 3 + 1] = sg / cnt;
+                    next[g * 3 + 2] = sb / cnt;
+                }
+            }
+            for (int g = 0; g < n; g++) {
+                if (!land[g]) continue;
+                colour[g * 3] = next[g * 3];
+                colour[g * 3 + 1] = next[g * 3 + 1];
+                colour[g * 3 + 2] = next[g * 3 + 2];
+            }
+        }
+        // how many samples in each one's square agree with it
+        int[] agree = new int[n];
+        for (int z = 0; z < GRID; z++) {
+            for (int x = 0; x < GRID; x++) {
+                int g = x + z * GRID;
+                if (!land[g]) continue;
+                float r = colour[g * 3], gg = colour[g * 3 + 1], b = colour[g * 3 + 2];
+                int cnt = 0;
+                for (int dz = -MERGE_R; dz <= MERGE_R; dz++) {
+                    int zz = z + dz;
+                    if (zz < 0 || zz >= GRID) continue;
+                    for (int dx = -MERGE_R; dx <= MERGE_R; dx++) {
+                        int xx = x + dx;
+                        if (xx < 0 || xx >= GRID) continue;
+                        int h = xx + zz * GRID;
+                        if (!land[h]) continue;
+                        float d = (colour[h * 3] - r) * (colour[h * 3] - r) + (colour[h * 3 + 1] - gg) * (colour[h * 3 + 1] - gg)
+                            + (colour[h * 3 + 2] - b) * (colour[h * 3 + 2] - b);
+                        if (d <= t2) cnt++;
+                    }
+                }
+                agree[g] = cnt;
+            }
+        }
+        System.arraycopy(colour, 0, next, 0, n * 3);
+        for (int z = 0; z < GRID; z++) {
+            for (int x = 0; x < GRID; x++) {
+                int g = x + z * GRID;
+                if (!land[g] || agree[g] >= MERGE_AGREE) continue;
+                int best = g;
+                for (int dz = -MERGE_R; dz <= MERGE_R; dz++) {
+                    int zz = z + dz;
+                    if (zz < 0 || zz >= GRID) continue;
+                    for (int dx = -MERGE_R; dx <= MERGE_R; dx++) {
+                        int xx = x + dx;
+                        if (xx < 0 || xx >= GRID) continue;
+                        int h = xx + zz * GRID;
+                        if (land[h] && agree[h] > agree[best]) best = h;
+                    }
+                }
+                next[g * 3] = colour[best * 3];
+                next[g * 3 + 1] = colour[best * 3 + 1];
+                next[g * 3 + 2] = colour[best * 3 + 2];
+            }
+        }
+        System.arraycopy(next, 0, colour, 0, n * 3);
+    }
+
+    /**
+     * The region texture (MM-8b): the brushed land colour blurred with a Gaussian ({@link #REGION_SIGMA} samples,
+     * land only, normalised by the land under it). The shader reads which of the two colours round a pixel it is on from
+     * this, so a border runs where the blur is half way between them: a smooth curve through any staircase. Water and
+     * unexplored texels with no land near are 0.
+     */
+    static void region(boolean[] known, boolean[] wet, float[] brushed, int[][] out) {
+        float[] k = new float[2 * REGION_R + 1];
+        for (int i = -REGION_R; i <= REGION_R; i++) k[i + REGION_R] = (float) Math.exp(-i * i / (2.0 * REGION_SIGMA * REGION_SIGMA));
+        // along x first, over the rows the column pass reads: r g b and the land weight
+        int z0 = PAD - REGION_R, z1 = PAD + SIZE + REGION_R;
+        float[] rows = new float[GRID * GRID * 4];
+        for (int gz = z0; gz < z1; gz++) {
+            for (int ax = 0; ax < SIZE; ax++) {
+                int gx = ax + PAD, o = (gx + gz * GRID) * 4;
+                for (int i = -REGION_R; i <= REGION_R; i++) {
+                    int g = gx + i + gz * GRID;
+                    if (!known[g] || wet[g]) continue;
+                    float w = k[i + REGION_R];
+                    rows[o] += w * brushed[g * 3];
+                    rows[o + 1] += w * brushed[g * 3 + 1];
+                    rows[o + 2] += w * brushed[g * 3 + 2];
+                    rows[o + 3] += w;
+                }
+            }
+        }
+        for (int az = 0; az < SIZE; az++) {
+            for (int ax = 0; ax < SIZE; ax++) {
+                int gx = ax + PAD, gz = az + PAD;
+                float r = 0, g = 0, b = 0, w = 0;
+                for (int i = -REGION_R; i <= REGION_R; i++) {
+                    int o = (gx + (gz + i) * GRID) * 4;
+                    float kw = k[i + REGION_R];
+                    r += kw * rows[o];
+                    g += kw * rows[o + 1];
+                    b += kw * rows[o + 2];
+                    w += kw * rows[o + 3];
+                }
+                out[REGION][ax + az * SIZE] = w > 1e-4f ? 0xFF000000 | rgb8(r / w, g / w, b / w) : 0;
             }
         }
     }

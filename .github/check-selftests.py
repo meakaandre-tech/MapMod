@@ -4,6 +4,7 @@
 Usage: check-selftests.py <ci dir>   (the folder with server.log, server2.log, client.log and client-NN.png)
 Prints the totals per suite and every FAIL line; exits 1 if anything is missing or failed.
 """
+import math
 import os
 import re
 import sys
@@ -40,6 +41,19 @@ def read(path):
 STRIPS = [("mycelium", -32), ("grass", -16), ("sand", 0), ("stone", 16), ("terracotta", 32)]
 # the band of rows the screenshots are read along: clear of the mobs, markers and the player on the patch
 BAND = (-26, -18)
+# MM-8b: the rows where the borders between strips are straight (clear of the strays below), and the two staircases
+# (z 22-39: the sand/stone border a block further west every 2 rows; z 24-39: the grass/sand border 2 blocks every 4)
+STRAIGHT = (-38, -16)
+STAIRS = (23, 38)
+BORDERS = {
+    ("mycelium", "grass"): lambda z: -24,
+    ("grass", "sand"): lambda z: -8 if z < 24 else -8 - 2 * ((int(z) - 20) // 4),
+    ("sand", "stone"): lambda z: 8 if z < 22 else 8 - (int(z) - 20) // 2,
+    ("stone", "terracotta"): lambda z: 24,
+}
+# MM-8b: stray blocks inside strips (block centres; two side by side in the mycelium; a poppy on the grass)
+STRAYS = [(-32.0, -11.5, "mycelium"), (-17.5, -11.5, "grass"), (-13.5, -7.5, "grass"), (-19.5, -13.5, "grass"),
+          (2.5, -13.5, "sand"), (18.5, -11.5, "stone"), (32.5, -9.5, "terracotta")]
 
 
 def looks(name, c):
@@ -65,13 +79,52 @@ def geometry(ci):
     return out
 
 
+def trace(px, w, x0, z0, ppb, A, B, za, zb, expect):
+    """
+    The border from colour A (west) to colour B (east) along each pixel row from world z za to zb: the world x where the
+    row first passes half way from A to B, near where the blocks put it (within 7 blocks: the warp moves it 5 at most).
+    """
+    d2 = sum((B[i] - A[i]) ** 2 for i in range(3)) or 1
+    out = []
+    for y in range(int(math.ceil(z0 + za * ppb)), int(z0 + zb * ppb) + 1):
+        z = (y - z0) / ppb
+        xe = expect(z)
+        xa, xb = max(1, int(x0 + (xe - 7) * ppb)), min(w - 1, int(x0 + (xe + 7) * ppb) + 1)
+        ts = [sum((px[x, y][i] - A[i]) * (B[i] - A[i]) for i in range(3)) / d2 for x in range(xa, xb)]
+        # a crossing with a block of A's side before it and of B's after (so an odd dot over the map is not one)
+        k = max(1, int(round(ppb)))
+        for j in range(k, len(ts) - k + 1):
+            if ts[j - 1] < 0.5 <= ts[j] and all(t < 0.5 for t in ts[j - k:j]) and all(t >= 0.5 for t in ts[j:j + k]):
+                out.append((z, (xa + j - 1 + (0.5 - ts[j - 1]) / (ts[j] - ts[j - 1]) - x0) / ppb))
+                break
+    return out
+
+
+def wobble(pts, ppb):
+    """Steps in a traced border (blocks): the largest move from one pixel row to the next, and rms and largest distance from its own 4-block moving average."""
+    if len(pts) < 3:
+        return None
+    xs = [p[1] for p in pts]
+    # a median of three rows first: a map dot over the border moves one row, a step moves them all
+    med = [sorted(xs[max(0, i - 1):i + 2])[len(xs[max(0, i - 1):i + 2]) // 2] for i in range(len(xs))]
+    jump = max(abs(b - a) for a, b in zip(med, med[1:]))
+    half = max(1, int(round(2 * ppb)))
+    res = []
+    for i in range(half, len(xs) - half):
+        win = xs[i - half:i + half + 1]
+        res.append(xs[i] - sum(win) / len(win))
+    if not res:
+        return jump, 0.0, 0.0
+    return jump, math.sqrt(sum(r * r for r in res) / len(res)), max(abs(r) for r in res)
+
+
 def patch(ci, Image, bad):
     """
     The patch on screen (MM-8): each strip in its real colour, close up and at a pixel a block; close up, each strip a
     soft area with no block grid in it, and each border between two strips sharp.
     """
     geo = geometry(ci)
-    for shot, name in (("local-03.png", "patch"), ("local-04.png", "patch-mid")):
+    for shot, name in (("local-03.png", "patch"), ("local-04.png", "patch-mid"), ("local-05.png", "patch-far")):
         path = os.path.join(ci, shot)
         if name not in geo or not os.path.exists(path):
             bad.append(f"no {name} screenshot or geometry to read the patch's colours from")
@@ -94,8 +147,46 @@ def patch(ci, Image, bad):
             means[strip] = c
             ok = looks(strip, c)
             print(f"{shot} ({name}): {strip} #{c[0]:02X}{c[1]:02X}{c[2]:02X} {'ok' if ok else 'WRONG'}")
-            if not ok:
+            if not ok and name != "patch-far":
                 bad.append(f"{strip} is not its real colour in {shot}")
+        # MM-8b: every border between strips is a smooth curve, with no 1- or 2-block steps, where it is straight in the
+        # blocks and where the blocks step in a staircase: from one pixel row to the next it moves little, and it keeps
+        # close to its own 4-block moving average. MM-8's crisp borders traced the staircases at 0.13-0.18 blocks rms
+        # off it close up, 0.11-0.22 at a pixel a block. A block is 6 pixels close up and 1 at a pixel a block, so the
+        # limits never go under what a pixel can show. Far out a block is a quarter of a pixel, so no 1- or 2-block step
+        # can show at all; and there this run's patch, 80 blocks across, is under the fog's edge (it fades in over 48
+        # blocks), so the far shot is only reported
+        jump_lim, rms_lim = max(0.5, 1.5 / ppb), max(0.08, 0.12 / ppb)
+        for (sa, sb), expect in BORDERS.items():
+            for part, (za, zb) in (("straight", STRAIGHT), ("stairs", STAIRS)):
+                if part == "stairs" and (sa, sb) not in (("grass", "sand"), ("sand", "stone")):
+                    continue
+                pts = trace(px, w, x0, z0, ppb, means[sa], means[sb], za, zb, expect)
+                rows = int((zb - za) * ppb)
+                wb = wobble(pts, ppb)
+                if wb is None or len(pts) < 0.8 * rows:
+                    print(f"{shot}: the {sa}/{sb} border ({part}) traced on {len(pts)} of {rows} rows")
+                    if name != "patch-far":
+                        bad.append(f"the {sa}/{sb} border ({part}) could not be traced in {shot}")
+                    continue
+                jump, rms, worst = wb
+                ok = jump <= jump_lim and rms <= rms_lim
+                print(f"{shot}: the {sa}/{sb} border ({part}, {len(pts)} rows) moves {jump:.2f} blocks a row at most, "
+                      f"{rms:.3f} rms / {worst:.2f} at most off its 4-block average {'ok' if ok else 'STEPPED'}")
+                if not ok and name != "patch-far":
+                    bad.append(f"the {sa}/{sb} border ({part}) shows steps in {shot}")
+        # MM-8b: stray blocks inside a strip do not show: round each, the strip's own colour
+        if name != "patch-far":
+            for sx, sz, strip in STRAYS:
+                M = means[strip]
+                cs = [at(sx + dx * 0.25, sz + dz * 0.25) for dx in range(-6, 7) for dz in range(-6, 7)]
+                avg = tuple(sum(c[i] for c in cs) / len(cs) for i in range(3))
+                off = sum(abs(avg[i] - M[i]) for i in range(3))
+                worst = max(sum(abs(c[i] - M[i]) for i in range(3)) for c in cs)
+                ok = off <= 15
+                print(f"{shot}: a stray block in the {strip} at {sx:g}, {sz:g} is {off:.1f} off the strip's colour on average, {worst} at most {'ok' if ok else 'SHOWS'}")
+                if not ok:
+                    bad.append(f"the stray block in the {strip} at {sx:g}, {sz:g} shows in {shot}")
         if name != "patch":
             continue
         # no block grid: inside each strip, the steps between neighbouring pixels along a row are small and do not come

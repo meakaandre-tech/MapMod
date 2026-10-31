@@ -37,14 +37,16 @@ library it carries for Linux (x64, arm64, ppc64le) and macOS (arm64) through `ja
 on other platforms (Windows among them), which still uses `sun.misc.Unsafe`. Both read and write the same files.
 
 The fullscreen map reads the saved tiles it shows on a background thread (and takes newer ones from the capture), works
-out each tile's textures on another (the land's colour pulled toward a muted painted palette and run through a
-Kuwahara filter, so mixed ground settles into soft brush patches while borders between blocks stay sharp; forest and
-snow weights; a signed distance to the shore; canopy),
+out each tile's textures on another (the land's colour pulled toward a muted painted palette, near colours merged and
+stray blocks folded into the region round them, then run through a Kuwahara filter, so flat ground reads as broad
+strokes while borders between colours stay put; that colour blurred, for where borders run; forest and snow weights; a
+signed distance to the shore; canopy),
 lets them go when it closes, uploads one or two a frame to the GPU and paints them with one fragment shader per tile
 (`assets/mapmod/shaders/core/map_paint.*`): bicubic height, a hillshade lit from the northwest (its slope sharpened against a smoothed one, so ridges and cliffs
-read crisp), the colours read smoothly (never nearest) and split in two where two meet, so borders between blocks are
-crisp but wander with low-frequency noise in world space (no straight runs, no chunk edges, no block grid, the same
-across tiles and at any zoom), darker lowlands and paler peaks, snow above a height,
+read crisp), the colours read smoothly (never nearest) and split in two where two meet, the side a pixel is on read off
+the blurred colour, so borders between colours are narrow (about a block) but run as smooth curves through the
+staircases of the terrain and wander with low-frequency noise in world space (no steps, no straight runs, no chunk
+edges, no block grid, the same across tiles and at any zoom), darker lowlands and paler peaks, snow above a height,
 forests darkened by canopy with a soft brush, water deep to shallow by depth and distance from the shore, tinted by its
 biome's water colour, with a pale band along it (coasts and rivers as smooth curves), optional contour lines (off by default; the switch is in the map's
 top bar and kept in `mapmod/settings.json` as `contours`), and a light paper grain and vignette over it all.
@@ -59,7 +61,8 @@ stops it). Icons shrink as the map zooms out, and mobs of one kind (as mob faces
 `mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.
 
 Resource packs restyle it through `assets/mapmod/map_palette.json` (`colour`: the pull toward a muted painted palette,
-`saturation` and `value`, and the brush's `brush_size` in blocks; optional class colour overrides `classes` 0-7, none
+`saturation` and `value`, `merge`, how close two colours must be to merge into one, and the brush's `brush_size` in
+blocks; optional class colour overrides `classes` 0-7, none
 by default, each replacing the real colours of its class; water, shore band, paper, height tint, snow line, hillshade
 share, `edges`, `forest`, `contours`, `finish`, `fog`: colour, edge width in blocks, cloud strength); every value is
 optional and falls back on its own; F3+T reloads it. A resource pack that changes a block's texture changes its colour

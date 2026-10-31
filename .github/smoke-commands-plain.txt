@@ -27,4 +27,25 @@ summon mooshroom -3 151 -10 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
 summon mooshroom -2 151 -9 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
 summon cow 12 151 -8 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
 summon cow 13 151 -7 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+fill 7 150 22 7 150 23 minecraft:stone
+fill 6 150 24 7 150 25 minecraft:stone
+fill 5 150 26 7 150 27 minecraft:stone
+fill 4 150 28 7 150 29 minecraft:stone
+fill 3 150 30 7 150 31 minecraft:stone
+fill 2 150 32 7 150 33 minecraft:stone
+fill 1 150 34 7 150 35 minecraft:stone
+fill 0 150 36 7 150 37 minecraft:stone
+fill -1 150 38 7 150 39 minecraft:stone
+fill -10 150 24 -9 150 27 minecraft:sand
+fill -12 150 28 -9 150 31 minecraft:sand
+fill -14 150 32 -9 150 35 minecraft:sand
+fill -16 150 36 -9 150 39 minecraft:sand
+setblock -33 150 -12 minecraft:sand
+setblock -32 150 -12 minecraft:sand
+setblock -18 150 -12 minecraft:sand
+setblock -14 150 -8 minecraft:stone
+setblock -20 151 -14 minecraft:poppy
+setblock 2 150 -14 minecraft:stone
+setblock 18 150 -12 minecraft:sand
+setblock 32 150 -10 minecraft:stone
 tp @a 0 151 0

@@ -9,7 +9,9 @@
 // across a soft, wandering border where their weights cross, so flat land is smooth, borders between blocks are crisp,
 // and no sample's square shows. Forests are darkened by canopy with a soft brush; water from a signed distance to the
 // shore (a smooth coast and ribbon rivers), deep to shallow with a pale band along the shore, tinted by the water's own
-// colour. Unexplored land is paper. There is no
+// colour. MM-8b: which of the two colours a pixel takes is read from the region texture, the brushed colour blurred
+// over about 3.5 samples, at the same warped position: the border runs where the blur is half way between the two, a
+// smooth curve through any block staircase that wanders with the warp, about a block wide. Unexplored land is paper. There is no
 // nearest-neighbour look-up anywhere, so no sample's square or block edge ever shows. Painted live on screen, the paper
 // grain and the vignette go on from the screen position (as map_quad does); baked, they are left out. On screen the fog
 // over unexplored land goes on too (MM-5), from the tile's fog mask and the same static clouds as map_quad's; baked,
@@ -20,6 +22,7 @@ uniform sampler2D Surface;  // rgb: the land's painted colour (MM-8)   a: canopy
 uniform sampler2D Effects;  // r: share of forest floor   g: share of snow (MM-8)
 uniform sampler2D Water;    // rgb: the water's own colour   a: 1 on water (MM-8)
 uniform sampler2D Shore;    // r: signed distance to the shore in samples, 128 + 4 d (water positive)
+uniform sampler2D Region;   // rgb: the brushed land colour, blurred (MM-8b)
 uniform sampler2D Fog;      // r: explored, 0 to 1 (MM-5; on screen only)
 
 layout(std140) uniform MapPaint {
@@ -30,7 +33,7 @@ layout(std140) uniform MapPaint {
     vec4 HeightTint;        // x: low height  y: high height  z: shade at low  w: light at high
     vec4 Params;            // x: hillshade mix  y: snow above  z: snow blend  w: relief
     vec4 ShoreColour;       // rgb, a: width of the shore band (blocks)
-    vec4 Edges;             // x: border softness  y: warp (blocks)
+    vec4 Edges;             // x: border softness (about 8 x this blocks wide)  y: warp (blocks)
     vec4 Forest;            // x: darkening at full canopy  y: brush strength
     vec4 Contour;           // x: interval (blocks)  y: strength
     vec4 Finish;            // x: paper grain  y: vignette
@@ -58,6 +61,9 @@ layout(location = 0) out vec4 fragColor;
 const float PERIOD = 2048.0;
 // how much the hillshade's slope is sharpened against the smoothed slope (MM-7)
 const float SHARPEN = 0.6;
+// the region blur's sigma (samples, TilePrep.REGION_SIGMA): the steepest the blurred share runs across a straight border
+// is 1 / (sqrt(2 pi) sigma) a sample
+const float REGION_SIGMA = 1.75;
 
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -167,7 +173,7 @@ void main() {
     vec3 land;
     vec3 cols[16];
     float wts[16];
-    vec3 mean = vec3(0.0), wtint = vec3(0.0);
+    vec3 mean = vec3(0.0), wtint = vec3(0.0), blurred = vec3(0.0);
     vec2 fx = vec2(0.0);
     float canopy = 0.0, landW = 0.0, wetW = 0.0, depth = 0.0, sdf = 0.0, tintW = 0.0;
     for (int j = 0; j < 4; j++) {
@@ -192,6 +198,7 @@ void main() {
                 wts[k] = e;
                 landW += e;
                 mean += e * s.rgb;
+                blurred += e * texelFetch(Region, p, 0).rgb;
                 canopy += e * s.a;
                 fx += e * texelFetch(Effects, p, 0).rg;
             }
@@ -201,19 +208,21 @@ void main() {
     // unexplored samples fade softly to paper: the fog's mask, not this, decides what is shown
     float shown = smoothstep(0.5, 0.9, explored);
 
-    // land: the colours round the pixel, smooth where they agree; where they hold two, each side's mean, blended across
-    // a soft border where their weights cross. The two sides are found by distance, not by sign along an axis, so the
-    // split never flips on rounding noise: seeded with the colour farthest from the mean and the one farthest from that,
-    // each texel goes to the nearer, twice. A colour that only just enters the 4x4 texels (weight near 0) is a side of
-    // its own with no say, so nothing jumps where it enters.
-    // (no branch round this: fwidth below needs every pixel of the quad to run it)
+    // land: the colours round the pixel, smooth where they agree; where they hold two (MM-8b), each side's colour, and
+    // which side the pixel is on from the blurred region colour: where it is past half way from one to the other. The
+    // blur runs smooth through any staircase of blocks, so the border is a curve, cut narrow (about a block) with a
+    // smoothstep. The two sides are found by distance: seeded with the colour farthest from the mean and the one farthest
+    // from that (a colour only just entering the 4x4 texels has no say in the seeds), then each side is the mean of the
+    // texels that are clearly of it (mixed ones in between count for neither), twice. The pair is put in a fixed order,
+    // so the share never flips where the texels round the pixel change.
+    // (no branch round this: dFdx below needs every pixel of the quad to run it)
     {
         mean /= max(landW, 1e-6);
         vec3 c1 = mean, c2 = mean;
         float best = -1.0;
         for (int k = 0; k < 16; k++) {
             vec3 dv = cols[k] - mean;
-            float q = wts[k] > 0.0 ? dot(dv, dv) : -1.0;
+            float q = wts[k] > 0.0 ? min(wts[k] * 16.0, 1.0) * dot(dv, dv) : -1.0;
             if (q > best) {
                 best = q;
                 c1 = cols[k];
@@ -222,23 +231,21 @@ void main() {
         best = -1.0;
         for (int k = 0; k < 16; k++) {
             vec3 dv = cols[k] - c1;
-            float q = wts[k] > 0.0 ? dot(dv, dv) : -1.0;
+            float q = wts[k] > 0.0 ? min(wts[k] * 16.0, 1.0) * dot(dv, dv) : -1.0;
             if (q > best) {
                 best = q;
                 c2 = cols[k];
             }
         }
-        float wa = 0.0, wb2 = 0.0;
         for (int it = 0; it < 2; it++) {
-            vec3 ca = vec3(0.0), cb = vec3(0.0);
-            wa = 0.0;
-            wb2 = 0.0;
+            vec3 d = c1 - c2, ca = vec3(0.0), cb = vec3(0.0);
+            float dd = max(dot(d, d), 1e-8), wa = 0.0, wb2 = 0.0;
             for (int k = 0; k < 16; k++) {
-                vec3 d1 = cols[k] - c1, d2 = cols[k] - c2;
-                if (dot(d1, d1) < dot(d2, d2)) {
+                float p = dot(cols[k] - c2, d) / dd;
+                if (p > 0.7) {
                     ca += wts[k] * cols[k];
                     wa += wts[k];
-                } else {
+                } else if (p < 0.3) {
                     cb += wts[k] * cols[k];
                     wb2 += wts[k];
                 }
@@ -246,11 +253,23 @@ void main() {
             c1 = wa > 0.0 ? ca / wa : c1;
             c2 = wb2 > 0.0 ? cb / wb2 : c2;
         }
-        float share = wa / max(wa + wb2, 1e-6);
-        float soft = max(Edges.x, min(1.5 * fwidth(share), 0.25));
+        if (dot(c1 - c2, vec3(0.31, 0.52, 0.17)) < 0.0) {
+            vec3 sw = c1;
+            c1 = c2;
+            c2 = sw;
+        }
+        vec3 d = c1 - c2;
+        float dd = max(dot(d, d), 1e-8);
+        vec3 region = landW > 0.0 ? blurred / landW : mean;
+        float share = clamp(dot(region - c2, d) / dd, 0.0, 1.0);
+        // the border Edges.x * 8 blocks wide, at least a pixel and a half: the share runs at most 1 / (sqrt(2 pi) sigma)
+        // a sample across it, so half that width in blocks over a sample's blocks
+        float bpp = 4.0 * max(length(dFdx(ws)), length(dFdy(ws)));
+        float slope = 1.0 / (2.5066 * REGION_SIGMA * bps);
+        float soft = clamp(slope * max(4.0 * Edges.x, 0.75 * bpp), 1e-4, 0.45);
         vec3 crisp = mix(c2, c1, smoothstep(0.5 - soft, 0.5 + soft, share));
         // two colours only where they truly differ: a gentle gradient (a biome's tint) stays smooth
-        float split = smoothstep(0.03, 0.10, length(c1 - c2));
+        float split = smoothstep(0.03, 0.10, length(d));
         land = mix(mean, crisp, split);
     }
     if (landW <= 0.0) land = vec3(1.0);
