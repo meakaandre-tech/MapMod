@@ -109,11 +109,12 @@ def patch(ci, Image, bad):
                 for x in range(xa + 1, xb):
                     a, b2 = px[x - 1, y], px[x, y]
                     phase[(x - int(x0)) % (2 * step)].append(sum(abs(a[i] - b2[i]) for i in range(3)))
-            means_p = [sum(p) / len(p) for p in phase if p]
+            # medians: an overlay's odd dot or icon edge is not a grid
+            means_p = [sorted(p)[len(p) // 2] for p in phase if p]
             overall = sum(means_p) / len(means_p)
             worst = max(means_p)
             grid = worst > 2 * overall + 3
-            print(f"{shot}: {strip} pixel steps {overall:.1f} on average, {worst:.1f} at worst of {2 * step} phases{' GRID' if grid else ''}")
+            print(f"{shot}: {strip} pixel steps {overall:.1f} (median) on average, {worst:.1f} at worst of {2 * step} phases{' GRID' if grid else ''}")
             if grid:
                 bad.append(f"a block grid shows in the {strip} strip in {shot}")
         # sharp borders: along each row, the move from one strip's colour to the next's happens within 2.5 blocks
@@ -200,8 +201,12 @@ def main():
             k = sum(p) / psum
             return 0.7 <= k <= 1.15 and all(abs(p[i] - k * paper[i]) <= 6 for i in range(3))
 
+        def between(a, b, c):
+            # a blend of its neighbours (an antialiased border between two colours), not paper showing through
+            return all(min(b[i], c[i]) - 3 <= a[i] <= max(b[i], c[i]) + 3 for i in range(3))
+
         def gap(a, b, c):
-            return papery(a) and not papery(b) and not papery(c)
+            return papery(a) and not papery(b) and not papery(c) and not between(a, b, c)
         gaps = [x for x in range(285, w - 1) if sum(1 for y in range(40, h - 20) if gap(px[x, y], px[x - 1, y], px[x + 1, y])) > 30]
         gaps += [y for y in range(40, h - 21) if sum(1 for x in range(285, w - 1) if gap(px[x, y], px[x, y - 1], px[x, y + 1])) > 30]
         print(f"{shot}: {len(gaps)} lines of paper between tiles{' at ' + str(gaps) if gaps else ''}")

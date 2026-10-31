@@ -63,7 +63,7 @@ final class CaptureClientTests {
             for (byte c : tile.surface) classes &= c >= 0 && c < SurfaceClass.COUNT;
             // the sample stands for its cell's middle column: its height is that column's top block, or below it
             // where leaves, logs, plants or water were looked past
-            int mx = (px & ~3) + 2, mz = (pz & ~3) + 2;
+            int sp = SurfaceTile.SPACING, mx = Math.floorDiv(px, sp) * sp + sp / 2, mz = Math.floorDiv(pz, sp) * sp + sp / 2;
             int top = mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, mx, mz) - 1;
             detail += ", top block of its middle column at y " + top;
             out.add(new Check("capture: the sample under the player is explored and at its column's surface", underPlayer
