@@ -37,8 +37,8 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
     public static final PaintPalette DEFAULT = new PaintPalette(
         new int[]{0xAAB38E, 0x879471, 0xDCCB9E, 0x9C978D, 0xECEEEC, 0x93805F, 0xBCD3DE, 0xC8642C},
         new float[]{0.4f, 0.4f, 0, 0, 0, 0.15f, 0, 0},
-        0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.4f,
-        40, 0xD2E2DC, 6, 0.12f, 5, 0.28f, 0.18f, 16, 0.3f, 0.035f, 0.18f,
+        0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.5f,
+        40, 0xB0CCD0, 3, 0.12f, 5, 0.28f, 0.18f, 16, 0.3f, 0.035f, 0.18f,
         0xD8CFBA, 48, 0.6f);
 
     private static volatile PaintPalette current = DEFAULT;
@@ -174,6 +174,38 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
             Math.clamp(number(finish, "grain", d.grain), 0f, 0.5f), Math.clamp(number(finish, "vignette", d.vignette), 0f, 1f),
             colour(fog, "colour", d.fogColour), Math.clamp(number(fog, "edge", d.fogEdge), 8f, 256f),
             Math.clamp(number(fog, "clouds", d.fogClouds), 0f, 1f));
+    }
+
+    /**
+     * The colour the painted map gives open, flat land of one class with a stored tint, as {@code map_paint.fsh} works it
+     * out before relief, forest, water and the finish (for {@code /mapmod probe} and the selftests). 0xRRGGBB.
+     */
+    public int landColour(int cls, int tint, int height) {
+        int c = Math.clamp(cls, 0, SurfaceClass.COUNT - 1);
+        float[] base = rgb(classColour[c]), t = rgb(tint);
+        float k = classTint[c];
+        float[] out = new float[3];
+        float max = Math.max(Math.max(t[0], t[1]), Math.max(t[2], 0.001f));
+        for (int i = 0; i < 3; i++) out[i] = base[i] * (1 + (t[i] / max - 1) * k);
+        float h = smooth(lowHeight, highHeight, height), shade = lowShade + (highLight - lowShade) * h;
+        float s = smooth(snowAbove - snowBlend, snowAbove + snowBlend, height);
+        float[] sn = rgb(snow);
+        for (int i = 0; i < 3; i++) out[i] = out[i] * shade + (sn[i] - out[i] * shade) * s;
+        return pack(out);
+    }
+
+    static float[] rgb(int c) {
+        return new float[]{(c >> 16 & 255) / 255f, (c >> 8 & 255) / 255f, (c & 255) / 255f};
+    }
+
+    static int pack(float[] c) {
+        int r = Math.clamp(Math.round(c[0] * 255), 0, 255), g = Math.clamp(Math.round(c[1] * 255), 0, 255), b = Math.clamp(Math.round(c[2] * 255), 0, 255);
+        return r << 16 | g << 8 | b;
+    }
+
+    static float smooth(float e0, float e1, float x) {
+        float t = Math.clamp((x - e0) / (e1 - e0), 0f, 1f);
+        return t * t * (3 - 2 * t);
     }
 
     private static JsonObject object(JsonObject o, String key) {

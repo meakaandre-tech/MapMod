@@ -109,7 +109,7 @@ final class CaptureClientTests {
             {Blocks.GRASS_BLOCK, SurfaceClass.GRASS}, {Blocks.MOSS_BLOCK, SurfaceClass.GRASS}, {Blocks.OAK_LOG, SurfaceClass.FOREST},
             {Blocks.SAND, SurfaceClass.SAND}, {Blocks.RED_SAND, SurfaceClass.SAND}, {Blocks.STONE, SurfaceClass.ROCK},
             {Blocks.DEEPSLATE, SurfaceClass.ROCK}, {Blocks.TERRACOTTA, SurfaceClass.ROCK}, {Blocks.SNOW_BLOCK, SurfaceClass.SNOW},
-            {Blocks.DIRT, SurfaceClass.DIRT}, {Blocks.MUD, SurfaceClass.DIRT}, {Blocks.PODZOL, SurfaceClass.DIRT},
+            {Blocks.DIRT, SurfaceClass.DIRT}, {Blocks.MUD, SurfaceClass.DIRT}, {Blocks.MYCELIUM, SurfaceClass.DIRT}, {Blocks.PODZOL, SurfaceClass.DIRT},
             {Blocks.ICE, SurfaceClass.ICE}, {Blocks.PACKED_ICE, SurfaceClass.ICE}, {Blocks.LAVA, SurfaceClass.LAVA},
         };
         List<String> wrong = new ArrayList<>();

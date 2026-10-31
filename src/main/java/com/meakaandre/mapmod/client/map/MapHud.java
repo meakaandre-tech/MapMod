@@ -290,49 +290,77 @@ public final class MapHud {
      * moving things and the group's players. Returns nothing; the fullscreen map does its own hover on top.
      */
     public static void things(GuiGraphicsExtractor g, MapDraw.View v) {
+        // MM-7: icons shrink as the map zooms out, and markers, pins and moving things of one kind that overlap are
+        // drawn once with a count
+        float k = MapDraw.iconScale(v);
+        double radius = MapIcons.SIZE * k * 0.9;
         if (MapLayer.POIS.shown()) {
             for (MapPoi poi : MapClient.poisIn(v.regions())) {
                 if (!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) continue;
                 if (!MapClient.explored(poi.x(), poi.z())) continue;
                 double sx = v.sx(poi.x() + 0.5), sy = v.sy(poi.z() + 0.5);
                 if (!v.inside(sx, sy, ICON_MARGIN)) continue;
-                MapDraw.poi(g, poi, (int) Math.round(sx), (int) Math.round(sy));
+                MapDraw.scaled(g, Math.round(sx), Math.round(sy), k, () -> MapDraw.poi(g, poi, 0, 0));
             }
         }
         if (MapLayer.MARKERS.shown()) {
+            MapDraw.Stacks<MapMarker> markers = new MapDraw.Stacks<>(radius);
             for (MapMarker m : MapClient.markers) {
                 if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
                 double sx = v.sx(m.x + 0.5), sy = v.sy(m.z + 0.5);
-                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.marker(g, m, (int) Math.round(sx), (int) Math.round(sy));
+                if (v.inside(sx, sy, ICON_MARGIN)) markers.add((m.death ? -1 : m.icon) + "/" + MapDraw.markerColour(m), sx, sy, m);
+            }
+            for (MapDraw.Stack<MapMarker> st : markers.stacks()) {
+                MapDraw.scaled(g, Math.round(st.x()), Math.round(st.y()), k, () -> MapDraw.marker(g, st.first, 0, 0));
+                MapDraw.count(g, st.count(), Math.round(st.x()), Math.round(st.y()), MapIcons.SIZE / 2f * k);
             }
             // mods' markers (api.MapMarkers), under the markers filter
             if (MapFilters.on(MapModApi.MARKERS.filterKey())) {
+                MapDraw.Stacks<MapMarkers.Marker> api = new MapDraw.Stacks<>(radius);
                 for (MapMarkers.Marker m : MapMarkers.in(Level.OVERWORLD)) {
                     double sx = v.sx(m.x()), sy = v.sy(m.z());
                     if (!v.inside(sx, sy, ICON_MARGIN)) continue;
-                    MapIcons.shadow(g, m.glyph(), (int) Math.round(sx), (int) Math.round(sy));
-                    MapIcons.centred(g, m.glyph(), (int) Math.round(sx), (int) Math.round(sy), m.colour());
+                    api.add(m.glyph() + "/" + m.colour(), sx, sy, m);
                     apiMarkersDrawn++;
+                }
+                for (MapDraw.Stack<MapMarkers.Marker> st : api.stacks()) {
+                    MapMarkers.Marker m = st.first;
+                    MapDraw.scaled(g, Math.round(st.x()), Math.round(st.y()), k, () -> {
+                        MapIcons.shadow(g, m.glyph(), 0, 0);
+                        MapIcons.centred(g, m.glyph(), 0, 0, m.colour());
+                    });
+                    MapDraw.count(g, st.count(), Math.round(st.x()), Math.round(st.y()), MapIcons.SIZE / 2f * k);
                 }
             }
         }
         if (MapLayer.PINS.shown()) {
+            MapDraw.Stacks<MapClient.Pin> pins = new MapDraw.Stacks<>(radius);
             for (MapClient.Pin pin : MapClient.PINS.values()) {
                 if (!pin.key().startsWith("poi:")) continue;
-                double sx = v.sx(pin.x() + 0.5), sy = v.sy(pin.z() + 0.5);
-                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.pin(g, (int) Math.round(sx), (int) Math.round(sy) - 7);
+                double sx = v.sx(pin.x() + 0.5), sy = v.sy(pin.z() + 0.5) - 7 * k;
+                if (v.inside(sx, sy, ICON_MARGIN)) pins.add("pin", sx, sy, pin);
+            }
+            for (MapDraw.Stack<MapClient.Pin> st : pins.stacks()) {
+                MapDraw.scaled(g, Math.round(st.x()), Math.round(st.y()), k, () -> MapDraw.pin(g, 0, 0));
+                MapDraw.count(g, st.count(), Math.round(st.x()), Math.round(st.y()), MapIcons.SIZE / 2f * k);
             }
         }
         if (MapLayer.POIS.shown()) {
+            // moving things (vehicles, boats, drones): one icon a kind where they bunch up
+            MapDraw.Stacks<MovingPoi> moving = new MapDraw.Stacks<>(radius);
             for (MovingPoi m : MapClient.moving) {
                 double sx = v.sx(m.x()), sy = v.sy(m.z());
-                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.moving(g, m, (float) sx, (float) sy);
+                if (v.inside(sx, sy, ICON_MARGIN)) moving.add(m.kind() + (m.dimmed() ? "/dim" : ""), sx, sy, m);
+            }
+            for (MapDraw.Stack<MovingPoi> st : moving.stacks()) {
+                MapDraw.scaled(g, st.x(), st.y(), k, () -> MapDraw.moving(g, st.first, 0, 0));
+                MapDraw.count(g, st.count(), st.x(), st.y(), MapIcons.SIZE / 2f * k);
             }
         }
         if (MapLayer.PLAYERS.shown() && MapFilters.showsPlayers()) {
             for (MapPayloads.Mate mate : MapClient.mates) {
                 double sx = v.sx(mate.x()), sy = v.sy(mate.z());
-                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.mate(g, mate, (float) sx, (float) sy);
+                if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.scaled(g, sx, sy, k, () -> MapDraw.mate(g, mate, 0, 0));
             }
         }
     }

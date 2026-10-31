@@ -51,7 +51,10 @@ final class ChunkSnapshot {
         int[] heights = new int[256];
         for (int z = 0; z < 16; z++) {
             for (int x = 0; x < 16; x++) {
-                int h = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
+                // LevelChunk.getHeight is the top block's y (Level.getHeight is the first air above it): +1, so the
+                // scan starts at the top block itself. Before MM-7 it started a block lower, so every sample was the
+                // block under the surface (dirt under grass and mycelium alike).
+                int h = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) + 1;
                 heights[x + z * 16] = h;
                 lowest = Math.min(lowest, h);
                 highest = Math.max(highest, h);

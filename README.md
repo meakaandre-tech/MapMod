@@ -26,7 +26,7 @@ the server keeps no terrain of its own); client tiles, pins and settings: `mapmo
 
 The client captures the surface itself, on any server and with any world generator: every chunk it loads, and every chunk whose surface changes, is sampled every 4 blocks on a
 background thread (height, water depth, one of eight surface classes from block tags then map colour, biome tint as
-RGB565, canopy density). Samples go into 512x512-block tiles, zstd-compressed, in
+RGB565, canopy density). Huge mushrooms count as canopy over the ground, like trees, without making it forest floor. Samples go into 512x512-block tiles, zstd-compressed, in
 `mapmod/<server address or world folder>/<dimension>/<x>_<z>.mmt` in the game folder; the layout is documented in
 `SurfaceTile`. zstd is [aircompressor](https://github.com/airlift/aircompressor)'s v3 line, bundled: it calls the zstd
 library it carries for Linux (x64, arm64, ppc64le) and macOS (arm64) through `java.lang.foreign`, and its pure-Java codec
@@ -35,7 +35,8 @@ on other platforms (Windows among them), which still uses `sun.misc.Unsafe`. Bot
 The fullscreen map reads the saved tiles it shows on a background thread (and takes newer ones from the capture), works
 out each tile's textures on another (class weights blurred five samples wide, a signed distance to the shore, canopy),
 lets them go when it closes, uploads one or two a frame to the GPU and paints them with one fragment shader per tile
-(`assets/mapmod/shaders/core/map_paint.*`): bicubic height, a hillshade lit from the northwest, soft class borders that
+(`assets/mapmod/shaders/core/map_paint.*`): bicubic height, a hillshade lit from the northwest (its slope sharpened against a smoothed one, so ridges and cliffs
+read crisp), soft class borders that
 wander with low-frequency noise in world space (no straight runs, no chunk edges, the same across tiles and at any
 zoom), one muted colour per surface class tinted by the biome, darker lowlands and paler peaks, snow above a height,
 forests darkened by canopy with a soft brush, water deep to shallow by depth and distance from the shore with a pale
@@ -47,12 +48,17 @@ Unexplored land fades into fog: what is shown is everything this client has capt
 fog's edge. It is blurred into a soft mask per cell off the render thread and wanders with the same world-space noise
 as region edges, so there are no chunk corners or straight runs at any zoom, with a static cloud texture in it. The fog
 goes on as the screen's pixels are written, never into the baked tiles. A change of zoom level cross-fades over about 150 ms; a drag let go while moving glides on briefly (any click
-stops it). The top bar has a switch per overlay layer (players, markers, pins, POIs, mob radar), kept in
+stops it). Icons shrink as the map zooms out, and mobs of one kind (as mob faces), markers, pins and moving things
+(boats, vehicles) of one kind that would overlap are drawn once with a count. The top bar has a switch per overlay layer (players, markers, pins, POIs, mob radar), kept in
 `mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.
 
 Resource packs restyle it through `assets/mapmod/map_palette.json` (colours per class 0-7, water,
 shore band, paper, height tint, snow line, hillshade share, `edges`, `forest`, `contours`, `finish`, `fog`: colour,
 edge width in blocks, cloud strength); every value is optional and falls back on its own; F3+T reloads it.
+
+`/mapmod probe` shows what the map makes of the ground under you: the block, its surface class, the tint and class the
+capture would store now, what is stored (class, tint, height, tile revision) and the colour the map paints it. If the
+stored sample differs from the ground now, the tile was not captured again after a change.
 
 `/mapmod stats` shows tiles cached, dirty tiles, the worker queue, samples per second, and with the map open its render
 time, uploads per frame and the off-thread preparation time per tile, the fog masks made and held, mips made again from

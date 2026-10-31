@@ -99,8 +99,10 @@ public final class SurfaceClass {
         if (state.is(BlockTags.BASE_STONE_OVERWORLD)) return ROCK;
         if (state.is(BlockTags.MUD)) return DIRT;
         MapColor colour = state.getMapColor(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
-        // #dirt holds grass blocks, moss and mycelium as well as dirt and mud: green ones are grass
-        if (state.is(BlockTags.DIRT)) return green(colour) ? GRASS : DIRT;
+        // soil: green is grass, the rest dirt/mud. 26.3 split the old #dirt: mycelium (and more) is only in
+        // #substrate_overworld and #turns_into_dirt_path now, and fell through to its purple map colour, read as rock
+        if (state.is(BlockTags.DIRT) || state.is(BlockTags.SUBSTRATE_OVERWORLD) || state.is(BlockTags.TURNS_INTO_DIRT_PATH)
+            || state.is(BlockTags.GRASS_BLOCKS) || state.is(BlockTags.MOSS_BLOCKS)) return green(colour) ? GRASS : DIRT;
         return bucket(colour);
     }
 

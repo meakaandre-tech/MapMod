@@ -91,7 +91,7 @@ final class MapGpu implements AutoCloseable {
     static final int NOISE_PERIOD = 2048;
     private static final String[] SAMPLERS = {"Fields", "Surface", "ClassA", "ClassB", "Shore"};
     /** How much the relief is exaggerated for the hillshade. */
-    private static final float RELIEF = 2.5f;
+    private static final float RELIEF = 3.5f;
 
     /** A texture to draw into and read from: its view, its size, and the projection over its pixels. */
     static final class Target implements AutoCloseable {
