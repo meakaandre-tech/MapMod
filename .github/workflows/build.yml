@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "mm-8-real-colours"]
   workflow_dispatch:
 
 permissions:
