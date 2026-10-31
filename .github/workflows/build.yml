@@ -216,7 +216,11 @@ jobs:
               if grep -q 'Done (' server3.log; then
                 cd $root
                 rm -f run/logs/latest.log
-                (env -u CI timeout 900 ./gradlew runSelftestClient --no-daemon -Dorg.gradle.console=plain --args="--quickPlayMultiplayer localhost --width 1280 --height 720" > client-local-gradle.log 2>&1; echo "EXIT $?" >> client-local-gradle.log) &
+                # this one at 1920x1080 (MM-7: the top bar is checked there at GUI scales 2 to 4)
+                pkill Xvfb; sleep 2
+                Xvfb :99 -screen 0 1920x1080x24 >/dev/null 2>&1 &
+                sleep 2
+                (env -u CI timeout 1200 ./gradlew runSelftestClient --no-daemon -Dorg.gradle.console=plain --args="--quickPlayMultiplayer localhost --width 1920 --height 1080" > client-local-gradle.log 2>&1; echo "EXIT $?" >> client-local-gradle.log) &
                 for i in $(seq 1 300); do
                   if grep -q 'joined the game' server-plain/server3.log || grep -q '^EXIT' client-local-gradle.log; then break; fi
                   sleep 5
@@ -225,11 +229,22 @@ jobs:
                 lshot() { m=$((m+1)); import -window root /tmp/ci/local-$(printf '%02d' $m).png; }
                 if grep -q 'joined the game' server-plain/server3.log; then
                   echo "time set noon" >&3
-                  xdotool mousemove 640 360
+                  # MM-7: a flat patch at y 150 round 0,0 in a mushroom fields biome (mycelium, grass blocks, stone) with
+                  # mooshrooms on it, and the player put on it
+                  while read -r line; do case "$line" in "#sleep "*) sleep "${line#\#sleep }";; *) echo "$line" >&3; sleep 0.3;; esac; done < $root/.github/smoke-commands-plain.txt
+                  xdotool mousemove 960 540
                   waitfor 600 "SELFTEST local ready." run/logs/latest.log && lshot
                   waitfor 300 "SELFTEST local done" run/logs/latest.log
                   sleep 5
                   lshot
+                  # the patch close up, then the mycelium replaced with grass blocks on the server: the client's map follows
+                  waitfor 300 "SELFTEST colours shot patch" run/logs/latest.log && lshot
+                  echo "fill -24 150 -24 -9 150 23 minecraft:grass_block replace minecraft:mycelium" >&3
+                  waitfor 300 "SELFTEST colours shot replaced" run/logs/latest.log && lshot
+                  # the top bar at GUI scales 3 and 4 (1920x1080)
+                  waitfor 120 "SELFTEST colours shot gui3" run/logs/latest.log && lshot
+                  waitfor 120 "SELFTEST colours shot gui4" run/logs/latest.log && lshot
+                  waitfor 120 "SELFTEST colours done" run/logs/latest.log
                 fi
                 pkill -f KnotClient; sleep 5
                 tail -c 200000 client-local-gradle.log > /tmp/ci/client-local-gradle.log

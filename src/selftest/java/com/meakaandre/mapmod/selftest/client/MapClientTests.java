@@ -675,6 +675,8 @@ public final class MapClientTests {
     }
 
     private static int localPass, localFail;
+    /** The client's own checks on a server without MapMod have finished (MM-7's colour checks go on after them). */
+    static boolean localDone;
     private static long framesAtOpen;
 
     /** A few seconds after the local map opened with contours on: they were painted. */
@@ -702,6 +704,7 @@ public final class MapClientTests {
         localFogTicks = 0;
         for (BakeCheck.Result r : ownCapture(mc)) localCheck(r.what(), r.ok(), r.detail());
         MapMod.LOGGER.info("SELFTEST local done: {} passed, {} failed", localPass, localFail);
+        localDone = true;
     }
 
     /** True once the open map holds the captured land round the player and has nothing left to do. */

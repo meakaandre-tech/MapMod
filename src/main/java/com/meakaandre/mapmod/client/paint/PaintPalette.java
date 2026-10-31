@@ -176,6 +176,38 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
             Math.clamp(number(fog, "clouds", d.fogClouds), 0f, 1f));
     }
 
+    /**
+     * The colour the painted map gives open, flat land of one class with a stored tint, as {@code map_paint.fsh} works it
+     * out before relief, forest, water and the finish (for {@code /mapmod probe} and the selftests). 0xRRGGBB.
+     */
+    public int landColour(int cls, int tint, int height) {
+        int c = Math.clamp(cls, 0, SurfaceClass.COUNT - 1);
+        float[] base = rgb(classColour[c]), t = rgb(tint);
+        float max = Math.max(Math.max(t[0], t[1]), Math.max(t[2], 0.001f));
+        float k = classTint[c];
+        float[] out = new float[3];
+        for (int i = 0; i < 3; i++) out[i] = base[i] * (1 + (t[i] / max - 1) * k);
+        float h = smooth(lowHeight, highHeight, height), shade = lowShade + (highLight - lowShade) * h;
+        float s = smooth(snowAbove - snowBlend, snowAbove + snowBlend, height);
+        float[] sn = rgb(snow);
+        for (int i = 0; i < 3; i++) out[i] = out[i] * shade + (sn[i] - out[i] * shade) * s;
+        return pack(out);
+    }
+
+    static float[] rgb(int c) {
+        return new float[]{(c >> 16 & 255) / 255f, (c >> 8 & 255) / 255f, (c & 255) / 255f};
+    }
+
+    static int pack(float[] c) {
+        int r = Math.clamp(Math.round(c[0] * 255), 0, 255), g = Math.clamp(Math.round(c[1] * 255), 0, 255), b = Math.clamp(Math.round(c[2] * 255), 0, 255);
+        return r << 16 | g << 8 | b;
+    }
+
+    static float smooth(float e0, float e1, float x) {
+        float t = Math.clamp((x - e0) / (e1 - e0), 0f, 1f);
+        return t * t * (3 - 2 * t);
+    }
+
     private static JsonObject object(JsonObject o, String key) {
         JsonElement e = o == null ? null : o.get(key);
         return e != null && e.isJsonObject() ? e.getAsJsonObject() : null;

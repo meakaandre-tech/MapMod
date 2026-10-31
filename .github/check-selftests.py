@@ -17,6 +17,8 @@ SUITES = {
     "SELFTEST restart ": ("server2.log", "SELFTEST restart done"),
     # the client on a server with no MapMod: it keeps its own map
     "SELFTEST local ": ("client-local.log", "SELFTEST local done"),
+    # MM-7: grass, mycelium and stone paint as three colours, and the map follows a block replaced on the server
+    "SELFTEST colours ": ("client-local.log", "SELFTEST colours done"),
     # MM-6: the public API, used the way another mod would (and its effects inside the map)
     "SELFTEST api ": ("client.log", "SELFTEST api done after reload"),
 }
@@ -68,8 +70,8 @@ def main():
         bad.append(f"{len(shots)} screenshots, {SCREENSHOTS} expected")
     local = sorted(f for f in os.listdir(ci) if re.fullmatch(r"local-\d\d\.png", f)) if os.path.isdir(ci) else []
     print(f"screenshots on a server without MapMod: {len(local)} ({', '.join(local)})")
-    if len(local) < 2:
-        bad.append(f"{len(local)} screenshots on a server without MapMod, 2 expected")
+    if len(local) < 6:
+        bad.append(f"{len(local)} screenshots on a server without MapMod, 6 expected")
     # the painted map's tiles meet exactly: no line of the paper colour between two of them
     try:
         from PIL import Image

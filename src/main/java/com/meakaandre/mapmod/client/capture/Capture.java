@@ -120,6 +120,22 @@ public final class Capture {
                     for (String line : statsLines()) c.getSource().sendFeedback(Component.literal(line));
                     STATS.commandRuns++;
                     return 1;
+                }))
+                .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("probe").executes(c -> {
+                    FabricClientCommandSource source = c.getSource();
+                    Minecraft mc = Minecraft.getInstance();
+                    if (mc.level == null || mc.player == null) return 0;
+                    Probe.at(mc.level, mc.player.getBlockX(), mc.player.getBlockZ()).whenComplete((r, err) -> mc.execute(() -> {
+                        if (r == null) {
+                            source.sendError(Component.literal("probe: nothing captured here yet"));
+                            return;
+                        }
+                        for (String line : r.lines()) {
+                            source.sendFeedback(Component.literal(line));
+                            MapMod.LOGGER.info(line);
+                        }
+                    }));
+                    return 1;
                 }))));
     }
 
@@ -259,6 +275,11 @@ public final class Capture {
         } catch (RejectedExecutionException e) {
             // the game is closing
         }
+    }
+
+    /** Runs a job on the capture worker against the store in use (for {@link Probe}); completes null with no store. */
+    static <T> CompletableFuture<@Nullable T> onWorker(Function<CaptureStore, T> job) {
+        return ask(job);
     }
 
     private static <T> CompletableFuture<@Nullable T> ask(Function<CaptureStore, T> job) {

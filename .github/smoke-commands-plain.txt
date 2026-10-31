@@ -1,0 +1,21 @@
+forceload add -32 -32 31 31
+fillbiome -24 148 -24 23 155 23 minecraft:mushroom_fields
+fill -24 146 -24 23 149 23 minecraft:stone
+fill -24 150 -24 -9 150 23 minecraft:mycelium
+fill -8 150 -24 7 150 23 minecraft:grass_block
+fill 8 150 -24 23 150 23 minecraft:stone
+fill -24 151 -24 23 164 23 minecraft:air
+fill -24 165 -24 23 178 23 minecraft:air
+summon mooshroom 4 151 8 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom 5 151 9 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom 6 151 8 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom 4 151 10 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom 6 151 10 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom 5 151 11 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom 7 151 9 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom 3 151 9 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom -3 151 -10 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon mooshroom -2 151 -9 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon cow 12 151 -8 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+summon cow 13 151 -7 {NoAI:1b,PersistenceRequired:1b,Silent:1b}
+tp @a 0 151 0

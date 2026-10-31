@@ -68,6 +68,15 @@ final class SurfaceSampler {
         return out;
     }
 
+    /** One column read as the capture reads it, for {@code /mapmod probe}: {ground y, class}. */
+    static int[] ground(ChunkSnapshot s, int x, int z) {
+        int[] ground = new int[256], waterTop = new int[256];
+        byte[] cls = new byte[256];
+        int i = x + z * 16;
+        column(s, x, z, i, ground, waterTop, cls, new boolean[256], new boolean[256]);
+        return new int[]{ground[i], cls[i]};
+    }
+
     private static void column(ChunkSnapshot s, int x, int z, int i, int[] ground, int[] waterTop, byte[] cls, boolean[] canopy, boolean[] snowed) {
         waterTop[i] = Integer.MIN_VALUE;
         ground[i] = s.bottomY;
