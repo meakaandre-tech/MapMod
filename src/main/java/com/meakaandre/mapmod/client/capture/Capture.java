@@ -154,7 +154,8 @@ public final class Capture {
     /** A block changed in a client chunk: if it is at the surface, the chunk is sampled again shortly. */
     private static void blockChanged(LevelChunk chunk, BlockPos pos) {
         if (chunk.getLevel() != level) return;
-        int top = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX() & 15, pos.getZ() & 15);
+        // the first air above the column (LevelChunk.getHeight is the top block's y)
+        int top = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX() & 15, pos.getZ() & 15) + 1;
         if (pos.getY() < top - 2) return;
         long k = key(chunk.getPos().x(), chunk.getPos().z());
         if (!DUE.containsKey(k)) DUE.put(k, ticks + DEBOUNCE_TICKS);

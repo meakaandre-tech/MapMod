@@ -43,6 +43,12 @@ import java.util.Set;
  */
 public class MapScreen extends Screen {
     private static final int PANEL = 140, BAR = 16, FOOT = 14, ROW = 12;
+    /** The top bar's contours button: its left edge from the right of the screen, and its width. */
+    private static final int CONTOURS_RIGHT = 200, CONTOURS_W = 96;
+    /** The widest the position under the mouse is expected to get, for laying out the top bar (MM-7). */
+    private static final String COORDS_TEMPLATE = "X -0000000   Z -0000000";
+    /** Lines of the hint at the bottom at most, and their height. */
+    private static final int HINT_LINES = 3, HINT_LINE = 10;
     /** Zoom limits (screen pixels a block): far enough out for a whole explored world, drawn from the mip pyramid. */
     private static final double MIN_SCALE = 1.0 / 1024, MAX_SCALE = 8;
     /** How quickly an animated zoom closes on its target (per second, of the remaining distance in log scale). */
@@ -121,7 +127,7 @@ public class MapScreen extends Screen {
             addRenderableWidget(Button.builder(contoursText(), b -> {
                 toggleContours();
                 b.setMessage(contoursText());
-            }).bounds(width - 200, 1, 96, 14).build());
+            }).bounds(width - CONTOURS_RIGHT, 1, CONTOURS_W, 14).build());
         }
     }
 
@@ -170,7 +176,7 @@ public class MapScreen extends Screen {
     }
 
     private MapDraw.View view() {
-        return new MapDraw.View(cx, cz, scale, PANEL, BAR, width - PANEL, height - BAR - FOOT);
+        return new MapDraw.View(cx, cz, scale, PANEL, BAR, width - PANEL, height - BAR - foot());
     }
 
     // ------------------------------------------------------------------------------------------------ drawing
@@ -203,12 +209,86 @@ public class MapScreen extends Screen {
             g.text(font, scaleText, width - 96, 1, 0xFFE6E6E6, false);
         }
         if (!locked) layerButtons(g, mouseX, mouseY);
+        Bar bar = bar();
+        int foot = bar.foot();
+        g.fill(0, height - foot, width, height, 0xF0101418);
+        for (int i = 0; i < bar.hint().size(); i++) g.text(font, bar.hint().get(i), 6, height - foot + 3 + i * HINT_LINE, 0xFF8A949E, false);
         if (!locked && inMap(mouseX, mouseY)) {
             String at = String.format(Locale.ROOT, "X %d   Z %d", (int) Math.floor(v.wx(mouseX)), (int) Math.floor(v.wz(mouseY)));
-            g.text(font, at, PANEL + 6, 4, 0xFFB0B8C0, false);
+            if (bar.coordsInFoot()) g.text(font, at, width - 6 - font.width(at), height - foot + 3, 0xFFB0B8C0, false);
+            else g.text(font, at, bar.coordsX(), 4, 0xFFB0B8C0, false);
         }
-        g.fill(0, height - FOOT, width, height, 0xF0101418);
-        g.text(font, Component.translatable("mapmod.map.help"), 6, height - FOOT + 3, 0xFF8A949E, false);
+    }
+
+    // ------------------------------------------------------------------------------------------------ bar layout (MM-7)
+
+    /** A box in the top bar: x and width (they are all a row high). */
+    public record Box(String what, int x, int w) {
+        public boolean overlaps(Box o) {
+            return x < o.x + o.w && o.x < x + w;
+        }
+    }
+
+    /**
+     * Where the top bar's things go and how high the bottom row is: the title, then the position under the mouse (by
+     * the map's left edge, else just after the title, else in the bottom row on the right when the bar is too full), and
+     * from the right the scale, the contours button and the layer buttons. The hint wraps to the bottom row's width.
+     */
+    public record Bar(List<Box> boxes, int coordsX, boolean coordsInFoot, List<net.minecraft.util.FormattedCharSequence> hint, int foot,
+                      int hintWidth) {
+    }
+
+    private @Nullable Bar barCache;
+    private int barWidth = -1, barLayers = -1;
+
+    private Bar bar() {
+        int layers = MapLock.mapLocked() ? 0 : layerButtons().size();
+        if (barCache == null || barWidth != width || barLayers != layers) {
+            barCache = layout(font, width, layers, !MapLock.mapLocked() && !MapLock.layerLocked(MapLock.CONTOURS), !MapLock.mapLocked(), title);
+            barWidth = width;
+            barLayers = layers;
+        }
+        return barCache;
+    }
+
+    private int foot() {
+        return bar().foot();
+    }
+
+    /** The top bar and bottom row laid out for a screen width (GUI pixels) and a number of layer buttons. */
+    public static Bar layout(net.minecraft.client.gui.Font font, int width, int layers, boolean contours, boolean scaleBar, Component title) {
+        List<Box> boxes = new ArrayList<>();
+        int titleRight = 6 + font.width(title);
+        boxes.add(new Box("title", 6, font.width(title)));
+        int right = width;
+        if (scaleBar) {
+            boxes.add(new Box("scale", width - 96, 80));
+            right = width - 96;
+        }
+        if (contours) {
+            boxes.add(new Box("contours", width - CONTOURS_RIGHT, CONTOURS_W));
+            right = width - CONTOURS_RIGHT;
+        }
+        for (int i = 0; i < layers; i++) {
+            int x = layerX(width, i, layers);
+            boxes.add(new Box("layer " + i, x, LAYER_W));
+            right = Math.min(right, x);
+        }
+        int cw = font.width(COORDS_TEMPLATE);
+        int coordsX;
+        boolean inFoot = false;
+        if (PANEL + 6 + cw + 6 <= right) coordsX = PANEL + 6;
+        else if (titleRight + 10 + cw + 6 <= right) coordsX = titleRight + 10;
+        else {
+            coordsX = -1;
+            inFoot = true;
+        }
+        if (!inFoot) boxes.add(new Box("coordinates", coordsX, cw));
+        int hintWidth = Math.max(40, width - 12 - (inFoot ? cw + 12 : 0));
+        List<net.minecraft.util.FormattedCharSequence> lines = font.split(Component.translatable("mapmod.map.help"), hintWidth);
+        if (lines.size() > HINT_LINES) lines = lines.subList(0, HINT_LINES);
+        int foot = Math.max(FOOT, 4 + HINT_LINE * Math.max(1, lines.size()));
+        return new Bar(boxes, coordsX, inFoot, lines, foot, hintWidth);
     }
 
     @Override
@@ -274,6 +354,11 @@ public class MapScreen extends Screen {
     private record LayerButton(int glyph, Component label, boolean on, Runnable toggle) {
     }
 
+    /** How many layer buttons the top bar has now (for the selftests). */
+    public static int layerCount() {
+        return layerButtons().size();
+    }
+
     /** The top bar's layer buttons: the map's own, then mods' overlays, leaving out locked ones. */
     private static List<LayerButton> layerButtons() {
         List<LayerButton> out = new ArrayList<>();
@@ -287,7 +372,11 @@ public class MapScreen extends Screen {
     }
 
     private int layerX(int i, int count) {
-        return width - 200 - (count - i) * LAYER_STEP - 4;
+        return layerX(width, i, count);
+    }
+
+    private static int layerX(int width, int i, int count) {
+        return width - CONTOURS_RIGHT - (count - i) * LAYER_STEP - 4;
     }
 
     private @Nullable LayerButton layerAt(double mx, double my) {
@@ -324,7 +413,7 @@ public class MapScreen extends Screen {
     }
 
     private boolean inMap(double x, double y) {
-        return x >= PANEL && x < width && y >= BAR && y < height - FOOT;
+        return x >= PANEL && x < width && y >= BAR && y < height - foot();
     }
 
     // ------------------------------------------------------------------------------------------------ filter panel
@@ -349,8 +438,8 @@ public class MapScreen extends Screen {
     }
 
     private void panel(GuiGraphicsExtractor g, int mouseX, int mouseY) {
-        g.fill(0, BAR, PANEL, height - FOOT, 0xF0181E25);
-        g.fill(PANEL - 1, BAR, PANEL, height - FOOT, 0xFF2C3540);
+        g.fill(0, BAR, PANEL, height - foot(), 0xF0181E25);
+        g.fill(PANEL - 1, BAR, PANEL, height - foot(), 0xFF2C3540);
         g.text(font, Component.translatable("mapmod.map.filters"), 8, BAR + 5, 0xFFFFA530, false);
         // a locked map shows none of what is on it, its switches included
         if (MapLock.mapLocked()) return;
@@ -552,7 +641,7 @@ public class MapScreen extends Screen {
             formClick(mx, my);
             return true;
         }
-        if (mx < PANEL && my >= BAR && my < height - FOOT) return panelClick(mx, my);
+        if (mx < PANEL && my >= BAR && my < height - foot()) return panelClick(mx, my);
         if (!inMap(mx, my)) return super.mouseClicked(event, doubleClick);
         Hover h = findHover((int) mx, (int) my);
         if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) {

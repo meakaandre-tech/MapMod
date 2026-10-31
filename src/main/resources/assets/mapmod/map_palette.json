@@ -11,11 +11,11 @@
     "7": { "colour": "#c8642c", "tint": 0.0 }
   },
   "_water": "deep_at: depth at which water is fully deep; deep_dist: distance from the shore at which it is; shore: the pale band along the shore, shore_width blocks wide",
-  "water": { "shallow": "#8db6c2", "deep": "#3e6f8e", "deep_at": 20, "deep_dist": 40, "shore": "#d2e2dc", "shore_width": 6 },
+  "water": { "shallow": "#8db6c2", "deep": "#3e6f8e", "deep_at": 20, "deep_dist": 40, "shore": "#b0ccd0", "shore_width": 3 },
   "paper": "#e6dcc6",
   "height_tint": { "low": 50, "high": 220, "low_shade": 0.88, "high_light": 1.12 },
   "snow": { "above": 190, "blend": 20, "colour": "#f0f1ef" },
-  "hillshade": 0.4,
+  "hillshade": 0.5,
   "_edges": "softness: how soft the border between two surface classes is (0.01 sharp, 1 a wide blend); warp: how far, in blocks, borders and coasts wander from the data",
   "edges": { "softness": 0.12, "warp": 5 },
   "_forest": "darken: how much full canopy darkens the ground; stipple: strength of the soft brush texture over forests",

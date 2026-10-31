@@ -52,6 +52,8 @@ layout(location = 0) out vec4 fragColor;
 // world-space noise repeats every PERIOD samples (8192 blocks), so tile origins can be wrapped on the CPU and the
 // numbers here stay small at any distance from spawn
 const float PERIOD = 2048.0;
+// how much the hillshade's slope is sharpened against the smoothed slope (MM-7)
+const float SHARPEN = 0.6;
 
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -87,6 +89,11 @@ vec4 catmullRom(float t) {
 vec4 catmullRomSlope(float t) {
     float t2 = t * t;
     return vec4(-1.5 * t2 + 2.0 * t - 0.5, 4.5 * t2 - 5.0 * t, -4.5 * t2 + 4.0 * t + 0.5, 1.5 * t2 - t);
+}
+
+vec4 bsplineSlope(float t) {
+    float s = 1.0 - t;
+    return vec4(-0.5 * s * s, 1.5 * t * t - 2.0 * t, -1.5 * t * t + t + 0.5, 0.5 * t * t);
 }
 
 vec4 bspline(float t) {
@@ -134,8 +141,8 @@ void main() {
     vec2 t = samplePos - base;
     ivec2 b = ivec2(base);
     vec4 hx = catmullRom(t.x), hz = catmullRom(t.y), sx = catmullRomSlope(t.x), sz = catmullRomSlope(t.y);
-    vec4 mx = bspline(t.x), mz = bspline(t.y);
-    float h = 0.0, dhdx = 0.0, dhdz = 0.0, explored = 0.0;
+    vec4 mx = bspline(t.x), mz = bspline(t.y), bx = bsplineSlope(t.x), bz = bsplineSlope(t.y);
+    float h = 0.0, dhdx = 0.0, dhdz = 0.0, explored = 0.0, smoothX = 0.0, smoothZ = 0.0;
     for (int j = 0; j < 4; j++) {
         for (int i = 0; i < 4; i++) {
             vec4 f = texelFetch(Fields, clamp(b + ivec2(i - 1, j - 1), ivec2(0), lim), 0);
@@ -143,6 +150,8 @@ void main() {
             h += hx[i] * hz[j] * v;
             dhdx += sx[i] * hz[j] * v;
             dhdz += hx[i] * sz[j] * v;
+            smoothX += bx[i] * mz[j] * v;
+            smoothZ += mx[i] * bz[j] * v;
             explored += f.a > 0.5 ? mx[i] * mz[j] : 0.0;
         }
     }
@@ -205,7 +214,11 @@ void main() {
     land *= 1.0 - Forest.x * cov;
     land *= 1.0 + Forest.y * cov * brush * 2.0;
 
-    // hillshade: normals from the slope (a sample is 4 blocks), lit from the northwest
+    // hillshade: normals from the slope (a sample is 4 blocks), lit from the northwest. MM-7: the slope is sharpened
+    // against its B-spline-smoothed self (an unsharp mask on the height's gradient), so ridges and cliffs read crisp
+    // without any sample's square showing
+    dhdx += SHARPEN * (dhdx - smoothX);
+    dhdz += SHARPEN * (dhdz - smoothZ);
     vec3 n = normalize(vec3(-dhdx / 4.0 * Params.w, -dhdz / 4.0 * Params.w, 1.0));
     vec3 light = normalize(vec3(-1.0, -1.0, 1.4));
     float shade = clamp(dot(n, light) / light.z, 0.0, 1.6);

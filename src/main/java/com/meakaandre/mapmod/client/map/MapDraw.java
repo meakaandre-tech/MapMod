@@ -217,6 +217,128 @@ public final class MapDraw {
         MapIcons.turned(g, MapGlyphs.ARROW, x, y, turn, PLAYER);
     }
 
+    // ------------------------------------------------------------------------------------------------ icons (MM-7)
+
+    /** The zoom (log2 of pixels a block) below which icons start to shrink, and at which they are smallest. */
+    private static final double SHRINK_FROM = -1, SHRINK_TO = -5;
+    /** The size icons shrink to, zoomed far out. */
+    private static final float SMALLEST = 0.6f;
+
+    /** How big icons are drawn at a view's zoom: full size from half a pixel a block in, down to 60% far out. */
+    public static float iconScale(View v) {
+        double l = Math.log(Math.max(v.scale(), 1e-6)) / Math.log(2);
+        double t = Math.clamp((l - SHRINK_TO) / (SHRINK_FROM - SHRINK_TO), 0, 1);
+        t = t * t * (3 - 2 * t);
+        return (float) (SMALLEST + (1 - SMALLEST) * t);
+    }
+
+    /** Draws something centred on x, y at a size: {@code draw} draws it centred on 0, 0 at full size. */
+    public static void scaled(GuiGraphicsExtractor g, double x, double y, float k, Runnable draw) {
+        g.pose().pushMatrix();
+        g.pose().translate((float) x, (float) y);
+        g.pose().scale(k, k);
+        draw.run();
+        g.pose().popMatrix();
+    }
+
+    /**
+     * How many things one icon stands for, at the icon's bottom right ({@code half} its half size on screen): small, with
+     * a shadow, at a whole number of screen pixels a font pixel so it stays sharp.
+     */
+    public static void count(GuiGraphicsExtractor g, int n, double x, double y, float half) {
+        if (n < 2) return;
+        Minecraft mc = Minecraft.getInstance();
+        double gui = Math.max(1, mc.getWindow().getGuiScale());
+        float k = (float) (Math.max(1, Math.round(gui * 0.6)) / gui);
+        String text = n > 99 ? "99+" : Integer.toString(n);
+        float w = mc.font.width(text) * k;
+        g.pose().pushMatrix();
+        g.pose().translate((float) (x + half - w * 0.6f), (float) (y + half - 4 * k));
+        g.pose().scale(k, k);
+        g.text(mc.font, text, 0, 0, 0xFFFFFFFF, true);
+        g.pose().popMatrix();
+    }
+
+    /**
+     * Things of one kind close together on screen, gathered into one icon with a count (MM-7): each thing joins the
+     * first stack of its key whose middle is within {@code radius} screen pixels, else starts one; a stack is drawn at
+     * the middle of what it holds.
+     */
+    public static final class Stacks<T> {
+        private final double radius;
+        private final List<Stack<T>> stacks = new ArrayList<>();
+
+        public Stacks(double radius) {
+            this.radius = radius;
+        }
+
+        public void add(Object key, double sx, double sy, T thing) {
+            double r2 = radius * radius;
+            for (Stack<T> s : stacks) {
+                if (!s.key.equals(key)) continue;
+                double dx = s.x() - sx, dy = s.y() - sy;
+                if (dx * dx + dy * dy > r2) continue;
+                s.sumX += sx;
+                s.sumY += sy;
+                s.count++;
+                return;
+            }
+            stacks.add(new Stack<>(key, sx, sy, thing));
+        }
+
+        /** The stacks, with any two of a key whose middles ended up within the radius merged (until none are). */
+        public List<Stack<T>> stacks() {
+            double r2 = radius * radius;
+            boolean merged = true;
+            while (merged) {
+                merged = false;
+                outer:
+                for (int i = 0; i < stacks.size(); i++) {
+                    Stack<T> a = stacks.get(i);
+                    for (int j = i + 1; j < stacks.size(); j++) {
+                        Stack<T> b = stacks.get(j);
+                        double dx = a.x() - b.x(), dy = a.y() - b.y();
+                        if (!a.key.equals(b.key) || dx * dx + dy * dy > r2) continue;
+                        a.sumX += b.sumX;
+                        a.sumY += b.sumY;
+                        a.count += b.count;
+                        stacks.remove(j);
+                        merged = true;
+                        break outer;
+                    }
+                }
+            }
+            return stacks;
+        }
+    }
+
+    /** One stack: the first thing in it stands for the rest. */
+    public static final class Stack<T> {
+        final Object key;
+        double sumX, sumY;
+        int count = 1;
+        public final T first;
+
+        Stack(Object key, double x, double y, T first) {
+            this.key = key;
+            this.sumX = x;
+            this.sumY = y;
+            this.first = first;
+        }
+
+        public double x() {
+            return sumX / count;
+        }
+
+        public double y() {
+            return sumY / count;
+        }
+
+        public int count() {
+            return count;
+        }
+    }
+
     public static String distance(double blocks) {
         return blocks >= BLOCKS_PER_KM ? String.format(Locale.ROOT, "%.1f km", blocks / BLOCKS_PER_KM) : Math.round(blocks) + " m";
     }

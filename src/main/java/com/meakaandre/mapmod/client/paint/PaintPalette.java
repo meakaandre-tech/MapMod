@@ -37,8 +37,8 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
     public static final PaintPalette DEFAULT = new PaintPalette(
         new int[]{0xAAB38E, 0x879471, 0xDCCB9E, 0x9C978D, 0xECEEEC, 0x93805F, 0xBCD3DE, 0xC8642C},
         new float[]{0.4f, 0.4f, 0, 0, 0, 0.15f, 0, 0},
-        0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.4f,
-        40, 0xD2E2DC, 6, 0.12f, 5, 0.28f, 0.18f, 16, 0.3f, 0.035f, 0.18f,
+        0x8DB6C2, 0x3E6F8E, 20, 0xE6DCC6, 50, 220, 0.88f, 1.12f, 190, 20, 0xF0F1EF, 0.5f,
+        40, 0xB0CCD0, 3, 0.12f, 5, 0.28f, 0.18f, 16, 0.3f, 0.035f, 0.18f,
         0xD8CFBA, 48, 0.6f);
 
     private static volatile PaintPalette current = DEFAULT;
@@ -183,9 +183,9 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
     public int landColour(int cls, int tint, int height) {
         int c = Math.clamp(cls, 0, SurfaceClass.COUNT - 1);
         float[] base = rgb(classColour[c]), t = rgb(tint);
-        float max = Math.max(Math.max(t[0], t[1]), Math.max(t[2], 0.001f));
         float k = classTint[c];
         float[] out = new float[3];
+        float max = Math.max(Math.max(t[0], t[1]), Math.max(t[2], 0.001f));
         for (int i = 0; i < 3; i++) out[i] = base[i] * (1 + (t[i] / max - 1) * k);
         float h = smooth(lowHeight, highHeight, height), shade = lowShade + (highLight - lowShade) * h;
         float s = smooth(snowAbove - snowBlend, snowAbove + snowBlend, height);

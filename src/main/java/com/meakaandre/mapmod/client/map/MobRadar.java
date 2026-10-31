@@ -27,11 +27,14 @@ import java.util.Map;
  * The mob radar: the mobs round the player on the fullscreen map, each drawn as its own face (read off
  * its model's head and its texture, so it works for any mob a mod adds too), with no names, in a soft frame (MM-5). A
  * mob on land this client never captured is hidden under the fog. Hostile and passive mobs each have a filter switch
- * (under "Mobs"), and the radar a layer switch of its own in the top bar.
+ * (under "Mobs"), and the radar a layer switch of its own in the top bar. Mobs of one kind (and one look) whose faces
+ * would overlap are drawn as one face with a count (MM-7).
  */
 public final class MobRadar {
-    /** Size a face is drawn at on the fullscreen map (pixels). */
+    /** Size a face is drawn at on the fullscreen map (pixels), before {@link #FACE_SCALE} and the zoom's icon scale. */
     private static final int SIZE = 9;
+    /** MM-7: faces are drawn at 60% of what they were, and shrink further zoomed out ({@link MapDraw#iconScale}). */
+    private static final float FACE_SCALE = 0.6f;
     /** Blocks above or below the player a mob may be and still show. */
     private static final int HEIGHT_RANGE = 24;
     /** A mob's texture is looked up again this often (ticks): it may change (a sheared sheep, a converting zombie). */
@@ -70,9 +73,10 @@ public final class MobRadar {
         if (!MapFilters.on(MapFilters.MOBS) || !MapLayer.MOBS.shown()) return;
         boolean hostiles = MapFilters.on(MapFilters.HOSTILE), passives = MapFilters.on(MapFilters.PASSIVE);
         if (!hostiles && !passives) return;
-        int size = SIZE;
+        float k = FACE_SCALE * MapDraw.iconScale(v);
         long now = mc.level.getGameTime();
         float pt = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
+        MapDraw.Stacks<LivingEntity> stacks = new MapDraw.Stacks<>(SIZE * k * 1.1);
         for (Entity e : mc.level.entitiesForRendering()) {
             if (!(e instanceof LivingEntity living) || e instanceof Player || e.isRemoved() || e.isInvisible() || !living.isAlive()) continue;
             // mobs far above or below (in caves under the player) are left off, as on the surface map they are not
@@ -83,20 +87,37 @@ public final class MobRadar {
             // under the fog: where the map has nothing captured
             if (!PaintMap.captured((int) Math.floor(x), (int) Math.floor(z))) continue;
             double sx = v.sx(x), sy = v.sy(z);
-            if (!v.inside(sx, sy, size)) continue;
-            int x0 = (int) Math.round(sx) - size / 2, y0 = (int) Math.round(sy) - size / 2;
-            face(g, mc, living, x0, y0, size, hostile, now);
+            if (!v.inside(sx, sy, SIZE)) continue;
+            Skin skin = skin(mc, living, now);
+            stacks.add(EntityType.getKey(e.getType()) + (living.isBaby() ? "/baby/" : "/") + skin.texture, sx, sy, living);
+        }
+        drawnStacks = 0;
+        drawnMobs = 0;
+        for (MapDraw.Stack<LivingEntity> st : stacks.stacks()) {
+            LivingEntity living = st.first;
+            MapDraw.scaled(g, st.x(), st.y(), k, () -> face(g, mc, living, -SIZE / 2, -SIZE / 2, SIZE, hostile(living), now));
+            MapDraw.count(g, st.count(), st.x(), st.y(), SIZE / 2f * k);
+            drawnStacks++;
+            drawnMobs += st.count();
         }
         // forget the textures of mobs long gone
         if (now % (TEXTURE_TICKS * 10L) == 0) SKINS.values().removeIf(s -> now - s.at > TEXTURE_TICKS * 10L);
     }
 
-    private static void face(GuiGraphicsExtractor g, Minecraft mc, LivingEntity e, int x0, int y0, int size, boolean hostile, long now) {
+    /** Mobs and the faces they were drawn as on the last frame (for the selftests). */
+    public static int drawnMobs, drawnStacks;
+
+    private static Skin skin(Minecraft mc, LivingEntity e, long now) {
         Skin skin = SKINS.get(e.getId());
         if (skin == null || now - skin.at >= TEXTURE_TICKS || now < skin.at) {
             skin = new Skin(texture(mc, e), now);
             SKINS.put(e.getId(), skin);
         }
+        return skin;
+    }
+
+    private static void face(GuiGraphicsExtractor g, Minecraft mc, LivingEntity e, int x0, int y0, int size, boolean hostile, long now) {
+        Skin skin = skin(mc, e, now);
         Face face = skin.texture == null ? null : face(mc, e);
         // rounded: the faint ring leaves its corners out
         g.fill(x0 - 2, y0 - 1, x0 + size + 2, y0 + size + 1, HALO);

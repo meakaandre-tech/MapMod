@@ -810,15 +810,15 @@ public final class MapClientTests {
         expect("the painted map's shaders compile (paint, and quads for baked tiles, mips and the finish)", compiled == null, compiled == null ? "" : compiled);
         PaintPalette pal = PaintPalette.current();
         expect("map_palette.json is read from the resources", PaintPalette.loads() > 0 && PaintPalette.lastError().isEmpty()
-            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == 0xAAB38E && pal.snowAbove() == 190 && pal.hillshade() == 0.4f,
+            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == 0xAAB38E && pal.snowAbove() == 190 && pal.hillshade() == 0.5f,
             PaintPalette.loads() + " loads " + PaintPalette.lastError());
         PaintPalette broken = PaintPalette.parse(JsonParser.parseString(
             "{\"classes\": {\"2\": {\"colour\": \"#123456\"}, \"3\": {\"colour\": \"not a colour\"}}, \"snow\": {\"above\": 150}}").getAsJsonObject());
         expect("a palette keeps the built-in value for whatever it leaves out or gets wrong",
             broken.classColour()[2] == 0x123456 && broken.classColour()[3] == PaintPalette.DEFAULT.classColour()[3]
                 && broken.snowAbove() == 150 && broken.paper() == PaintPalette.DEFAULT.paper(), "");
-        expect("map_palette.json carries the MM-3 values (shore, edges, forest, contours, finish)",
-            pal.shore() == 0xD2E2DC && pal.shoreWidth() == 6 && pal.deepDist() == 40 && pal.edgeWarp() == 5 && pal.forestDarken() == 0.28f
+        expect("map_palette.json carries the MM-3 values (edges, forest, contours, finish) and MM-7's (a shore band half as strong and narrower)",
+            pal.shore() == 0xB0CCD0 && pal.shoreWidth() == 3 && pal.deepDist() == 40 && pal.edgeWarp() == 5 && pal.forestDarken() == 0.28f
                 && pal.contourInterval() == 16 && pal.grain() == 0.035f && pal.vignette() == 0.18f, pal.toString());
         PaintPalette partial = PaintPalette.parse(JsonParser.parseString(
             "{\"water\": {\"shore\": \"#102030\", \"shore_width\": \"wide\"}, \"forest\": {\"stipple\": 0.5}, \"contours\": {\"interval\": 8},"
