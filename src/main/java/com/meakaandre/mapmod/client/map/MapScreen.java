@@ -197,9 +197,11 @@ public class MapScreen extends Screen {
         // the top bar: title, the scale, and the world position under the mouse
         g.fill(0, 0, width, BAR, 0xF0101418);
         g.text(font, title, 6, 4, 0xFFFFA530, false);
-        String scaleText = MapDraw.distance(SCALE_BAR / scale);
-        g.fill(width - 96, 10, width - 16, 11, 0xFFE6E6E6);
-        g.text(font, scaleText, width - 96, 1, 0xFFE6E6E6, false);
+        if (!locked) {
+            String scaleText = MapDraw.distance(SCALE_BAR / scale);
+            g.fill(width - 96, 10, width - 16, 11, 0xFFE6E6E6);
+            g.text(font, scaleText, width - 96, 1, 0xFFE6E6E6, false);
+        }
         if (!locked) layerButtons(g, mouseX, mouseY);
         if (!locked && inMap(mouseX, mouseY)) {
             String at = String.format(Locale.ROOT, "X %d   Z %d", (int) Math.floor(v.wx(mouseX)), (int) Math.floor(v.wz(mouseY)));
@@ -233,12 +235,14 @@ public class MapScreen extends Screen {
     private void lockedPanel(GuiGraphicsExtractor g, MapDraw.View v) {
         g.fill(v.left(), v.top(), v.left() + v.width(), v.top() + v.height(), 0xFF1B2128);
         int cx = v.left() + v.width() / 2, cy = v.top() + v.height() / 2;
-        g.fill(cx - 70, cy - 34, cx + 70, cy + 30, 0xF0181E25);
-        g.outline(cx - 70, cy - 34, 140, 64, 0xFFFFA530);
-        MapIcons.centred(g, MapGlyphs.LOCK, cx, cy - 18, 0xFFFFA530);
         Component title = Component.translatable("mapmod.map.locked_title");
-        g.text(font, title, cx - font.width(title) / 2, cy - 4, 0xFFE6E6E6, false);
         Component reason = MapLock.reason();
+        // the frame fits the longer line, at least 140 pixels wide
+        int half = Math.max(70, Math.max(font.width(title), reason == null ? 0 : font.width(reason)) / 2 + 10);
+        g.fill(cx - half, cy - 34, cx + half, cy + 30, 0xF0181E25);
+        g.outline(cx - half, cy - 34, half * 2, 64, 0xFFFFA530);
+        MapIcons.centred(g, MapGlyphs.LOCK, cx, cy - 18, 0xFFFFA530);
+        g.text(font, title, cx - font.width(title) / 2, cy - 4, 0xFFE6E6E6, false);
         if (reason != null) g.text(font, reason, cx - font.width(reason) / 2, cy + 9, 0xFFB0B8C0, false);
         lockedFrames++;
     }
