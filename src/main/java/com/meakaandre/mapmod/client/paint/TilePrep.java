@@ -57,8 +57,13 @@ public final class TilePrep {
     private static final float FAR = 1e9f;
 
     public static final int FIELDS = 0, SURFACE = 1, EFFECTS = 2, WATER = 3, SHORE = 4, REGION = 5, TEXTURES = 6;
-    /** Merge: the window's reach (samples each way), the rounds of averaging, and how many samples round one must agree with it. */
-    static final int MERGE_R = 2, MERGE_ROUNDS = 2, MERGE_AGREE = 4;
+    /**
+     * Merge: the averaging's reach (samples each way) and rounds, the reach over which samples must agree with one, and
+     * how many must.
+     */
+    static final int SHIFT_R = 1, MERGE_ROUNDS = 2, MERGE_R = 2, MERGE_AGREE = 4;
+    /** A brushed colour this far (r g b 0-1) from every merged colour beside it is a blend across a border: it is snapped back. */
+    static final float SNAP = 0.05f;
     /** The region blur: a Gaussian of this sigma (samples), cut off this many samples each way. */
     static final float REGION_SIGMA = 1.75f;
     static final int REGION_R = 4;
@@ -211,6 +216,27 @@ public final class TilePrep {
                     cr /= wsum;
                     cg /= wsum;
                     cb /= wsum;
+                    // MM-8b: where every window straddles a border (a diagonal one, a staircase) the brush blends the
+                    // two sides into a colour of neither; such a blend goes back to the nearest merged colour beside it
+                    double near = Double.MAX_VALUE;
+                    int pick = g;
+                    for (int dz = -1; dz <= 1; dz++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int h = g + dx + dz * GRID;
+                            if (!known[h] || wet[h]) continue;
+                            double er = colour[h * 3] - cr, eg = colour[h * 3 + 1] - cg, eb = colour[h * 3 + 2] - cb;
+                            double e = er * er + eg * eg + eb * eb;
+                            if (e < near) {
+                                near = e;
+                                pick = h;
+                            }
+                        }
+                    }
+                    if (near > SNAP * SNAP) {
+                        cr = colour[pick * 3];
+                        cg = colour[pick * 3 + 1];
+                        cb = colour[pick * 3 + 2];
+                    }
                 }
                 brushed[g * 3] = (float) cr;
                 brushed[g * 3 + 1] = (float) cg;
@@ -232,9 +258,9 @@ public final class TilePrep {
 
     /**
      * Merges similar colours (MM-8b), in place over the whole grid: {@link #MERGE_ROUNDS} times, each land sample takes
-     * the mean of the land samples in the {@code 2 * MERGE_R + 1} square round it whose colour is within {@code thr} of
+     * the mean of the land samples in the {@code 2 * SHIFT_R + 1} square round it whose colour is within {@code thr} of
      * its own (r g b 0-1, straight-line distance), so near colours settle into one. Then each sample that fewer than
-     * {@link #MERGE_AGREE} samples in its square agree with (itself included) takes the colour of the sample in the
+     * {@link #MERGE_AGREE} samples in the {@code 2 * MERGE_R + 1} square round it agree with (itself included) takes the colour of the sample in the
      * square that most agree with: stray blocks, one or two samples of noise and the mixed samples along a staircase
      * join the region round them. Off (as before) at {@code thr <= 0}.
      */
@@ -252,10 +278,10 @@ public final class TilePrep {
                     if (!land[g]) continue;
                     float r = colour[g * 3], gg = colour[g * 3 + 1], b = colour[g * 3 + 2], sr = 0, sg = 0, sb = 0;
                     int cnt = 0;
-                    for (int dz = -MERGE_R; dz <= MERGE_R; dz++) {
+                    for (int dz = -SHIFT_R; dz <= SHIFT_R; dz++) {
                         int zz = z + dz;
                         if (zz < 0 || zz >= GRID) continue;
-                        for (int dx = -MERGE_R; dx <= MERGE_R; dx++) {
+                        for (int dx = -SHIFT_R; dx <= SHIFT_R; dx++) {
                             int xx = x + dx;
                             if (xx < 0 || xx >= GRID) continue;
                             int h = xx + zz * GRID;

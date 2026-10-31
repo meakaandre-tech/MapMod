@@ -181,12 +181,15 @@ final class ColourClientTests {
                 check("the map settles on the patch " + (state == 2 ? "baked at a pixel a block" : "far out"), PaintMap.idle(), PaintMap.lastFrame());
                 geometry(shot);
                 MapMod.LOGGER.info("SELFTEST colours shot {}", shot);
-                if (state == 3) layers(true);
                 next();
             }
             case 4 -> {
                 // the run replaces the mycelium with grass blocks on the server: the map follows by itself
-                if (++waited == 100) open(3f);
+                // the layers back on only now, well after the far shot was logged (the run's screenshot can lag)
+                if (++waited == 100) {
+                    layers(true);
+                    open(3f);
+                }
                 if (waited > REPLACE_PATIENCE) {
                     check("replacing mycelium with grass changes the painted colour", false, "no change after " + waited + " ticks");
                     next();
