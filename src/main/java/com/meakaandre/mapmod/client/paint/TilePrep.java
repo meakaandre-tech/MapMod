@@ -9,27 +9,37 @@ import org.jspecify.annotations.Nullable;
 /**
  * Works out one tile's GPU textures from the tile and its eight neighbours, on a background thread (MM-3): the render
  * thread only copies the result into the textures ({@link TileTextures#upload}). Each texture is {@link #SIZE} square:
- * the tile's 128x128 samples plus an apron of {@link #APRON} samples from the neighbours on every side, wide enough for
+ * the tile's 256x256 samples plus an apron of {@link #APRON} samples from the neighbours on every side, wide enough for
  * the shader's warp and cubic sampling, so tiles meet without a seam. Pixels are ARGB, as {@code NativeImage.setPixel}
  * takes them:
  * <pre>
  *   fields   r, g  height + 32768, high and low byte   b  water depth (blocks)   a  255 explored, 0 not
- *   surface  rgb   biome tint                          a  canopy density
- *   classA   argb  blurred weights of classes 0-3 (r = 0, g = 1, b = 2, a = 3), 0-255, summing to 255 on land
- *   classB   argb  blurred weights of classes 4-7
- *   shore    r     signed distance to the shore in samples, 128 + 8 * d (water positive, land negative, ±16 at most)
+ *   surface  rgb   the land's painted colour (MM-8)    a  canopy density
+ *   effects  r     blurred share of forest floor       g  blurred share of snow   (of the land round it, 0-255)
+ *   water    rgb   the water's own colour (its biome's) a  255 on water, 0 elsewhere
+ *   shore    r     signed distance to the shore in samples, 128 + 4 * d (water positive, land negative, ±31 at most)
  * </pre>
- * Everything is computed over a wider window ({@link #PAD} more samples on each side) and cropped, so the blur and the
- * distance field are the same in a tile's apron as in the neighbour it copies.
+ * Everything is computed over a wider window ({@link #PAD} more samples on each side) and cropped, so the blur, the
+ * brush and the distance field are the same in a tile's apron as in the neighbour it copies.
+ * <p>
+ * MM-8, the land's colour: each sample's real block colour ({@link SurfaceTile#colour}, or its class's colour where a
+ * palette overrides it), pulled toward a muted painted palette ({@link PaintPalette#paint}), then run through a
+ * Kuwahara filter: of eight windows round the sample (four quarters and four half-sides, each
+ * {@code colour.brush_size} blocks across) the flattest ones win, so mixed, speckled ground settles into soft patches
+ * of one colour while the border between two colours stays where it is and stays sharp. It runs here, once per tile on
+ * the prep thread, with summed-area tables (a few milliseconds a tile): bakes and live paint both read its result, and
+ * no shader pass pays for it.
  */
 public final class TilePrep {
     public static final int APRON = 6, SIZE = SurfaceTile.SIDE + 2 * APRON;
-    /** Distance field cap (samples): far enough for the deep-water gradient. */
-    public static final int SHORE_CAP = 16;
-    /** Samples beyond the apron that the blur and distance field look at. */
+    /** Distance field cap (samples): far enough for the deep-water gradient (62 blocks). */
+    public static final int SHORE_CAP = 31;
+    /** Samples beyond the apron that the blur, the brush and the distance field look at. */
     static final int PAD = SHORE_CAP;
     static final int GRID = SIZE + 2 * PAD;
-    /** Tent blur of the class weights: 1 2 3 2 1. */
+    /** The brush's windows are this many samples across at most. */
+    static final int MAX_BRUSH = 8;
+    /** Tent blur of the effect weights: 1 2 3 2 1. */
     private static final int[] BLUR = {1, 2, 3, 2, 1};
     /** Rounds of spreading known heights into unexplored samples. */
     private static final int SPREAD = 3;
@@ -37,24 +47,31 @@ public final class TilePrep {
     private static final int NO_HEIGHT = 63;
     private static final float FAR = 1e9f;
 
-    public static final int FIELDS = 0, SURFACE = 1, CLASS_A = 2, CLASS_B = 3, SHORE = 4, TEXTURES = 5;
+    public static final int FIELDS = 0, SURFACE = 1, EFFECTS = 2, WATER = 3, SHORE = 4, TEXTURES = 5;
 
     private TilePrep() {
     }
 
-    /** The textures' pixels, ARGB, {@code pixels[texture][x + z * SIZE]}. */
-    public record Result(int[][] pixels) {
+    /** The textures' pixels, ARGB, {@code pixels[texture][x + z * SIZE]}, and how long the brush took. */
+    public record Result(int[][] pixels, long brushNanos) {
         public int pixel(int texture, int ax, int az) {
             return pixels[texture][ax + az * SIZE];
         }
     }
 
-    /** Works out a tile's textures from it and its neighbours ({@code around[dz + 1][dx + 1]}, null where none). */
+    /** Works out a tile's textures with the palette in use now. */
     public static Result prepare(@Nullable SurfaceTile[][] around) {
+        return prepare(around, PaintPalette.current());
+    }
+
+    /** Works out a tile's textures from it and its neighbours ({@code around[dz + 1][dx + 1]}, null where none). */
+    public static Result prepare(@Nullable SurfaceTile[][] around, PaintPalette pal) {
         int n = GRID * GRID;
         boolean[] known = new boolean[n], wet = new boolean[n];
         int[] height = new int[n];
         byte[] cls = new byte[n];
+        // the land's colour, r g b in 0-1, after the palette's pull (only where land[g])
+        float[] colour = new float[n * 3];
         for (int gz = 0; gz < GRID; gz++) {
             int sz = gz - PAD - APRON, dz = Math.floorDiv(sz, SurfaceTile.SIDE), lz = Math.floorMod(sz, SurfaceTile.SIDE);
             for (int gx = 0; gx < GRID; gx++) {
@@ -65,25 +82,34 @@ public final class TilePrep {
                 known[g] = true;
                 height[g] = t.height[i];
                 wet[g] = (t.water[i] & 0xFF) > 0;
-                cls[g] = (byte) Math.clamp(t.surface[i], 0, SurfaceClass.COUNT - 1);
+                int c = Math.clamp(t.surface[i], 0, SurfaceClass.COUNT - 1);
+                cls[g] = (byte) c;
+                if (wet[g]) continue;
+                int rgb = pal.paint(pal.landBase(c, t.colour[i], SurfaceTile.tintRgb(t.tint[i])));
+                colour[g * 3] = (rgb >> 16 & 255) / 255f;
+                colour[g * 3 + 1] = (rgb >> 8 & 255) / 255f;
+                colour[g * 3 + 2] = (rgb & 255) / 255f;
             }
         }
         int[][] out = new int[TEXTURES][SIZE * SIZE];
         surfaceAndFields(around, out);
-        classWeights(known, wet, cls, out);
+        effects(known, wet, cls, out);
+        long t0 = System.nanoTime();
+        brush(known, wet, colour, pal.brushSamples(), out);
+        long brush = System.nanoTime() - t0;
         float[] sdf = signedDistance(wet, GRID, GRID, SHORE_CAP);
         heights(known, height, out);
         for (int az = 0; az < SIZE; az++) {
             for (int ax = 0; ax < SIZE; ax++) {
                 float d = sdf[(ax + PAD) + (az + PAD) * GRID];
-                int v = Math.clamp(Math.round(128 + 8 * d), 0, 255);
+                int v = Math.clamp(Math.round(128 + 4 * d), 0, 255);
                 out[SHORE][ax + az * SIZE] = 0xFF000000 | v << 16;
             }
         }
-        return new Result(out);
+        return new Result(out, brush);
     }
 
-    /** Tint, canopy, water depth and the explored bit, straight from the samples. */
+    /** Canopy, water depth, the water's colour and the explored bit, straight from the samples. */
     private static void surfaceAndFields(@Nullable SurfaceTile[][] around, int[][] out) {
         for (int az = 0; az < SIZE; az++) {
             int sz = az - APRON, dz = Math.floorDiv(sz, SurfaceTile.SIDE), lz = Math.floorMod(sz, SurfaceTile.SIDE);
@@ -92,12 +118,102 @@ public final class TilePrep {
                 SurfaceTile t = around[dz + 1][dx + 1];
                 int a = ax + az * SIZE, i = SurfaceTile.index(lx, lz);
                 if (t == null || !t.explored(i)) continue;
-                int tint = t.tint[i] & 0xFFFF;
-                int r = (tint >> 11 & 31) * 255 / 31, g = (tint >> 5 & 63) * 255 / 63, b = (tint & 31) * 255 / 31;
-                out[SURFACE][a] = (t.canopy[i] & 0xFF) << 24 | r << 16 | g << 8 | b;
+                out[SURFACE][a] = (t.canopy[i] & 0xFF) << 24;
                 out[FIELDS][a] = 0xFF000000 | (t.water[i] & 0xFF);
+                if ((t.water[i] & 0xFF) > 0) out[WATER][a] = 0xFF000000 | t.colour[i] & 0xFFFFFF;
             }
         }
+    }
+
+    /**
+     * The brush (MM-8): a Kuwahara filter over the land's colour, with windows {@code w} samples across (1: none). For
+     * each land sample, eight windows that touch it (four quarters, and four halves along its sides) are read from
+     * summed-area tables: their mean colour and how much the colour varies in them. Each mean is weighted by
+     * 1 / (variance + e)^2, so where one window is flat and another straddles a border, the flat one all but wins: the
+     * border stays where it is and stays sharp, and speckle inside a patch is averaged away. Water and unexplored
+     * samples take no part. Writes the surface texture's rgb.
+     */
+    static void brush(boolean[] known, boolean[] wet, float[] colour, int w, int[][] out) {
+        int stride = GRID + 1;
+        // summed-area tables: land count, r, g, b, and r^2 + g^2 + b^2
+        double[] sn = new double[stride * stride], sr = new double[stride * stride], sg = new double[stride * stride],
+            sb = new double[stride * stride], sq = new double[stride * stride];
+        for (int z = 0; z < GRID; z++) {
+            double rn = 0, rr = 0, rg = 0, rb = 0, rq = 0;
+            for (int x = 0; x < GRID; x++) {
+                int g = x + z * GRID;
+                if (known[g] && !wet[g]) {
+                    float r = colour[g * 3], gg = colour[g * 3 + 1], b = colour[g * 3 + 2];
+                    rn++;
+                    rr += r;
+                    rg += gg;
+                    rb += b;
+                    rq += r * r + gg * gg + b * b;
+                }
+                int s = (x + 1) + (z + 1) * stride, up = (x + 1) + z * stride;
+                sn[s] = sn[up] + rn;
+                sr[s] = sr[up] + rr;
+                sg[s] = sg[up] + rg;
+                sb[s] = sb[up] + rb;
+                sq[s] = sq[up] + rq;
+            }
+        }
+        int r = Math.clamp(w, 1, MAX_BRUSH) - 1, h = r / 2;
+        // the windows as offsets of their corners from the sample: x0, z0, x1, z1 (inclusive)
+        int[][] windows = {
+            {-r, -r, 0, 0}, {0, -r, r, 0}, {-r, 0, 0, r}, {0, 0, r, r},
+            {-h, -r, r - h, 0}, {-h, 0, r - h, r}, {-r, -h, 0, r - h}, {0, -h, r, r - h}};
+        double[] sum = new double[5];
+        for (int az = 0; az < SIZE; az++) {
+            for (int ax = 0; ax < SIZE; ax++) {
+                int gx = ax + PAD, gz = az + PAD, g = gx + gz * GRID, a = ax + az * SIZE;
+                if (!known[g] || wet[g]) continue;
+                double cr, cg, cb;
+                if (r == 0) {
+                    cr = colour[g * 3];
+                    cg = colour[g * 3 + 1];
+                    cb = colour[g * 3 + 2];
+                } else {
+                    double wsum = 0;
+                    cr = cg = cb = 0;
+                    for (int[] win : windows) {
+                        int x0 = gx + win[0], z0 = gz + win[1], x1 = gx + win[2] + 1, z1 = gz + win[3] + 1;
+                        rect(sn, sr, sg, sb, sq, stride, x0, z0, x1, z1, sum);
+                        double cnt = sum[0];
+                        if (cnt < 1) continue;
+                        double mr = sum[1] / cnt, mg = sum[2] / cnt, mb = sum[3] / cnt;
+                        double var = Math.max(0, sum[4] / cnt - (mr * mr + mg * mg + mb * mb));
+                        double e = var + 2e-4;
+                        double wt = cnt / (e * e);
+                        cr += wt * mr;
+                        cg += wt * mg;
+                        cb += wt * mb;
+                        wsum += wt;
+                    }
+                    cr /= wsum;
+                    cg /= wsum;
+                    cb /= wsum;
+                }
+                int ir = (int) Math.clamp(Math.round(cr * 255), 0, 255), ig = (int) Math.clamp(Math.round(cg * 255), 0, 255),
+                    ib = (int) Math.clamp(Math.round(cb * 255), 0, 255);
+                out[SURFACE][a] = out[SURFACE][a] & 0xFF000000 | ir << 16 | ig << 8 | ib;
+            }
+        }
+    }
+
+    /** The sums over cells [x0, x1) x [z0, z1) of the five tables (clamped to the grid). */
+    private static void rect(double[] sn, double[] sr, double[] sg, double[] sb, double[] sq, int stride, int x0, int z0, int x1, int z1,
+                             double[] out) {
+        x0 = Math.clamp(x0, 0, GRID);
+        z0 = Math.clamp(z0, 0, GRID);
+        x1 = Math.clamp(x1, 0, GRID);
+        z1 = Math.clamp(z1, 0, GRID);
+        int a = x0 + z0 * stride, b = x1 + z0 * stride, c = x0 + z1 * stride, d = x1 + z1 * stride;
+        out[0] = sn[d] - sn[b] - sn[c] + sn[a];
+        out[1] = sr[d] - sr[b] - sr[c] + sr[a];
+        out[2] = sg[d] - sg[b] - sg[c] + sg[a];
+        out[3] = sb[d] - sb[b] - sb[c] + sb[a];
+        out[4] = sq[d] - sq[b] - sq[c] + sq[a];
     }
 
     /** Heights into fields r and g; unexplored samples get the mean of the known ones beside them, a ring at a time. */
@@ -149,11 +265,14 @@ public final class TilePrep {
         }
     }
 
-    /** One weight per class on explored land, blurred with a tent five samples wide and normalised to sum to 255. */
-    private static void classWeights(boolean[] known, boolean[] wet, byte[] cls, int[][] out) {
-        int n = GRID * GRID, c8 = SurfaceClass.COUNT;
-        // one-hot, blurred along x
-        float[] rows = new float[n * c8];
+    /**
+     * The effects' weights: the share of forest floor and of snow among the explored land round each sample, blurred
+     * with a tent five samples wide, 0-255.
+     */
+    private static void effects(boolean[] known, boolean[] wet, byte[] cls, int[][] out) {
+        int n = GRID * GRID;
+        // land, forest and snow counts, blurred along x
+        float[] rows = new float[n * 3];
         for (int gz = 0; gz < GRID; gz++) {
             for (int gx = 0; gx < GRID; gx++) {
                 for (int k = 0; k < BLUR.length; k++) {
@@ -161,30 +280,26 @@ public final class TilePrep {
                     if (x < 0 || x >= GRID) continue;
                     int g = x + gz * GRID;
                     if (!known[g] || wet[g]) continue;
-                    rows[(gx + gz * GRID) * c8 + cls[g]] += BLUR[k];
+                    int o = (gx + gz * GRID) * 3;
+                    rows[o] += BLUR[k];
+                    if (cls[g] == SurfaceClass.FOREST) rows[o + 1] += BLUR[k];
+                    if (cls[g] == SurfaceClass.SNOW) rows[o + 2] += BLUR[k];
                 }
             }
         }
-        float[] w = new float[c8];
         for (int az = 0; az < SIZE; az++) {
             for (int ax = 0; ax < SIZE; ax++) {
                 int gx = ax + PAD, gz = az + PAD;
-                java.util.Arrays.fill(w, 0);
-                float sum = 0;
+                float land = 0, forest = 0, snow = 0;
                 for (int k = 0; k < BLUR.length; k++) {
                     int z = gz + k - 2;
-                    int base = (gx + z * GRID) * c8;
-                    for (int c = 0; c < c8; c++) {
-                        float v = rows[base + c] * BLUR[k];
-                        w[c] += v;
-                        sum += v;
-                    }
+                    int o = (gx + z * GRID) * 3;
+                    land += rows[o] * BLUR[k];
+                    forest += rows[o + 1] * BLUR[k];
+                    snow += rows[o + 2] * BLUR[k];
                 }
-                int[] b = new int[c8];
-                if (sum > 0) for (int c = 0; c < c8; c++) b[c] = Math.round(w[c] / sum * 255);
-                int a = ax + az * SIZE;
-                out[CLASS_A][a] = b[3] << 24 | b[0] << 16 | b[1] << 8 | b[2];
-                out[CLASS_B][a] = b[7] << 24 | b[4] << 16 | b[5] << 8 | b[6];
+                int f = land > 0 ? Math.round(forest / land * 255) : 0, s = land > 0 ? Math.round(snow / land * 255) : 0;
+                out[EFFECTS][ax + az * SIZE] = 0xFF000000 | f << 16 | s << 8;
             }
         }
     }
@@ -254,7 +369,7 @@ public final class TilePrep {
     /** Texels along a fog mask's cell, and the mask's side with an apron of one texel each way (so cells meet). */
     public static final int MASK_TEXELS = 64, MASK_SIZE = MASK_TEXELS + 2;
     /** The noise of region edges repeats every this many blocks (the shader's 2048 samples). */
-    static final int NOISE_BLOCKS = MapGpu.NOISE_PERIOD * SurfaceTile.SPACING;
+    static final int NOISE_BLOCKS = MapGpu.NOISE_PERIOD * MapGpu.NOISE_UNIT;
 
     /** Blocks along one texel of a level's fog mask: 8 at level 0, doubling each level. */
     public static int maskTexel(int level) {
@@ -318,8 +433,9 @@ public final class TilePrep {
             for (int c = 0; c < MapGrid.REGION_CHUNKS * MapGrid.REGION_CHUNKS; c++) {
                 if (!MapGrid.get(chunks, c)) continue;
                 int lx = c % MapGrid.REGION_CHUNKS, lz = c / MapGrid.REGION_CHUNKS;
-                for (int k = 0; k < 16; k++) {
-                    int sx = lx * 4 + (k & 3), sz = lz * 4 + (k >> 2), i = SurfaceTile.index(sx, sz);
+                for (int k = 0; k < SurfaceTile.PER_CHUNK * SurfaceTile.PER_CHUNK; k++) {
+                    int sx = lx * SurfaceTile.PER_CHUNK + k % SurfaceTile.PER_CHUNK, sz = lz * SurfaceTile.PER_CHUNK + k / SurfaceTile.PER_CHUNK;
+                    int i = SurfaceTile.index(sx, sz);
                     if ((samples[i >>> 6] & 1L << i) == 0) continue;
                     long gx = Math.floorDiv(bx0 + (long) sx * SurfaceTile.SPACING - gx0, t), gz = Math.floorDiv(bz0 + (long) sz * SurfaceTile.SPACING - gz0, t);
                     if (gx < 0 || gz < 0 || gx >= n || gz >= n) continue;
@@ -338,8 +454,8 @@ public final class TilePrep {
                 // the noise at the position scaled down to level 0's, wrapped to its period
                 double qx = px / scale, qz = pz / scale;
                 double ws = qx - NOISE_BLOCKS * Math.floor(qx / NOISE_BLOCKS), wt = qz - NOISE_BLOCKS * Math.floor(qz / NOISE_BLOCKS);
-                double wx = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 0) * amp;
-                double wz = warp(ws / SurfaceTile.SPACING, wt / SurfaceTile.SPACING, 1) * amp;
+                double wx = warp(ws / MapGpu.NOISE_UNIT, wt / MapGpu.NOISE_UNIT, 0) * amp;
+                double wz = warp(ws / MapGpu.NOISE_UNIT, wt / MapGpu.NOISE_UNIT, 1) * amp;
                 float v = bilinear(blurred, n, (float) ((px + wx - gx0) / t - 0.5), (float) ((pz + wz - gz0) / t - 0.5));
                 out[i + j * MASK_SIZE] = (byte) Math.round(Math.clamp(v, 0f, 1f) * 255);
             }
@@ -433,7 +549,7 @@ public final class TilePrep {
         return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy;
     }
 
-    /** One axis of the shader's warp at a world position in samples, at unit strength (-1 to 1). */
+    /** One axis of the shader's warp at a world position in noise units ({@link MapGpu#NOISE_UNIT} blocks), at unit strength (-1 to 1). */
     public static double warp(double sx, double sz, int axis) {
         double p = MapGpu.NOISE_PERIOD;
         double big = axis == 0 ? vnoise(sx / 16, sz / 16, p / 16) : vnoise(sx / 16 + 53, sz / 16 + 17, p / 16);

@@ -6,12 +6,12 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 
 /**
  * One tile's fields on the GPU: the {@link TilePrep#TEXTURES} RGBA8 textures {@link TilePrep} lays out (fields, surface
- * with canopy, two of blurred class weights, shore distance), each {@link TilePrep#SIZE} square with the apron. The
+ * colour with canopy, effects, water colour, shore distance), each {@link TilePrep#SIZE} square with the apron. The
  * work is done off-thread; {@link #upload} only copies the prepared pixels in. Render thread only.
  */
 final class TileTextures implements AutoCloseable {
     static final int APRON = TilePrep.APRON, SIZE = TilePrep.SIZE;
-    private static final String[] NAMES = {"fields", "surface", "classes a", "classes b", "shore"};
+    private static final String[] NAMES = {"fields", "surface", "effects", "water", "shore"};
 
     final DynamicTexture[] textures = new DynamicTexture[TilePrep.TEXTURES];
     /** The stamps of the tile and its neighbours this upload was made from. */

@@ -73,6 +73,12 @@ public final class Capture {
 
     /** Chunks to copy, oldest first, and chunks whose surface changed, with the tick they are due. Client thread. */
     private static final LongLinkedOpenHashSet PENDING = new LongLinkedOpenHashSet();
+    /** The chunks the client holds now (MM-8: sampled again when the block colours change). Client thread. */
+    private static final it.unimi.dsi.fastutil.longs.LongOpenHashSet LOADED = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+    /** The block colours' generation the loaded chunks were sampled with, and since when a new one has held (ticks). */
+    private static int colourGeneration = -1, colourSeen = -1, colourSince;
+    /** Times every loaded chunk was sampled again for new block colours (for the selftests). */
+    private static volatile int colourRecaptures;
     private static final Long2IntOpenHashMap DUE = new Long2IntOpenHashMap();
     private static @Nullable ClientLevel level;
     private static @Nullable CaptureStore store;
@@ -106,6 +112,7 @@ public final class Capture {
             long k = key(chunk.getPos().x(), chunk.getPos().z());
             PENDING.remove(k);
             DUE.remove(k);
+            LOADED.remove(k);
         });
         ClientTickEvents.END_CLIENT_TICK.register(Capture::tick);
         ClientTickEvents.END_CLIENT_TICK.register(client -> dispatchChanges());
@@ -148,7 +155,9 @@ public final class Capture {
 
     private static void loaded(ClientLevel lvl, LevelChunk chunk) {
         follow(lvl);
-        PENDING.add(key(chunk.getPos().x(), chunk.getPos().z()));
+        long k = key(chunk.getPos().x(), chunk.getPos().z());
+        PENDING.add(k);
+        LOADED.add(k);
     }
 
     /** A block changed in a client chunk: if it is at the surface, the chunk is sampled again shortly. */
@@ -169,7 +178,10 @@ public final class Capture {
         Path dir = dirFor(Minecraft.getInstance(), lvl);
         CaptureStore fresh = new CaptureStore(dir);
         store = fresh;
-        submit(fresh, s -> SurfaceClass.clearCache());
+        submit(fresh, s -> {
+            SurfaceClass.clearCache();
+            s.dropOldFormats();
+        });
         MapMod.LOGGER.info("capturing the map into {}", dir);
     }
 
@@ -184,6 +196,7 @@ public final class Capture {
         CHANGED.clear();
         PENDING.clear();
         DUE.clear();
+        LOADED.clear();
         if (old != null) {
             submit(old, s -> {
                 s.close();
@@ -224,6 +237,7 @@ public final class Capture {
                 }
             }
         }
+        coloursChanged();
         CaptureStore st = store;
         int copied = 0;
         while (st != null && !PENDING.isEmpty() && copied < PER_TICK && QUEUE.size() < MAX_QUEUE && System.nanoTime() - t0 < BUDGET_NS) {
@@ -235,7 +249,7 @@ public final class Capture {
             if (snap == null) continue;
             submit(st, s -> {
                 s.put(SurfaceSampler.sample(snap));
-                STATS.samples.addAndGet(16);
+                STATS.samples.addAndGet(SurfaceTile.PER_CHUNK * SurfaceTile.PER_CHUNK);
             });
         }
         if (st != null && mc.player != null && ticks % AROUND_TICKS == 0) {
@@ -255,6 +269,34 @@ public final class Capture {
             STATS.tickMaxNs = tickMaxNs;
             tickMaxNs = 0;
         }
+    }
+
+    /**
+     * MM-8: when the game's block models are swapped (a resource reload: a pack switched on or off, F3+T), the block
+     * colours start again ({@link BlockColours}); once the new ones have held for a second, every loaded chunk is
+     * sampled again, so the map takes the new colours. Land further away keeps the colours it was captured with until
+     * the player is there again.
+     */
+    private static void coloursChanged() {
+        int gen = BlockColours.generation();
+        if (gen != colourSeen) {
+            colourSeen = gen;
+            colourSince = ticks;
+        }
+        if (colourGeneration < 0) {
+            colourGeneration = gen;
+            return;
+        }
+        if (gen == colourGeneration || ticks - colourSince < 20) return;
+        colourGeneration = gen;
+        PENDING.addAll(LOADED);
+        colourRecaptures++;
+        MapMod.LOGGER.info("block colours changed: sampling the {} loaded chunks again", LOADED.size());
+    }
+
+    /** Times every loaded chunk was sampled again for new block colours. */
+    public static int colourRecaptures() {
+        return colourRecaptures;
     }
 
     // ------------------------------------------------------------------------------------------------ worker

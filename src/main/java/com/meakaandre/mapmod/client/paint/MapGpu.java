@@ -1,6 +1,7 @@
 package com.meakaandre.mapmod.client.paint;
 
 import com.meakaandre.mapmod.MapMod;
+import com.meakaandre.mapmod.client.capture.SurfaceTile;
 import com.mojang.blaze3d.buffers.Std140Builder;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -59,8 +60,8 @@ final class MapGpu implements AutoCloseable {
             .withUniform("MapTile", UniformType.UNIFORM_BUFFER)
             .withUniform("Fields", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("Surface", UniformType.COMBINED_IMAGE_SAMPLER)
-            .withUniform("ClassA", UniformType.COMBINED_IMAGE_SAMPLER)
-            .withUniform("ClassB", UniformType.COMBINED_IMAGE_SAMPLER)
+            .withUniform("Effects", UniformType.COMBINED_IMAGE_SAMPLER)
+            .withUniform("Water", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("Shore", UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("Fog", UniformType.COMBINED_IMAGE_SAMPLER)
             .build())
@@ -83,13 +84,18 @@ final class MapGpu implements AutoCloseable {
         .withColorTargetState(ColorTargetState.DEFAULT)
         .withCull(false)
         .build();
-    /** Bytes of the palette block: 8 class colours and 12 more vec4s. */
-    private static final int PALETTE_SIZE = (8 + 12) * 16;
+    /** Bytes of the palette block: 13 vec4s (MM-8: the class colours are worked in on the CPU, {@link TilePrep}). */
+    private static final int PALETTE_SIZE = 13 * 16;
     /** Bytes of one draw's block (the larger of a quad's 9 vec4s and a tile's 6), and the stride between them (the strictest offset alignment). */
     private static final int BLOCK_SIZE = 9 * 16, BLOCK_STRIDE = 256;
-    /** The shader's noise repeats every this many samples; tile origins are wrapped to it. */
+    /**
+     * Blocks in one unit of the shaders' world-space noise: 4, what a sample was before MM-8, so the warp, the brush, the
+     * grain of forests and the clouds look as they did when samples went to 2 blocks.
+     */
+    static final int NOISE_UNIT = 4;
+    /** The shader's noise repeats every this many noise units (8192 blocks); tile origins are wrapped to it. */
     static final int NOISE_PERIOD = 2048;
-    private static final String[] SAMPLERS = {"Fields", "Surface", "ClassA", "ClassB", "Shore"};
+    private static final String[] SAMPLERS = {"Fields", "Surface", "Effects", "Water", "Shore"};
     /** How much the relief is exaggerated for the hillshade. */
     private static final float RELIEF = 3.5f;
 
@@ -122,7 +128,7 @@ final class MapGpu implements AutoCloseable {
 
     /**
      * One tile to paint: its textures, its corners in the target's pixels, the texels at those corners, and the world
-     * position of its texel (0, 0) in samples, wrapped to {@link #NOISE_PERIOD}. On screen (MM-5) also its fog mask (null:
+     * position of its texel (0, 0) in noise units ({@link #NOISE_UNIT} blocks), wrapped to {@link #NOISE_PERIOD}. On screen (MM-5) also its fog mask (null:
      * all unexplored) and the mask's texture coordinates at the corners.
      */
     record PaintQuad(TileTextures tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float ox, float oz,
@@ -140,7 +146,7 @@ final class MapGpu implements AutoCloseable {
      * One texture to copy: its corners in the target's pixels and its texture coordinates there (v up, see above). A
      * null source lays plain paper. On screen (MM-5) it can also blend a second source over it ({@code fade} of it: the
      * cross-fade between mip levels), and carries its fog mask (null: all unexplored) with the mask's coordinates at the
-     * corners, and its world position at the corners in samples (wrapped to {@link #NOISE_PERIOD}) for the clouds.
+     * corners, and its world position at the corners in noise units (wrapped to {@link #NOISE_PERIOD}) for the clouds.
      */
     record TexQuad(@Nullable GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1,
                    @Nullable GpuTextureView src2, float s0, float t0, float s1, float t1, float fade,
@@ -283,7 +289,8 @@ final class MapGpu implements AutoCloseable {
         float flag = contours ? 1f : 0f, finish = screen ? 1f : 0f;
         int first = quads.isEmpty() ? 0 : write(encoder, quads.size(), (b, i) -> {
             PaintQuad q = quads.get(i);
-            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(q.ox, q.oz, 0, 0).putVec4(t.width, t.height, finish, flag)
+            b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1)
+                .putVec4(q.ox, q.oz, (float) SurfaceTile.SPACING / NOISE_UNIT, 0).putVec4(t.width, t.height, finish, flag)
                 .putVec4(q.m0, q.n0, q.m1, q.n1).putVec4(q.mask == null ? 0 : 1, 0, 0, 0);
         });
         GpuTextureView none = blank();
@@ -368,7 +375,6 @@ final class MapGpu implements AutoCloseable {
     private static GpuBuffer paletteBuffer(GpuDevice device, PaintPalette p) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             Std140Builder b = Std140Builder.onStack(stack, PALETTE_SIZE);
-            for (int c = 0; c < 8; c++) colour(b, p.classColour()[c], p.classTint()[c]);
             colour(b, p.waterShallow(), p.deepAt());
             colour(b, p.waterDeep(), p.deepDist());
             colour(b, p.paper(), 0);
@@ -381,6 +387,7 @@ final class MapGpu implements AutoCloseable {
             b.putVec4(p.contourInterval(), p.contourStrength(), 0, 0);
             b.putVec4(p.grain(), p.vignette(), 0, 0);
             colour(b, p.fogColour(), p.fogClouds());
+            b.putVec4(p.waterTint(), SurfaceTile.SPACING, 0, 0);
             return device.createBuffer(() -> MapMod.ID + " map palette", GpuBuffer.USAGE_UNIFORM, b.get());
         }
     }

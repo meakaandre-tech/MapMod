@@ -412,6 +412,18 @@ public final class PaintMap {
         return null;
     }
 
+    /**
+     * Bake time per tile (MM-8): the prep off the render thread (the brush included, and how much of it the brush
+     * took) and the bake pass on it, averaged since the world was joined.
+     */
+    public static String bakeTimeLine() {
+        MapPainter p = painter;
+        if (p == null) return "  bake time per tile: no painter";
+        double[] t = p.bakeTimes();
+        return String.format(Locale.ROOT, "  bake time per tile: prep %.1f ms avg off-thread (brush %.1f ms), bake pass %.0f us avg (%.0f us max) on the render thread; %d bakes",
+            t[0], t[1], t[2], p.bakeMaxNanos / 1e3, p.cache.leafBakes);
+    }
+
     /** Compiles both shaders now (for the selftests): null if they compiled, else what went wrong. */
     public static @Nullable String compileCheck() {
         return MapGpu.compileCheck();
@@ -438,6 +450,7 @@ public final class PaintMap {
             long n = p.prepared();
             lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d",
                 n, n == 0 ? 0 : p.prepNanos.get() / 1e6 / n, p.prepMaxNanos.get() / 1e6, p.waiting()));
+            lines.add(bakeTimeLine());
             FogMasks m = p.masks;
             lines.add(String.format(Locale.ROOT, "  fog masks %d held, %d made off-thread (%.1f ms avg, %.1f ms max), %d uploaded; %d mips made again from their parent; %d frames blended",
                 m.held(), m.builds, m.builds == 0 ? 0 : m.buildNanos.get() / 1e6 / m.builds, m.buildMaxNanos.get() / 1e6, m.uploads, c.splits, p.fadeFrames));

@@ -119,7 +119,9 @@ final class MapPainter implements AutoCloseable {
 
     /** Counted since the painter was made. */
     long uploads, frames;
-    final AtomicLong prepNanos = new AtomicLong(), prepMaxNanos = new AtomicLong();
+    final AtomicLong prepNanos = new AtomicLong(), prepMaxNanos = new AtomicLong(), brushNanos = new AtomicLong();
+    /** CPU time spent issuing bake passes (MM-8: with the prep, the bake time per tile). */
+    long bakeNanos, bakeMaxNanos;
     private final AtomicLong prepDone = new AtomicLong();
     /** The last frame's numbers. */
     int lastOps, lastUploads, lastBakes, lastMips, lastQuads, lastPainted, lastShown, lastLevel, lastWork;
@@ -322,11 +324,11 @@ final class MapPainter implements AutoCloseable {
         return world(q, p.wx0, p.wz0, p.wx1, p.wz1).withMask(masks.uv(p.level, p.cx, p.cz, p.wx0, p.wz0, p.wx1, p.wz1));
     }
 
-    /** A quad's world position at its corners, in samples, its left and top wrapped to the noise's period. */
+    /** A quad's world position at its corners, in noise units, its left and top wrapped to the noise's period. */
     private static MapGpu.TexQuad world(MapGpu.TexQuad q, double wx0, double wz0, double wx1, double wz1) {
-        double sx = wx0 / SurfaceTile.SPACING, sz = wz0 / SurfaceTile.SPACING;
+        double sx = wx0 / MapGpu.NOISE_UNIT, sz = wz0 / MapGpu.NOISE_UNIT;
         double ox = sx - MapGpu.NOISE_PERIOD * Math.floor(sx / MapGpu.NOISE_PERIOD), oz = sz - MapGpu.NOISE_PERIOD * Math.floor(sz / MapGpu.NOISE_PERIOD);
-        return q.withWorld((float) ox, (float) oz, (float) (ox + (wx1 - wx0) / SurfaceTile.SPACING), (float) (oz + (wz1 - wz0) / SurfaceTile.SPACING));
+        return q.withWorld((float) ox, (float) oz, (float) (ox + (wx1 - wx0) / MapGpu.NOISE_UNIT), (float) (oz + (wz1 - wz0) / MapGpu.NOISE_UNIT));
     }
 
     private static double dist(long k, double mx, double mz) {
@@ -357,15 +359,17 @@ final class MapPainter implements AutoCloseable {
     }
 
     /**
-     * A tile's paint quad over the given rectangle. Sample i stands for its cell's middle (block i * 4 + 2), so the
-     * tile's edge is half a sample before the first and after the last; texel i + APRON holds sample i. Texel (0, 0)
-     * is world sample (tx * 128 - APRON, ...), wrapped to the noise's period so neighbouring tiles agree.
+     * A tile's paint quad over the given rectangle. Sample i stands for its cell's middle (block i * 2 + 1), so the
+     * tile's edge is half a sample before the first and after the last; texel i + APRON holds sample i. Texel (0, 0) is
+     * at world sample (tx * 256 - APRON, ...): its position in noise units (half a sample each) is wrapped to the noise's
+     * period, so neighbouring tiles agree.
      */
     private static MapGpu.PaintQuad tileQuad(TileTextures t, int tx, int tz, float x0, float y0, float x1, float y1) {
         float u0 = TileTextures.APRON - 0.5f, u1 = u0 + SurfaceTile.SIDE;
-        int ox = Math.floorMod(tx * SurfaceTile.SIDE - TileTextures.APRON, MapGpu.NOISE_PERIOD);
-        int oz = Math.floorMod(tz * SurfaceTile.SIDE - TileTextures.APRON, MapGpu.NOISE_PERIOD);
-        return new MapGpu.PaintQuad(t, x0, y0, x1, y1, u0, u0, u1, u1, ox, oz);
+        int per = MapGpu.NOISE_UNIT / SurfaceTile.SPACING, wrap = MapGpu.NOISE_PERIOD * per;
+        // in samples, wrapped to the period in samples (a whole number of noise units, since APRON is even)
+        int sx = Math.floorMod(tx * SurfaceTile.SIDE - TileTextures.APRON, wrap), sz = Math.floorMod(tz * SurfaceTile.SIDE - TileTextures.APRON, wrap);
+        return new MapGpu.PaintQuad(t, x0, y0, x1, y1, u0, u0, u1, u1, (float) sx / per, (float) sz / per);
     }
 
     /** A cell from the cache, else from the nearest coarser level, else from the level below, else nothing (paper). */
@@ -493,10 +497,12 @@ final class MapPainter implements AutoCloseable {
     private void submit(long k, long key, @Nullable SurfaceTile[][] around) {
         preparing.put(k, key);
         int gen = generation;
+        PaintPalette pal = PaintPalette.current();
         Runnable job = () -> {
             if (gen != generation) return;
             long t0 = System.nanoTime();
-            TilePrep.Result r = TilePrep.prepare(around);
+            TilePrep.Result r = TilePrep.prepare(around, pal);
+            brushNanos.addAndGet(r.brushNanos());
             // the explored samples of the tile and its neighbours, for the fog masks
             long[][] explored = new long[9][];
             long[] revisions = new long[9];
@@ -550,11 +556,25 @@ final class MapPainter implements AutoCloseable {
     }
 
     private int bake(int tx, int tz, TileTextures t, PaintPalette pal, int palVersion, boolean contours) {
+        long t0 = System.nanoTime();
         BakeCache.Baked b = cache.leaf(tx, tz);
         int s = BakeCache.SIDE;
         gpu.paint(b.target, MapGpu.clear(pal), List.of(tileQuad(t, tx, tz, 0, 0, s, s)), pal, palVersion, contours, false);
         cache.baked(b, t.key);
+        long ns = System.nanoTime() - t0;
+        bakeNanos += ns;
+        bakeMaxNanos = Math.max(bakeMaxNanos, ns);
         return 1;
+    }
+
+    /**
+     * Bake time per tile, averaged since the painter was made (MM-8): {prep ms (off-thread, the brush included), of it
+     * the brush ms, bake pass µs (render thread)}; zeros before the first.
+     */
+    double[] bakeTimes() {
+        long n = prepDone.get(), bakes = cache.leafBakes;
+        return new double[]{n == 0 ? 0 : prepNanos.get() / 1e6 / n, n == 0 ? 0 : brushNanos.get() / 1e6 / n,
+            bakes == 0 ? 0 : bakeNanos / 1e3 / bakes};
     }
 
     // ------------------------------------------------------------------------------------------------ letting go

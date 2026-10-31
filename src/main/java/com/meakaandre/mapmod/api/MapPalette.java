@@ -15,8 +15,16 @@ import java.util.Set;
  * Keys are the JSON's paths, dotted ({@link #keys()}): {@code classes.<id>.colour} and {@code classes.<id>.tint} for the
  * surface classes ({@link MapSurface}'s ids 0-7), and {@code water.shallow}, {@code water.deep}, {@code water.shore},
  * {@code paper}, {@code snow.colour}, {@code fog.colour} (colours) and the numbers ({@code hillshade}, {@code edges.warp},
- * {@code fog.edge}...). One change at a time with {@link #colour}/{@link #number}, or several at once with
- * {@link #edit()}. Client thread.
+ * {@code fog.edge}, {@code colour.saturation}, {@code colour.value}, {@code colour.brush_size}, {@code water.tint}...).
+ * One change at a time with {@link #colour}/{@link #number}, or several at once with {@link #edit()}. Client thread.
+ * <p>
+ * Since MM-8 the map paints the land in each block's real colour (the average of its top texture, as the resource packs
+ * give it, times its biome tint), pulled toward a muted painted palette by {@code colour.saturation} and
+ * {@code colour.value} and brushed into patches {@code colour.brush_size} blocks across. A class colour
+ * ({@link #classColour}, {@code classes.<id>.colour}) is now an optional override on top of that: none is set by
+ * default, and one that is set replaces the real colour of every sample of that class (tinted by its biome as much as
+ * {@link #classTint} says), until it is cleared. {@code classes.<id>.tint} only matters with a class colour set. Nothing
+ * in this API changed its signature.
  */
 public final class MapPalette {
     private MapPalette() {
@@ -44,12 +52,15 @@ public final class MapPalette {
         edit().number(key, value).apply();
     }
 
-    /** A surface class's colour (class ids as {@link MapSurface}'s). */
+    /**
+     * Overrides a surface class's colour (class ids as {@link MapSurface}'s): that class's ground is painted in it
+     * instead of its blocks' real colours (MM-8; {@link #clear} with {@code "classes.<id>.colour"} brings them back).
+     */
     public static void classColour(int classId, int rgb) {
         edit().classColour(classId, rgb).apply();
     }
 
-    /** How much the biome's colour tints a surface class, 0 none to 1 fully. */
+    /** How much the biome's colour tints a surface class's override colour, 0 none to 1 fully (only with {@link #classColour} set). */
     public static void classTint(int classId, float tint) {
         edit().classTint(classId, tint).apply();
     }

@@ -49,8 +49,8 @@ final class SyntheticTiles {
         for (int sz = 0; sz < SurfaceTile.SIDE; sz++) {
             for (int sx = 0; sx < SurfaceTile.SIDE; sx++) {
                 int i = SurfaceTile.index(sx, sz);
-                double wx = tx * (double) SurfaceTile.BLOCKS + sx * SurfaceTile.SPACING + 2;
-                double wz = tz * (double) SurfaceTile.BLOCKS + sz * SurfaceTile.SPACING + 2;
+                double wx = tx * (double) SurfaceTile.BLOCKS + sx * SurfaceTile.SPACING + SurfaceTile.SPACING / 2.0;
+                double wz = tz * (double) SurfaceTile.BLOCKS + sz * SurfaceTile.SPACING + SurfaceTile.SPACING / 2.0;
                 int h = (int) Math.round(30 + fbm(wx, wz, 900) * 150);
                 int water = Math.max(0, 62 - h);
                 double forest = fbm(wx + 7000, wz - 3000, 300);
@@ -68,6 +68,14 @@ final class SyntheticTiles {
                 int g = 40 + (int) (forest * 20);
                 t.tint[i] = (short) (12 << 11 | g << 5 | 8);
                 t.canopy[i] = (byte) (cls == SurfaceClass.FOREST ? Math.min(255, (int) ((forest - 0.5) * 900)) : 0);
+                // MM-8: colours as the capture would store them (water, sand, snow, stone, oak leaves, grass)
+                t.colour[i] = water > 0 ? 0x2A4F86 : switch (cls) {
+                    case SurfaceClass.SAND -> 0xDBCFA3;
+                    case SurfaceClass.SNOW -> 0xF4F8F8;
+                    case SurfaceClass.ROCK -> 0x7D7D7D;
+                    case SurfaceClass.FOREST -> 0x3A6B22;
+                    default -> 0x4E7A2C + (int) (forest * 12) * 0x010000;
+                };
                 t.explored[i >>> 6] |= 1L << i;
             }
         }

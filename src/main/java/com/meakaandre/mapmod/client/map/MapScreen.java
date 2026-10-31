@@ -175,7 +175,8 @@ public class MapScreen extends Screen {
         return MapLock.mapLocked();
     }
 
-    private MapDraw.View view() {
+    /** The view the map is drawn through now (also for the selftests). */
+    public MapDraw.View view() {
         return new MapDraw.View(cx, cz, scale, PANEL, BAR, width - PANEL, height - BAR - foot());
     }
 

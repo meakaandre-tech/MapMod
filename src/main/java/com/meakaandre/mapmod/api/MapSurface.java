@@ -8,15 +8,17 @@ import net.minecraft.world.level.block.state.BlockState;
 import java.util.Objects;
 
 /**
- * The surface classes the map paints the ground as, and overrides of which class a block is. The client captures the
- * ground every 4 blocks and gives each sample one of eight classes (fixed by the tile format), from block tags and then
+ * The surface classes the map sorts the ground into, and overrides of which class a block is. The client captures the
+ * ground every 2 blocks and gives each sample one of eight classes (fixed by the tile format), from block tags and then
  * the block's map colour, so any mod's blocks land in a sensible class with no code; an override puts a block, or every
- * block in a tag, in the class you choose instead. A block override wins over a tag override, and of two tag overrides
+ * block in a tag, in the class you choose instead. Since MM-8 a sample is painted in its block's real colour, and its
+ * class only decides effects (water, forest stipple, snow) and which palette class colour override applies to it. A block override wins over a tag override, and of two tag overrides
  * the one set first wins.
  * <p>
  * Overrides apply to the ground block only (leaves, logs, plants and water are still looked past as before) and to
  * samples taken from then on: land already captured keeps its class until the client captures it again (when it loads
- * the chunk again, or a block at the surface changes). Their colours are {@link MapPalette}'s {@code classes.<id>}.
+ * the chunk again, or a block at the surface changes). A class's colour override is {@link MapPalette}'s
+ * {@code classes.<id>} (none by default).
  * Safe from any thread (the capture classifies off-thread).
  */
 public final class MapSurface {
