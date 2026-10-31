@@ -222,13 +222,13 @@ public final class TilePrep {
                     int pick = g;
                     for (int dz = -1; dz <= 1; dz++) {
                         for (int dx = -1; dx <= 1; dx++) {
-                            int h = g + dx + dz * GRID;
-                            if (!known[h] || wet[h]) continue;
-                            double er = colour[h * 3] - cr, eg = colour[h * 3 + 1] - cg, eb = colour[h * 3 + 2] - cb;
+                            int q = g + dx + dz * GRID;
+                            if (!known[q] || wet[q]) continue;
+                            double er = colour[q * 3] - cr, eg = colour[q * 3 + 1] - cg, eb = colour[q * 3 + 2] - cb;
                             double e = er * er + eg * eg + eb * eb;
                             if (e < near) {
                                 near = e;
-                                pick = h;
+                                pick = q;
                             }
                         }
                     }
