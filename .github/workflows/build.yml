@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "mm-6-api"]
   workflow_dispatch:
 
 permissions:
