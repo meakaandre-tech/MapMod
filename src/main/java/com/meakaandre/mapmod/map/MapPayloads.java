@@ -14,8 +14,6 @@ import java.util.List;
 public final class MapPayloads {
     /** Longest map id read from the network. */
     private static final int MAX_MAP_ID = 64;
-    /** Largest packed tile read from the network (bytes). */
-    private static final int MAX_TILE_BYTES = 1 << 20;
     /** Longest player name read from the network. */
     private static final int MAX_PLAYER_NAME = 32;
     /** Longest kind id or translation key read from the network. */
@@ -29,8 +27,8 @@ public final class MapPayloads {
     }
 
     /**
-     * Server to client on joining: which map this is, so the client's disk cache keeps each world's tiles apart, and the
-     * group provider's word for a shared marker.
+     * Server to client on joining: which map this is (the client keeps its pins per map), and the group provider's word
+     * for a shared marker. A client that gets it knows the server has MapMod.
      */
     public record Hello(String mapId, String sharedKey) implements CustomPacketPayload {
         public static final Type<Hello> TYPE = typeOf("hello");
@@ -130,34 +128,6 @@ public final class MapPayloads {
             }
             return new Pois(regions);
         });
-
-        @Override
-        public Type<? extends CustomPacketPayload> type() {
-            return TYPE;
-        }
-    }
-
-    /** Server to client: a region's terrain, packed as {@link MapTile#pack()} (its version is inside). */
-    public record Tile(long region, byte[] data) implements CustomPacketPayload {
-        public static final Type<Tile> TYPE = typeOf("tile");
-        public static final StreamCodec<RegistryFriendlyByteBuf, Tile> CODEC = StreamCodec.of((buf, p) -> {
-            buf.writeLong(p.region);
-            buf.writeByteArray(p.data);
-        }, buf -> new Tile(buf.readLong(), buf.readByteArray(MAX_TILE_BYTES)));
-
-        @Override
-        public Type<? extends CustomPacketPayload> type() {
-            return TYPE;
-        }
-    }
-
-    /** Client to server: regions the client wants, each with the version it already holds (0 for none). */
-    public record TileRequest(long[] regions, long[] versions) implements CustomPacketPayload {
-        public static final Type<TileRequest> TYPE = typeOf("tile_request");
-        public static final StreamCodec<RegistryFriendlyByteBuf, TileRequest> CODEC = StreamCodec.of((buf, p) -> {
-            buf.writeLongArray(p.regions);
-            buf.writeLongArray(p.versions);
-        }, buf -> new TileRequest(buf.readLongArray(), buf.readLongArray()));
 
         @Override
         public Type<? extends CustomPacketPayload> type() {

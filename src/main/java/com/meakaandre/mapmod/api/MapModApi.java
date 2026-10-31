@@ -3,7 +3,7 @@ package com.meakaandre.mapmod.api;
 import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.map.MapFog;
 import com.meakaandre.mapmod.map.MapServer;
-import com.meakaandre.mapmod.map.MapTerrain;
+import com.meakaandre.mapmod.map.MapFound;
 import com.meakaandre.mapmod.map.MapWorker;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -24,16 +24,19 @@ import java.util.concurrent.Executor;
 import java.util.function.Predicate;
 
 /**
- * What other mods use to fit the map to their game. Everything has a default that works with no other mod at all:
- * every player alone, everything unlocked, no POIs.
+ * The server side of the map's API, and the registry both sides share. Everything has a default that works with no
+ * other mod at all: every player alone, everything unlocked, no POIs. (The client side of the API is {@link MapOverlay},
+ * {@link MapMarkers}, {@link MapPalette}, {@link MapLock}, {@link MapSurface} and {@link MapTiles}; everything outside
+ * this package is internal and may change in any release.)
  * <ul>
  * <li><b>Sharing groups</b> ({@link #setGroups}): who shares fog, shared markers and compass players.</li>
- * <li><b>Unlocks</b> ({@link #setUnlocks}): per-player gates for terrain, the minimap and the fullscreen map.</li>
+ * <li><b>Unlocks</b> ({@link #setUnlocks}): per-player gates for terrain and the fullscreen map, sent to the client by
+ * the server. A client-side lock with no server involved is {@link MapLock}.</li>
  * <li><b>POIs</b>: categories and kinds ({@link #category}, {@link #kind}) and what supplies them: worked out per group and
  * region ({@link #addSource}), found in chunks as they are recorded ({@link #addChunkScanner}, {@link #setChunkPois}),
  * or moving ({@link #addMovingSource}).</li>
- * <li><b>Reveal</b> ({@link #reveal}): clears a group's fog over a disc, with the world generator's guess for land nobody
- * has loaded.</li>
+ * <li><b>Reveal</b> ({@link #reveal}): clears a group's fog over a disc (POIs there then show; terrain shows on a
+ * client once that client has seen the land itself).</li>
  * <li><b>Markers</b> ({@link #deathMarker}, {@link #removeMarker}, {@link #skipDeathMarkers}).</li>
  * </ul>
  * Registration (providers, categories, kinds, sources, scanners, glyphs) belongs in mod initialisation; categories,
@@ -175,17 +178,17 @@ public final class MapModApi {
      * when the chunk loads for real the scanner is asked again as usual.
      */
     public static void setChunkPois(ServerLevel level, Identifier scanner, int chunkX, int chunkZ, List<FoundPoi> pois) {
-        MapTerrain.setFound(level, scanner, chunkX, chunkZ, pois);
+        MapFound.set(level, scanner, chunkX, chunkZ, pois);
     }
 
     /** Every found POI of a kind within this many blocks of a spot, nearest first. */
     public static List<MapPoi> foundNear(PoiKind kind, int x, int z, int blocks) {
-        return MapTerrain.foundNear(kind.key(), x, z, blocks);
+        return MapFound.near(kind.key(), x, z, blocks);
     }
 
     /** What a group sees found in a region (any explored or not). */
     public static List<MapPoi> foundIn(long region, String group) {
-        return MapTerrain.foundFor(region, group);
+        return MapFound.foundFor(region, group);
     }
 
     /** Adds a source of moving POIs (see {@link MovingSource}). */
@@ -199,18 +202,18 @@ public final class MapModApi {
 
     // ------------------------------------------------------------------------------------------------ fog
 
-    /** Only the Overworld's surface is mapped. */
+    /** True for the dimension the map covers: only the Overworld's surface is mapped. */
     public static boolean mapped(Level level) {
         return MapServer.mapped(level);
     }
 
     /**
-     * Clears a group's fog over a disc round a spot (a radar's sweep), sends it to the group's players and, with
-     * {@code guess}, fills land nobody has loaded there with the world generator's guess so it shows on the map at once
-     * (worked out a little at a time on the map's worker). Real recording replaces the guess when the land loads.
+     * Clears a group's fog over a disc round a spot (a radar's sweep) and sends it to the group's players: POIs there show
+     * on their maps and compasses. The group's fog gates POIs only; the painted terrain is what each client has captured
+     * itself. Server thread.
      */
-    public static void reveal(ServerLevel level, String group, BlockPos centre, int radiusBlocks, boolean guess) {
-        MapServer.reveal(level, group, centre, radiusBlocks, guess);
+    public static void reveal(ServerLevel level, String group, BlockPos centre, int radiusBlocks) {
+        MapServer.reveal(level, group, centre, radiusBlocks);
     }
 
     /** True if the group has explored the chunk. */
@@ -245,7 +248,7 @@ public final class MapModApi {
 
     // ------------------------------------------------------------------------------------------------ the worker
 
-    /** The map's worker thread, where sources and generator guesses run by default. */
+    /** The map's worker thread, where POI sources run by default. */
     public static Executor worker() {
         return MapWorker.EXECUTOR;
     }

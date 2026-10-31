@@ -43,7 +43,6 @@ public final class PoiKind {
     private final Map<String, PoiSubType> subTypes;
     private final int compassRange;
     private final boolean compassNearest;
-    private final boolean detail;
     private final @Nullable Labeller labeller;
 
     private PoiKind(Builder b) {
@@ -61,7 +60,6 @@ public final class PoiKind {
         subTypes = Collections.unmodifiableMap(new LinkedHashMap<>(b.subTypes));
         compassRange = b.compassRange;
         compassNearest = b.compassNearest;
-        detail = b.detail;
         labeller = b.labeller;
     }
 
@@ -141,11 +139,6 @@ public final class PoiKind {
         return compassNearest;
     }
 
-    /** True if it is a small detail the minimap leaves off when zoomed far out. */
-    public boolean detail() {
-        return detail;
-    }
-
     /** The filter key of the kind's own switch. */
     public String filterKey() {
         return "kind:" + key;
@@ -208,7 +201,6 @@ public final class PoiKind {
         private final Map<String, PoiSubType> subTypes = new LinkedHashMap<>();
         private int compassRange;
         private boolean compassNearest;
-        private boolean detail;
         private @Nullable Labeller labeller;
         private final Function<PoiKind, PoiKind> register;
 
@@ -285,12 +277,6 @@ public final class PoiKind {
         /** The nearest one is always on the compass. */
         public Builder compassNearest() {
             this.compassNearest = true;
-            return this;
-        }
-
-        /** A small detail: left off the minimap when it is zoomed far out. */
-        public Builder detail() {
-            this.detail = true;
             return this;
         }
 

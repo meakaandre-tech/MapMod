@@ -2,6 +2,7 @@ package com.meakaandre.mapmod.client.map;
 
 import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.api.MapGlyphs;
+import com.meakaandre.mapmod.api.MapMarkers;
 import com.meakaandre.mapmod.api.MapModApi;
 import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
@@ -16,6 +17,7 @@ import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.level.Level;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -114,23 +116,29 @@ public final class MapHud {
         List<Mark> marks = new ArrayList<>();
         boolean overworld = MapClient.mappedHere();
         String dim = mc.level == null ? "" : mc.level.dimension().identifier().toString();
-        for (MapClient.Pin pin : MapClient.PINS.values()) {
+        // a layer a mod locks stays off the strip too (MM-6)
+        boolean pinsOn = !MapLayer.PINS.locked(), markersOn = !MapLayer.MARKERS.locked(), poisOn = !MapLayer.POIS.locked();
+        for (MapClient.Pin pin : pinsOn ? MapClient.PINS.values() : List.<MapClient.Pin>of()) {
             MapClient.Pin live = MapClient.live(pin);
-            if (pin.key().startsWith("poi:") && !overworld) continue;
+            if (pin.key().startsWith("poi:") && (!overworld || !poisOn)) continue;
             if (pin.key().startsWith("marker:")) {
                 MapMarker m = marker(pin.key());
-                if (m == null || !m.dimension.equals(dim)) continue;
+                if (m == null || !m.dimension.equals(dim) || !markersOn) continue;
+            }
+            if (pin.key().startsWith(MapClient.API_PIN)) {
+                MapMarkers.Marker m = MapClient.apiMarker(pin.key());
+                if (m == null || !m.dimension().identifier().toString().equals(dim) || !markersOn) continue;
             }
             marks.add(new Mark(bearing(player, live.x() + 0.5, live.z() + 0.5), 0, live, Math.hypot(live.x() + 0.5 - player.getX(), live.z() + 0.5 - player.getZ()), true));
         }
-        for (MapMarker m : MapClient.markers) {
+        for (MapMarker m : markersOn ? MapClient.markers : List.<MapMarker>of()) {
             if (!m.dimension.equals(dim) || !MapFilters.shows(m) || MapClient.pinned(m.pinKey())) continue;
             marks.add(new Mark(bearing(player, m.x + 0.5, m.z + 0.5), 1, m, 0, false));
         }
-        if (MapFilters.showsPlayers()) {
+        if (MapFilters.showsPlayers() && !MapLayer.PLAYERS.locked()) {
             for (MapPayloads.Mate mate : MapClient.mates) marks.add(new Mark(bearing(player, mate.x(), mate.z()), 2, mate, 0, false));
         }
-        if (overworld) {
+        if (overworld && poisOn) {
             int px = player.getBlockX(), pz = player.getBlockZ();
             List<Long> near = new ArrayList<>();
             long here = MapGrid.regionOfBlock(px, pz);
@@ -234,6 +242,9 @@ public final class MapHud {
         return out;
     }
 
+    /** Mods' markers drawn on the fullscreen map since the game started (for the selftests). */
+    public static long apiMarkersDrawn;
+
     /** Height of a row of distance labels under the strip. */
     private static final int LABEL_ROW = 7;
     /** Rows of distance labels at most (a crowd past that shares the last row). */
@@ -279,7 +290,7 @@ public final class MapHud {
      * moving things and the group's players. Returns nothing; the fullscreen map does its own hover on top.
      */
     public static void things(GuiGraphicsExtractor g, MapDraw.View v) {
-        if (MapLayer.POIS.on()) {
+        if (MapLayer.POIS.shown()) {
             for (MapPoi poi : MapClient.poisIn(v.regions())) {
                 if (!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) continue;
                 if (!MapClient.explored(poi.x(), poi.z())) continue;
@@ -288,27 +299,37 @@ public final class MapHud {
                 MapDraw.poi(g, poi, (int) Math.round(sx), (int) Math.round(sy));
             }
         }
-        if (MapLayer.MARKERS.on()) {
+        if (MapLayer.MARKERS.shown()) {
             for (MapMarker m : MapClient.markers) {
                 if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
                 double sx = v.sx(m.x + 0.5), sy = v.sy(m.z + 0.5);
                 if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.marker(g, m, (int) Math.round(sx), (int) Math.round(sy));
             }
+            // mods' markers (api.MapMarkers), under the markers filter
+            if (MapFilters.on(MapModApi.MARKERS.filterKey())) {
+                for (MapMarkers.Marker m : MapMarkers.in(Level.OVERWORLD)) {
+                    double sx = v.sx(m.x()), sy = v.sy(m.z());
+                    if (!v.inside(sx, sy, ICON_MARGIN)) continue;
+                    MapIcons.shadow(g, m.glyph(), (int) Math.round(sx), (int) Math.round(sy));
+                    MapIcons.centred(g, m.glyph(), (int) Math.round(sx), (int) Math.round(sy), m.colour());
+                    apiMarkersDrawn++;
+                }
+            }
         }
-        if (MapLayer.PINS.on()) {
+        if (MapLayer.PINS.shown()) {
             for (MapClient.Pin pin : MapClient.PINS.values()) {
                 if (!pin.key().startsWith("poi:")) continue;
                 double sx = v.sx(pin.x() + 0.5), sy = v.sy(pin.z() + 0.5);
                 if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.pin(g, (int) Math.round(sx), (int) Math.round(sy) - 7);
             }
         }
-        if (MapLayer.POIS.on()) {
+        if (MapLayer.POIS.shown()) {
             for (MovingPoi m : MapClient.moving) {
                 double sx = v.sx(m.x()), sy = v.sy(m.z());
                 if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.moving(g, m, (float) sx, (float) sy);
             }
         }
-        if (MapLayer.PLAYERS.on() && MapFilters.showsPlayers()) {
+        if (MapLayer.PLAYERS.shown() && MapFilters.showsPlayers()) {
             for (MapPayloads.Mate mate : MapClient.mates) {
                 double sx = v.sx(mate.x()), sy = v.sy(mate.z());
                 if (v.inside(sx, sy, ICON_MARGIN)) MapDraw.mate(g, mate, (float) sx, (float) sy);

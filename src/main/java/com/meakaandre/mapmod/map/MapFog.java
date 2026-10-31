@@ -38,7 +38,7 @@ public final class MapFog {
     }
 
     private static @Nullable Path file(String group) {
-        Path root = MapTerrain.root();
+        Path root = MapFiles.root();
         if (root == null) return null;
         // group ids are free text: anything but letters, digits, _ and - is kept out of the path
         String safe = group.replaceAll("[^A-Za-z0-9_-]", "_");

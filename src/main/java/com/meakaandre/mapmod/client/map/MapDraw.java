@@ -3,6 +3,7 @@ package com.meakaandre.mapmod.client.map;
 import com.meakaandre.mapmod.api.MapGlyphs;
 import com.meakaandre.mapmod.api.MapModApi;
 import com.meakaandre.mapmod.api.MapPoi;
+import com.meakaandre.mapmod.api.MapView;
 import com.meakaandre.mapmod.api.MovingPoi;
 import com.meakaandre.mapmod.api.PoiKind;
 import com.meakaandre.mapmod.map.MapGrid;
@@ -39,7 +40,37 @@ public final class MapDraw {
     }
 
     /** A view of the map: world (cx, cz) at the centre of the screen rectangle, {@code scale} screen pixels a block. */
-    public record View(double cx, double cz, double scale, int left, int top, int width, int height) {
+    public record View(double cx, double cz, double scale, int left, int top, int width, int height) implements MapView {
+        @Override
+        public double screenX(double worldX) {
+            return sx(worldX);
+        }
+
+        @Override
+        public double screenY(double worldZ) {
+            return sy(worldZ);
+        }
+
+        @Override
+        public double worldX(double screenX) {
+            return wx(screenX);
+        }
+
+        @Override
+        public double worldZ(double screenY) {
+            return wz(screenY);
+        }
+
+        @Override
+        public double centreX() {
+            return cx;
+        }
+
+        @Override
+        public double centreZ() {
+            return cz;
+        }
+
         public double sx(double x) {
             return left + width / 2.0 + (x - cx) * scale;
         }

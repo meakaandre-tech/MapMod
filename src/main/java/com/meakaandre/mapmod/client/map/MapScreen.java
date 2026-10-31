@@ -1,6 +1,11 @@
 package com.meakaandre.mapmod.client.map;
 
+import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.api.MapFeature;
+import com.meakaandre.mapmod.api.MapGlyphs;
+import com.meakaandre.mapmod.api.MapLock;
+import com.meakaandre.mapmod.api.MapMarkers;
+import com.meakaandre.mapmod.api.MapOverlay;
 import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
 import com.meakaandre.mapmod.client.paint.PaintMap;
@@ -16,6 +21,8 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.Level;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -31,7 +38,8 @@ import java.util.Set;
  * until any click), scroll to zoom round the mouse, C to centre on the player. Left click pins or unpins what is under the mouse (pins
  * show on the compass with their distance); right click on an empty spot places a marker there, and on one of your
  * markers (or a shared one of your group) changes or removes it. A marker gets an icon, a colour and a name, and is
- * private or shared with the group.
+ * private or shared with the group. Mods' overlay layers ({@link MapOverlay}) draw over the painted map, each with a
+ * button in the top bar after the map's own; while a mod locks the map ({@link MapLock}) it shows a locked panel instead.
  */
 public class MapScreen extends Screen {
     private static final int PANEL = 140, BAR = 16, FOOT = 14, ROW = 12;
@@ -109,7 +117,7 @@ public class MapScreen extends Screen {
         }
         if (editing) {
             buildForm();
-        } else {
+        } else if (!MapLock.mapLocked() && !MapLock.layerLocked(MapLock.CONTOURS)) {
             addRenderableWidget(Button.builder(contoursText(), b -> {
                 toggleContours();
                 b.setMessage(contoursText());
@@ -140,7 +148,25 @@ public class MapScreen extends Screen {
 
     @Override
     public void tick() {
-        if (!MapClient.mappedHere() || !MapClient.unlocked(MapFeature.FULLSCREEN)) onClose();
+        if (!MapClient.mappedHere() || !MapClient.unlocked(MapFeature.FULLSCREEN)) {
+            onClose();
+            return;
+        }
+        // a lock set or lifted while the map is open: the top bar's buttons follow, and an open marker form closes
+        boolean lockNow = MapLock.mapLocked() || MapLock.layerLocked(MapLock.CONTOURS);
+        if (lockNow != lockedBar) {
+            lockedBar = lockNow;
+            if (MapLock.mapLocked() && editing) closeForm();
+            else rebuildWidgets();
+        }
+    }
+
+    /** Whether the top bar was last built with the map or its contours locked. */
+    private boolean lockedBar = MapLock.mapLocked() || MapLock.layerLocked(MapLock.CONTOURS);
+
+    /** True while a mod locks the map and this screen shows the locked panel (for the selftests). */
+    public boolean locked() {
+        return MapLock.mapLocked();
     }
 
     private MapDraw.View view() {
@@ -154,12 +180,18 @@ public class MapScreen extends Screen {
         animate();
         g.fill(0, 0, width, height, 0xFF151A20);
         MapDraw.View v = view();
-        g.enableScissor(v.left(), v.top(), v.left() + v.width(), v.top() + v.height());
-        PaintMap.draw(g, v);
-        MapHud.things(g, v);
-        MobRadar.draw(g, v);
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player != null && MapLayer.PLAYERS.on()) MapDraw.self(g, (float) v.sx(mc.player.getX()), (float) v.sy(mc.player.getZ()));
+        boolean locked = MapLock.mapLocked();
+        g.enableScissor(v.left(), v.top(), v.left() + v.width(), v.top() + v.height());
+        if (locked) {
+            lockedPanel(g, v);
+        } else {
+            PaintMap.draw(g, v);
+            overlays(g, v);
+            MapHud.things(g, v);
+            MobRadar.draw(g, v);
+            if (mc.player != null && MapLayer.PLAYERS.shown()) MapDraw.self(g, (float) v.sx(mc.player.getX()), (float) v.sy(mc.player.getZ()));
+        }
         g.disableScissor();
         panel(g, mouseX, mouseY);
         // the top bar: title, the scale, and the world position under the mouse
@@ -168,8 +200,8 @@ public class MapScreen extends Screen {
         String scaleText = MapDraw.distance(SCALE_BAR / scale);
         g.fill(width - 96, 10, width - 16, 11, 0xFFE6E6E6);
         g.text(font, scaleText, width - 96, 1, 0xFFE6E6E6, false);
-        layerButtons(g, mouseX, mouseY);
-        if (inMap(mouseX, mouseY)) {
+        if (!locked) layerButtons(g, mouseX, mouseY);
+        if (!locked && inMap(mouseX, mouseY)) {
             String at = String.format(Locale.ROOT, "X %d   Z %d", (int) Math.floor(v.wx(mouseX)), (int) Math.floor(v.wz(mouseY)));
             g.text(font, at, PANEL + 6, 4, 0xFFB0B8C0, false);
         }
@@ -179,7 +211,7 @@ public class MapScreen extends Screen {
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
-        hover = editing ? null : findHover(mouseX, mouseY);
+        hover = editing || MapLock.mapLocked() ? null : findHover(mouseX, mouseY);
         if (editing) formBack(g);
         super.extractRenderState(g, mouseX, mouseY, partialTick);
         if (editing) {
@@ -187,7 +219,7 @@ public class MapScreen extends Screen {
         } else if (hover != null) {
             g.setComponentTooltipForNextFrame(font, hover.lines, mouseX, mouseY);
         } else {
-            MapLayer l = layerAt(mouseX, mouseY);
+            LayerButton l = MapLock.mapLocked() ? null : layerAt(mouseX, mouseY);
             if (l != null) {
                 g.setComponentTooltipForNextFrame(font, List.of(l.label(), Component.translatable(l.on() ? "mapmod.map.layer_on" : "mapmod.map.layer_off")
                     .withColor(0x8A949E)), mouseX, mouseY);
@@ -195,31 +227,91 @@ public class MapScreen extends Screen {
         }
     }
 
-    // ------------------------------------------------------------------------------------------------ layer buttons
+    // ------------------------------------------------------------------------------------------------ locked, overlays
 
-    private int layerX(int i) {
-        return width - 200 - (MapLayer.values().length - i) * LAYER_STEP - 4;
+    /** The map while a mod locks it: no terrain and nothing on it, a padlock, "Map locked" and the mod's reason. */
+    private void lockedPanel(GuiGraphicsExtractor g, MapDraw.View v) {
+        g.fill(v.left(), v.top(), v.left() + v.width(), v.top() + v.height(), 0xFF1B2128);
+        int cx = v.left() + v.width() / 2, cy = v.top() + v.height() / 2;
+        g.fill(cx - 70, cy - 34, cx + 70, cy + 30, 0xF0181E25);
+        g.outline(cx - 70, cy - 34, 140, 64, 0xFFFFA530);
+        MapIcons.centred(g, MapGlyphs.LOCK, cx, cy - 18, 0xFFFFA530);
+        Component title = Component.translatable("mapmod.map.locked_title");
+        g.text(font, title, cx - font.width(title) / 2, cy - 4, 0xFFE6E6E6, false);
+        Component reason = MapLock.reason();
+        if (reason != null) g.text(font, reason, cx - font.width(reason) / 2, cy + 9, 0xFFB0B8C0, false);
+        lockedFrames++;
     }
 
-    private @Nullable MapLayer layerAt(double mx, double my) {
+    /** Frames the locked panel was drawn (for the selftests). */
+    public static long lockedFrames;
+
+    /** Mods' overlay layers that are switched on and not locked, in the order registered; one that throws is skipped. */
+    private static void overlays(GuiGraphicsExtractor g, MapDraw.View v) {
+        for (MapOverlay.Registered r : MapOverlay.layers()) {
+            if (!MapOverlay.shown(r.id())) continue;
+            g.pose().pushMatrix();
+            try {
+                r.layer().draw(g, v);
+            } catch (RuntimeException e) {
+                if (FAILED.add(r.id())) MapMod.LOGGER.warn("map overlay {} failed to draw", r.id(), e);
+            } finally {
+                g.pose().popMatrix();
+            }
+        }
+    }
+
+    /** Overlays that threw once already (logged once each). */
+    private static final Set<Identifier> FAILED = new HashSet<>();
+
+    // ------------------------------------------------------------------------------------------------ layer buttons
+
+    /** A button in the top bar: one of the map's own layers or a mod's overlay. */
+    private record LayerButton(int glyph, Component label, boolean on, Runnable toggle) {
+    }
+
+    /** The top bar's layer buttons: the map's own, then mods' overlays, leaving out locked ones. */
+    private static List<LayerButton> layerButtons() {
+        List<LayerButton> out = new ArrayList<>();
+        for (MapLayer l : MapLayer.values()) if (!l.locked()) out.add(new LayerButton(l.glyph, l.label(), l.on(), () -> toggleLayer(l)));
+        for (MapOverlay.Registered r : MapOverlay.layers()) {
+            if (MapLock.layerLocked(r.id())) continue;
+            boolean on = MapOverlay.enabled(r.id());
+            out.add(new LayerButton(r.glyph(), r.label(), on, () -> MapOverlay.setEnabled(r.id(), !on)));
+        }
+        return out;
+    }
+
+    private int layerX(int i, int count) {
+        return width - 200 - (count - i) * LAYER_STEP - 4;
+    }
+
+    private @Nullable LayerButton layerAt(double mx, double my) {
         if (my < 1 || my >= 1 + LAYER_W) return null;
-        for (MapLayer l : MapLayer.values()) {
-            int x = layerX(l.ordinal());
-            if (mx >= x && mx < x + LAYER_W) return l;
+        List<LayerButton> all = layerButtons();
+        for (int i = 0; i < all.size(); i++) {
+            int x = layerX(i, all.size());
+            if (mx >= x && mx < x + LAYER_W) return all.get(i);
         }
         return null;
     }
 
     /** A button per overlay layer: its glyph, bright and framed while the layer is on, dim while it is off. */
     private void layerButtons(GuiGraphicsExtractor g, int mouseX, int mouseY) {
-        MapLayer over = layerAt(mouseX, mouseY);
-        for (MapLayer l : MapLayer.values()) {
-            int x = layerX(l.ordinal()), y = 1;
-            boolean on = l.on();
+        List<LayerButton> all = layerButtons();
+        boolean overAny = my(mouseY);
+        for (int i = 0; i < all.size(); i++) {
+            LayerButton l = all.get(i);
+            int x = layerX(i, all.size()), y = 1;
+            boolean on = l.on(), over = overAny && mouseX >= x && mouseX < x + LAYER_W;
             g.fill(x, y, x + LAYER_W, y + LAYER_W, on ? 0xFF242C35 : 0xFF14191F);
-            g.outline(x, y, LAYER_W, LAYER_W, l == over ? 0xFFFFFFFF : on ? 0xFFFFA530 : 0xFF3A444F);
-            MapIcons.centred(g, l.glyph, x + LAYER_W / 2, y + LAYER_W / 2, on ? 0xFFE6E6E6 : 0xFF56606A);
+            g.outline(x, y, LAYER_W, LAYER_W, over ? 0xFFFFFFFF : on ? 0xFFFFA530 : 0xFF3A444F);
+            MapIcons.centred(g, l.glyph(), x + LAYER_W / 2, y + LAYER_W / 2, on ? 0xFFE6E6E6 : 0xFF56606A);
         }
+    }
+
+    private static boolean my(double y) {
+        return y >= 1 && y < 1 + LAYER_W;
     }
 
     /** Switches a layer as its button does (also used by the selftests). */
@@ -256,6 +348,8 @@ public class MapScreen extends Screen {
         g.fill(0, BAR, PANEL, height - FOOT, 0xF0181E25);
         g.fill(PANEL - 1, BAR, PANEL, height - FOOT, 0xFF2C3540);
         g.text(font, Component.translatable("mapmod.map.filters"), 8, BAR + 5, 0xFFFFA530, false);
+        // a locked map shows none of what is on it, its switches included
+        if (MapLock.mapLocked()) return;
         for (Row row : rows()) {
             int x = row.category ? 8 : 20;
             boolean on = MapFilters.on(row.filter.key()) && (row.filter.parent() == null || MapFilters.on(row.filter.parent()));
@@ -291,7 +385,7 @@ public class MapScreen extends Screen {
         Minecraft mc = Minecraft.getInstance();
         double best = HOVER_RADIUS * HOVER_RADIUS;
         Hover found = null;
-        for (MapMarker m : MapLayer.MARKERS.on() ? MapClient.markers : List.<MapMarker>of()) {
+        for (MapMarker m : MapLayer.MARKERS.shown() ? MapClient.markers : List.<MapMarker>of()) {
             if (!m.dimension.equals("minecraft:overworld") || (!MapFilters.shows(m) && !MapClient.pinned(m.pinKey()))) continue;
             double d = sq(v.sx(m.x + 0.5) - mx, v.sy(m.z + 0.5) - my);
             if (d >= best) continue;
@@ -307,7 +401,19 @@ public class MapScreen extends Screen {
             }
             found = new Hover(lines, MapClient.markerPin(m), m);
         }
-        for (MapPoi poi : MapLayer.POIS.on() ? MapClient.poisIn(v.regions()) : List.<MapPoi>of()) {
+        boolean modMarkers = MapLayer.MARKERS.shown() && MapFilters.on(com.meakaandre.mapmod.api.MapModApi.MARKERS.filterKey());
+        for (MapMarkers.Marker m : modMarkers ? MapMarkers.in(Level.OVERWORLD) : List.<MapMarkers.Marker>of()) {
+            double d = sq(v.sx(m.x()) - mx, v.sy(m.z()) - my);
+            if (d >= best) continue;
+            best = d;
+            List<Component> lines = new ArrayList<>();
+            if (m.label() != null) lines.add(m.label());
+            where(lines, (int) Math.floor(m.x()), (int) Math.floor(m.z()));
+            MapClient.Pin pin = MapClient.apiPin(m);
+            lines.add(Component.translatable(MapClient.pinned(pin.key()) ? "mapmod.map.click_unpin" : "mapmod.map.click_pin").withColor(0x8A949E));
+            found = new Hover(lines, pin, null);
+        }
+        for (MapPoi poi : MapLayer.POIS.shown() ? MapClient.poisIn(v.regions()) : List.<MapPoi>of()) {
             if ((!MapFilters.shows(poi) && !MapClient.pinned(poi.pinKey())) || !MapClient.explored(poi.x(), poi.z())) continue;
             double d = sq(v.sx(poi.x() + 0.5) - mx, v.sy(poi.z() + 0.5) - my);
             if (d >= best) continue;
@@ -318,7 +424,7 @@ public class MapScreen extends Screen {
             lines.add(Component.translatable(MapClient.pinned(poi.pinKey()) ? "mapmod.map.click_unpin" : "mapmod.map.click_pin").withColor(0x8A949E));
             found = new Hover(lines, new MapClient.Pin(poi.pinKey(), MapDraw.label(poi).getString(), poi.x(), poi.y(), poi.z(), MapDraw.icon(poi), MapDraw.colour(poi)), null);
         }
-        for (MovingPoi m : MapLayer.POIS.on() ? MapClient.moving : List.<MovingPoi>of()) {
+        for (MovingPoi m : MapLayer.POIS.shown() ? MapClient.moving : List.<MovingPoi>of()) {
             double d = sq(v.sx(m.x()) - mx, v.sy(m.z()) - my);
             if (d >= best) continue;
             best = d;
@@ -328,7 +434,7 @@ public class MapScreen extends Screen {
             where(lines, (int) Math.floor(m.x()), (int) Math.floor(m.z()));
             found = new Hover(lines, null, null);
         }
-        if (MapLayer.PLAYERS.on() && MapFilters.showsPlayers()) {
+        if (MapLayer.PLAYERS.shown() && MapFilters.showsPlayers()) {
             for (MapPayloads.Mate mate : MapClient.mates) {
                 double d = sq(v.sx(mate.x()) - mx, v.sy(mate.z()) - my);
                 if (d >= best) continue;
@@ -429,10 +535,11 @@ public class MapScreen extends Screen {
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         double mx = event.x(), my = event.y();
         pressed();
+        if (MapLock.mapLocked()) return super.mouseClicked(event, doubleClick);
         if (!editing && event.button() == InputConstants.MOUSE_BUTTON_LEFT) {
-            MapLayer l = layerAt(mx, my);
+            LayerButton l = layerAt(mx, my);
             if (l != null) {
-                toggleLayer(l);
+                l.toggle().run();
                 return true;
             }
         }
@@ -498,7 +605,7 @@ public class MapScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mx, double my, double sx, double sy) {
-        if (editing || !inMap(mx, my) || sy == 0) return super.mouseScrolled(mx, my, sx, sy);
+        if (editing || MapLock.mapLocked() || !inMap(mx, my) || sy == 0) return super.mouseScrolled(mx, my, sx, sy);
         // the zoom animates towards the new target round the spot under the mouse (see animate)
         MapDraw.View v = view();
         anchored = true;

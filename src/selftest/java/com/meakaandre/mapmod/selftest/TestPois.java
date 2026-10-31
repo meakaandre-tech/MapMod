@@ -152,7 +152,7 @@ public final class TestPois {
             // a mod's item that may be missing first, a vanilla one after it
             .sub(new PoiSubType("tin", Component.literal("Test tin"), List.of(Identifier.fromNamespaceAndPath("nosuchmod", "raw_tin"),
                 Identifier.fromNamespaceAndPath("minecraft", "raw_gold")), -1, 0))
-            .compassRange(120).detail().register();
+            .compassRange(120).register();
         CAMP = MapModApi.kind(id("camp"), FINDS).label(Component.literal("Test camp")).glyph(TENT, 0xFFFFA530).compassNearest().register();
         BEACON = MapModApi.kind(id("beacon"), FINDS).label(Component.literal("Test beacon")).glyph(MapGlyphs.RADAR, 0xFF4FB8E8).compassRange(300).register();
         CACHE = MapModApi.kind(id("cache"), FINDS).label(Component.literal("Test cache")).glyph(MapGlyphs.SQUARE, 0xFFB06BE0).register();

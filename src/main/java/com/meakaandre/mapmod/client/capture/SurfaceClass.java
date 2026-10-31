@@ -7,12 +7,17 @@ import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.MapColor;
 
+import net.minecraft.tags.TagKey;
+import net.minecraft.world.level.block.Block;
+
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
  * The eight surface classes the painted map knows, and how any block (vanilla or modded) lands in one: block tags
- * first, then the block's {@link MapColor}. No per-mod code.
+ * first, then the block's {@link MapColor}. No per-mod code; mods may put a block or a tag in a class of their choice
+ * ({@code api.MapSurface}), which wins over both.
  */
 public final class SurfaceClass {
     public static final byte GRASS = 0, FOREST = 1, SAND = 2, ROCK = 3, SNOW = 4, DIRT = 5, ICE = 6, LAVA = 7;
@@ -21,6 +26,13 @@ public final class SurfaceClass {
 
     /** Classes per block state, filled as states are met. Only the capture worker touches it. */
     private static final Map<BlockState, Byte> CACHE = new IdentityHashMap<>();
+    /** The overrides (MM-6): replaced whole on every change, so any thread reads a consistent pair. */
+    private record Overrides(Map<Block, Byte> blocks, Map<TagKey<Block>, Byte> tags, int version) {
+    }
+
+    private static volatile Overrides overrides = new Overrides(Map.of(), Map.of(), 0);
+    /** The overrides' version the cache was filled under. Capture worker only. */
+    private static int cachedVersion;
 
     private SurfaceClass() {
     }
@@ -34,8 +46,30 @@ public final class SurfaceClass {
         CACHE.clear();
     }
 
+    /** Puts a block, or every block in a tag, in a class; -1 takes the override away. Any thread. */
+    public static synchronized void override(Object blockOrTag, byte classId) {
+        Overrides o = overrides;
+        Map<Block, Byte> blocks = new IdentityHashMap<>(o.blocks());
+        Map<TagKey<Block>, Byte> tags = new LinkedHashMap<>(o.tags());
+        if (blockOrTag instanceof Block b) {
+            if (classId < 0) blocks.remove(b);
+            else blocks.put(b, classId);
+        } else {
+            @SuppressWarnings("unchecked") TagKey<Block> t = (TagKey<Block>) blockOrTag;
+            if (classId < 0) tags.remove(t);
+            else tags.put(t, classId);
+        }
+        overrides = new Overrides(blocks, tags, o.version() + 1);
+    }
+
     /** The class of a block seen as the ground, cached; call on the capture worker only. */
     static byte cached(BlockState state) {
+        int v = overrides.version();
+        if (v != cachedVersion) {
+            // an override changed: classes are worked out again from the next sample on
+            CACHE.clear();
+            cachedVersion = v;
+        }
         Byte c = CACHE.get(state);
         if (c == null) {
             c = classify(state);
@@ -44,8 +78,19 @@ public final class SurfaceClass {
         return c;
     }
 
-    /** The class of a block seen as the ground: tags first, then its map colour. Safe off the client thread. */
+    /** The class of a block seen as the ground: overrides, then tags, then its map colour. Safe off the client thread. */
     public static byte classify(BlockState state) {
+        Overrides o = overrides;
+        if (!o.blocks().isEmpty()) {
+            Byte b = o.blocks().get(state.getBlock());
+            if (b != null) return b;
+        }
+        for (Map.Entry<TagKey<Block>, Byte> e : o.tags().entrySet()) if (state.is(e.getKey())) return e.getValue();
+        return builtIn(state);
+    }
+
+    /** The class from tags and map colour alone. */
+    private static byte builtIn(BlockState state) {
         if (state.getFluidState().is(FluidTags.LAVA)) return LAVA;
         if (state.is(BlockTags.ICE)) return ICE;
         if (state.is(BlockTags.SNOW)) return SNOW;

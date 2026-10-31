@@ -8,7 +8,7 @@ import os
 import re
 import sys
 
-SCREENSHOTS = 10
+SCREENSHOTS = 11
 # suite prefix -> (log file, the line that says it ran to its end)
 SUITES = {
     "SELFTEST map ": ("server.log", "SELFTEST map done (later checks)"),
@@ -17,6 +17,8 @@ SUITES = {
     "SELFTEST restart ": ("server2.log", "SELFTEST restart done"),
     # the client on a server with no MapMod: it keeps its own map
     "SELFTEST local ": ("client-local.log", "SELFTEST local done"),
+    # MM-6: the public API, used the way another mod would (and its effects inside the map)
+    "SELFTEST api ": ("client.log", "SELFTEST api done after reload"),
 }
 
 

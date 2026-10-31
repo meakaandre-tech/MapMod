@@ -17,9 +17,10 @@ dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-    // zstd for the map's tile files: pure Java, bundled in the jar
-    implementation "io.airlift:aircompressor:${project.aircompressor_version}"
-    include "io.airlift:aircompressor:${project.aircompressor_version}"
+    // zstd for the map's tile files, bundled in the jar: aircompressor's v3 line, which calls the zstd library it carries
+    // (Linux x64/arm64/ppc64le, macOS arm64) through java.lang.foreign, and its pure-Java codec elsewhere
+    implementation "io.airlift:aircompressor-v3:${project.aircompressor_version}"
+    include "io.airlift:aircompressor-v3:${project.aircompressor_version}"
 }
 
 // The selftests (/mapmod selftest and worldtest, and a test POI provider that uses the public API the way another mod
@@ -56,8 +57,20 @@ def selftestJar = tasks.register("selftestJar", Jar) {
     from sourceSets.selftest.output
 }
 
+// The public API's Javadoc (com.meakaandre.mapmod.api only; everything else is internal). Built with every build, so a
+// broken reference in the API's docs fails it.
+def apiJavadoc = tasks.register("apiJavadoc", Javadoc) {
+    source = sourceSets.main.allJava.matching { include "com/meakaandre/mapmod/api/**" }
+    classpath = sourceSets.main.compileClasspath + sourceSets.main.output
+    destinationDir = layout.buildDirectory.dir("docs/api").get().asFile
+    title = "${project.mod_name} API ${project.version}"
+    options.encoding = "UTF-8"
+    options.addStringOption("Xdoclint:all,-missing", "-quiet")
+}
+
 tasks.named("assemble") {
     dependsOn selftestJar
+    dependsOn apiJavadoc
 }
 
 tasks.withType(ProcessResources).configureEach {

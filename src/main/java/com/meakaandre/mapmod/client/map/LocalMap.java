@@ -73,8 +73,19 @@ public final class LocalMap {
         joinedTicks = 0;
     }
 
+    /**
+     * How the server was told to have MapMod: "hello" once its {@link MapPayloads.Hello} has arrived (the map's id, which
+     * a server without MapMod never sends), else "channel" while the Hello is still on its way but the server already
+     * takes MapMod's marker edits; "" while neither (a server without MapMod, or one still being joined).
+     */
+    public static String serverHasMapBy() {
+        if (MapClient.mapId != null && !MapClient.mapId.startsWith("server-")) return "hello";
+        if (ClientPlayNetworking.canSend(MapPayloads.MarkerEdit.TYPE)) return "channel";
+        return "";
+    }
+
     private static boolean serverHasMap() {
-        return ClientPlayNetworking.canSend(MapPayloads.TileRequest.TYPE) || MapClient.mapId != null && !MapClient.mapId.startsWith("server-");
+        return !serverHasMapBy().isEmpty();
     }
 
     static void tick(Minecraft mc) {

@@ -63,6 +63,11 @@ public final class MapClient {
     public static final Set<String> HIDDEN = new HashSet<>();
     /** Overlay layers switched off in the fullscreen map's top bar (MM-5), kept in settings.json as {@code layers}. */
     public static final Set<MapLayer> LAYERS_OFF = java.util.EnumSet.noneOf(MapLayer.class);
+    /**
+     * Mods' overlay layers ({@code api.MapOverlay}) switched off, by id, kept in settings.json's {@code layers} too (MM-6).
+     * Kept by id even for a layer no mod registered this time, so its switch is as the player left it when it comes back.
+     */
+    public static final Set<String> OVERLAYS_OFF = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Contour lines on the painted map: off by default, switched in the map screen, kept in settings.json. */
     public static boolean contours;
     /** GPU memory for the painted map's baked tiles and mips (MB), kept in settings.json as {@code cache_mb}. */
@@ -96,7 +101,10 @@ public final class MapClient {
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Mates.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> mates = p.mates()));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Moving.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> moving = p.moving()));
         ClientTickEvents.END_CLIENT_TICK.register(MapClient::tick);
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(MapClient::reset));
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> {
+            reset();
+            com.meakaandre.mapmod.api.MapMarkers.clear();
+        }));
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> client.execute(LocalMap::joined));
         loadSettings();
         MapHud.register();
@@ -195,8 +203,30 @@ public final class MapClient {
         savePins();
     }
 
+    /** Pin keys of mods' markers ({@code api.MapMarkers}) start with this, then the marker's id. */
+    public static final String API_PIN = "mod:";
+
+    /** The pin of a mod's marker. */
+    public static Pin apiPin(com.meakaandre.mapmod.api.MapMarkers.Marker m) {
+        String label = m.label() == null ? m.id().toString() : m.label().getString();
+        return new Pin(API_PIN + m.id(), label, (int) Math.floor(m.x()), DEFAULT_PIN_Y, (int) Math.floor(m.z()), m.glyph(), m.colour());
+    }
+
+    /** A height for pins of things that have none (mods' markers): only x and z are shown. */
+    private static final int DEFAULT_PIN_Y = 64;
+
+    /** The mod's marker a pin stands for, or null if it is gone. */
+    public static com.meakaandre.mapmod.api.MapMarkers.@Nullable Marker apiMarker(String pinKey) {
+        for (var m : com.meakaandre.mapmod.api.MapMarkers.all()) if (pinKey.equals(API_PIN + m.id())) return m;
+        return null;
+    }
+
     /** A pin's live position: a marker's from the marker list (it may have been moved or renamed). */
     public static Pin live(Pin pin) {
+        if (pin.key().startsWith(API_PIN)) {
+            var m = apiMarker(pin.key());
+            return m == null ? pin : apiPin(m);
+        }
         if (!pin.key().startsWith("marker:")) return pin;
         for (MapMarker m : markers) if (m.pinKey().equals(pin.key())) return markerPin(m);
         return pin;
@@ -269,6 +299,12 @@ public final class MapClient {
                     JsonElement e = layers.get(l.id);
                     if (e != null && e.isJsonPrimitive() && e.getAsJsonPrimitive().isBoolean() && !e.getAsBoolean()) LAYERS_OFF.add(l);
                 }
+                // the rest are mods' overlays, by id (a built-in layer's name has no namespace)
+                for (var e : layers.entrySet()) {
+                    if (!e.getKey().contains(":")) continue;
+                    JsonElement v = e.getValue();
+                    if (v.isJsonPrimitive() && v.getAsJsonPrimitive().isBoolean() && !v.getAsBoolean()) OVERLAYS_OFF.add(e.getKey());
+                }
             }
         } catch (IOException | RuntimeException e) {
             MapMod.LOGGER.warn("unreadable map file {}", file, e);
@@ -279,6 +315,12 @@ public final class MapClient {
     public static void toggleLayer(MapLayer layer) {
         if (!LAYERS_OFF.remove(layer)) LAYERS_OFF.add(layer);
         saveSettings();
+    }
+
+    /** Switches a mod's overlay layer on or off, by id, and saves the setting. */
+    public static void setOverlay(String id, boolean on) {
+        boolean changed = on ? OVERLAYS_OFF.remove(id) : OVERLAYS_OFF.add(id);
+        if (changed) saveSettings();
     }
 
     /** Switches contour lines on or off and saves the setting. */
@@ -300,7 +342,11 @@ public final class MapClient {
         o.addProperty("contours", contours);
         o.addProperty("cache_mb", cacheMB);
         JsonObject layers = new JsonObject();
-        for (MapLayer l : MapLayer.values()) layers.addProperty(l.id, l.on());
+        for (MapLayer l : MapLayer.values()) layers.addProperty(l.id, !LAYERS_OFF.contains(l));
+        for (com.meakaandre.mapmod.api.MapOverlay.Registered r : com.meakaandre.mapmod.api.MapOverlay.layers()) {
+            layers.addProperty(r.id().toString(), !OVERLAYS_OFF.contains(r.id().toString()));
+        }
+        for (String id : OVERLAYS_OFF) if (!layers.has(id)) layers.addProperty(id, false);
         o.add("layers", layers);
         try {
             Path file = settingsFile();
