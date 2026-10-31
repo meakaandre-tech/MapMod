@@ -16,7 +16,8 @@ public final class MapGlyphs {
     public static final int MARKER_ICONS = 10;
     // the stock set
     public static final int SKULL = 10, NODE = 11, DROP = 12, GEYSER = 13, POD = 14, SPHERE = 15, LOOP = 16, HUB = 17,
-        GATE = 18, RADAR = 19, TRAIN = 20, TRUCK = 21, DRONE = 22, ARROW = 23, DISC = 24, RING = 25, PIN = 26, SQUARE = 27;
+        GATE = 18, RADAR = 19, TRAIN = 20, TRUCK = 21, DRONE = 22, ARROW = 23, DISC = 24, RING = 25, PIN = 26, SQUARE = 27,
+        LOCK = 28;
 
     private static final String[][] STOCK = {
 
@@ -48,6 +49,7 @@ public final class MapGlyphs {
         {"..#####..", ".##...##.", "##.....##", "#.......#", "#.......#", "#.......#", "##.....##", ".##...##.", "..#####.."},
         {"..#####..", ".#######.", ".#######.", ".#######.", "..#####..", "...###...", "....#....", "....#....", "....#...."},
         {"#########", "#########", "#########", "#########", "#########", "#########", "#########", "#########", "#########"},
+        {"...###...", "..#...#..", "..#...#..", "..#...#..", "#########", "####.####", "####.####", "#########", "#########"},
     };
 
     private static final List<String[]> ALL = new ArrayList<>(List.of(STOCK));

@@ -3,13 +3,18 @@ package com.meakaandre.mapmod.client.paint;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.client.capture.SurfaceClass;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
+import org.jspecify.annotations.Nullable;
 
 import java.io.Reader;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -18,7 +23,8 @@ import java.util.Optional;
  * band, the paper of unexplored land, the height tint and the snow line, the hillshade's share, how soft and wavy class
  * borders are, the forests' darkening and brush, contour lines, the paper grain and vignette, and the fog over unexplored
  * land (MM-5: its colour, how wide its edge fades, and how strong its clouds are). Each value that is
- * missing or unreadable keeps its built-in one on its own. Colours are 0xRRGGBB; distances are in blocks.
+ * missing or unreadable keeps its built-in one on its own. Colours are 0xRRGGBB; distances are in blocks. Mods override
+ * single values over the resource packs' file through {@code api.MapPalette} (MM-6), kept across F3+T reloads.
  */
 public record PaintPalette(int[] classColour, float[] classTint, int waterShallow, int waterDeep, float deepAt, int paper,
                            float lowHeight, float highHeight, float lowShade, float highLight, float snowAbove,
@@ -36,8 +42,11 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
         0xD8CFBA, 48, 0.6f);
 
     private static volatile PaintPalette current = DEFAULT;
-    /** Bumped on every load, so the renderer knows to upload the palette again. */
+    /** Bumped on every load and every change of the overrides, so the renderer bakes its tiles again. */
     private static volatile int version;
+    /** The resource packs' palette as read (null: none read yet, or none there), and the overrides over it (MM-6). */
+    private static @Nullable JsonObject read;
+    private static Map<String, JsonPrimitive> overrides = Map.of();
     private static volatile int loads;
     private static volatile String lastError = "";
 
@@ -61,22 +70,74 @@ public record PaintPalette(int[] classColour, float[] classTint, int waterShallo
 
     /** Reads the palette from the resources (the top pack's file wins); the built-in one if there is none. */
     public static void load(ResourceManager resources) {
-        PaintPalette loaded = DEFAULT;
+        JsonObject json = null;
         String error = "";
         Optional<Resource> resource = resources.getResource(FILE);
         if (resource.isEmpty()) {
             error = "no " + FILE;
         } else {
             try (Reader reader = resource.get().openAsReader()) {
-                loaded = parse(JsonParser.parseReader(reader).getAsJsonObject());
+                json = JsonParser.parseReader(reader).getAsJsonObject();
             } catch (Exception e) {
                 error = e.toString();
             }
         }
         if (!error.isEmpty()) MapMod.LOGGER.warn("map palette: {}; using the built-in one", error);
-        current = loaded;
-        lastError = error;
-        loads++;
+        synchronized (PaintPalette.class) {
+            read = json;
+            lastError = error;
+            loads++;
+            apply();
+        }
+    }
+
+    /** The JSON keys an override can set, by dotted path ("classes.3.colour", "water.shallow", "fog.edge"...), with true for colours. */
+    public static final Map<String, Boolean> KEYS = keys();
+
+    private static Map<String, Boolean> keys() {
+        Map<String, Boolean> k = new LinkedHashMap<>();
+        for (int c = 0; c < SurfaceClass.COUNT; c++) {
+            k.put("classes." + c + ".colour", true);
+            k.put("classes." + c + ".tint", false);
+        }
+        for (String n : new String[]{"water.shallow", "water.deep", "water.shore", "paper", "snow.colour", "fog.colour"}) k.put(n, true);
+        for (String n : new String[]{"water.deep_at", "water.deep_dist", "water.shore_width", "height_tint.low", "height_tint.high",
+            "height_tint.low_shade", "height_tint.high_light", "snow.above", "snow.blend", "hillshade", "edges.softness", "edges.warp",
+            "forest.darken", "forest.stipple", "contours.interval", "contours.strength", "finish.grain", "finish.vignette", "fog.edge",
+            "fog.clouds"}) k.put(n, false);
+        return Collections.unmodifiableMap(k);
+    }
+
+    /**
+     * Replaces every override (a dotted key from {@link #KEYS} to a colour "#rrggbb" or a number) and paints with the
+     * resource packs' palette under them: one version bump, so the baked tiles go once.
+     */
+    public static synchronized void override(Map<String, JsonPrimitive> next) {
+        overrides = Map.copyOf(next);
+        apply();
+    }
+
+    public static synchronized Map<String, JsonPrimitive> overrides() {
+        return overrides;
+    }
+
+    /** The resource packs' palette with the overrides over it, as the current one. Locked on the class. */
+    private static void apply() {
+        JsonObject o = read == null ? new JsonObject() : read.deepCopy();
+        for (Map.Entry<String, JsonPrimitive> e : overrides.entrySet()) {
+            String[] path = e.getKey().split("\\.");
+            JsonObject at = o;
+            for (int i = 0; i < path.length - 1; i++) {
+                JsonElement next = at.get(path[i]);
+                if (next == null || !next.isJsonObject()) {
+                    next = new JsonObject();
+                    at.add(path[i], next);
+                }
+                at = next.getAsJsonObject();
+            }
+            at.add(path[path.length - 1], e.getValue());
+        }
+        current = read == null && overrides.isEmpty() ? DEFAULT : parse(o);
         version++;
     }
 

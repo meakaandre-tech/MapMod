@@ -1,7 +1,12 @@
 package com.meakaandre.mapmod.client.capture;
 
-import io.airlift.compress.zstd.ZstdCompressor;
-import io.airlift.compress.zstd.ZstdDecompressor;
+import com.meakaandre.mapmod.MapMod;
+import io.airlift.compress.v3.zstd.ZstdCompressor;
+import io.airlift.compress.v3.zstd.ZstdDecompressor;
+import io.airlift.compress.v3.zstd.ZstdJavaCompressor;
+import io.airlift.compress.v3.zstd.ZstdJavaDecompressor;
+import io.airlift.compress.v3.zstd.ZstdNativeCompressor;
+import io.airlift.compress.v3.zstd.ZstdNativeDecompressor;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -108,6 +113,35 @@ public final class SurfaceTile {
         return changed;
     }
 
+    /**
+     * Which zstd codec packs and reads tiles on this machine: "native" where aircompressor carries the zstd library for
+     * the platform (Linux x64, arm64 and ppc64le, macOS arm64; called through java.lang.foreign, no sun.misc.Unsafe), else
+     * "java", its pure-Java codec (which still reads memory through sun.misc.Unsafe). Both read and write the same frames.
+     */
+    public static String codec() {
+        return NATIVE ? "native" : "java";
+    }
+
+    private static final boolean NATIVE = nativeZstd();
+
+    /** True if the native zstd loads here; anything else (no library for the platform, native access refused) is Java. */
+    private static boolean nativeZstd() {
+        try {
+            return ZstdNativeCompressor.isEnabled() && ZstdNativeDecompressor.isEnabled();
+        } catch (Throwable e) {
+            MapMod.LOGGER.warn("the native zstd could not be loaded, map tiles use the pure-Java one: {}", e.toString());
+            return false;
+        }
+    }
+
+    private static ZstdCompressor compressor() {
+        return NATIVE ? new ZstdNativeCompressor() : new ZstdJavaCompressor();
+    }
+
+    private static ZstdDecompressor decompressor() {
+        return NATIVE ? new ZstdNativeDecompressor() : new ZstdJavaDecompressor();
+    }
+
     public SurfaceTile copy() {
         SurfaceTile t = new SurfaceTile(tileX, tileZ);
         System.arraycopy(height, 0, t.height, 0, AREA);
@@ -132,7 +166,7 @@ public final class SurfaceTile {
         for (short t : tint) body.putShort(t);
         body.put(canopy);
         for (long l : explored) body.putLong(l);
-        ZstdCompressor zstd = new ZstdCompressor();
+        ZstdCompressor zstd = compressor();
         byte[] packed = new byte[zstd.maxCompressedLength(BODY)];
         int n = zstd.compress(body.array(), 0, BODY, packed, 0, packed.length);
         ByteBuffer out = ByteBuffer.allocate(HEADER + n).order(ByteOrder.LITTLE_ENDIAN);
@@ -153,7 +187,7 @@ public final class SurfaceTile {
         byte[] raw = new byte[BODY];
         int n;
         try {
-            n = new ZstdDecompressor().decompress(data, HEADER, data.length - HEADER, raw, 0, BODY);
+            n = decompressor().decompress(data, HEADER, data.length - HEADER, raw, 0, BODY);
         } catch (RuntimeException e) {
             throw new IOException("broken map tile", e);
         }

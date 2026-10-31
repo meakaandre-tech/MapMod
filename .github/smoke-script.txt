@@ -69,6 +69,11 @@ sleep 2
 shot
 cmd mapmod worldtest check overlays
 wait 60 SELFTEST client done overlays
+cmd mapmod worldtest check api
+wait 300 SELFTEST api locked shown
+shot
+cmd mapmod worldtest check apiunlock
+wait 120 SELFTEST api done:
 cmd mapmod worldtest edit
 sleep 2
 shot

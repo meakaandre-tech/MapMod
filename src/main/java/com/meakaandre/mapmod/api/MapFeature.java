@@ -1,15 +1,16 @@
 package com.meakaandre.mapmod.api;
 
-/** What an {@link UnlockProvider} can hold back from a player. The compass strip is always there. */
+/**
+ * What an {@link UnlockProvider} can hold back from a player, server-driven and sent to their client. The compass strip
+ * is always there. (A lock a client-side mod drives itself, with no server involved, is {@link MapLock}.)
+ */
 public enum MapFeature {
-    /** Terrain tiles: without it the map shows only fog and what stands on it. */
+    /** The painted terrain: without it the fullscreen map shows only fog and what stands on it. */
     TERRAIN,
-    /** Was the small minimap; the map has had none since its painted renderer, so this gates nothing now. Kept so
-     * providers that name it still compile. */
-    MINIMAP,
     /** The fullscreen map (M). */
     FULLSCREEN;
 
+    /** This feature's bit in a mask of features. */
     public int bit() {
         return 1 << ordinal();
     }

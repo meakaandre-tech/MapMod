@@ -6,6 +6,7 @@ import net.fabricmc.api.ClientModInitializer;
 public final class SelfTestsClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
+        ApiClientTests.register();
         MapClientTests.register();
         ReadyClientTests.register();
     }

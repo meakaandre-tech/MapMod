@@ -15,8 +15,9 @@ import com.meakaandre.mapmod.map.MapMarker;
 import com.meakaandre.mapmod.map.MapMarkers;
 import com.meakaandre.mapmod.map.MapPayloads;
 import com.meakaandre.mapmod.map.MapServer;
-import com.meakaandre.mapmod.map.MapTerrain;
-import com.meakaandre.mapmod.map.MapTile;
+import com.meakaandre.mapmod.api.PoiKind;
+import com.meakaandre.mapmod.map.MapFiles;
+import com.meakaandre.mapmod.map.MapFound;
 import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -38,8 +39,8 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.gamerules.GameRules;
 
-import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -48,12 +49,12 @@ import java.util.UUID;
 
 /**
  * /mapmod selftest map: the defaults (every player alone, everything unlocked) and each part of the API through the
- * test provider ({@link TestPois}): fog kept per group; chunks recorded into tiles that pack and unpack whole; the chunk
- * hook finding things, for everyone or for their owner only; POIs set for unloaded chunks and looked up nearest first;
- * a POI source worked out per group, and again when its stamp moves; a reveal clearing a disc and filling unloaded land
- * from the generator; markers private or shared, a second player of the group changing and removing a shared one;
+ * test provider ({@link TestPois}): fog kept per group; the chunk hook finding things, for everyone or for their owner
+ * only; POIs set for unloaded chunks and looked up nearest first; a POI source worked out per group, and again when its
+ * stamp moves; a reveal clearing a disc; markers private or shared, a second player of the group changing and removing a shared one;
  * death markers (the last three kept, a kept one until removed, none for a skipped player); unlock gates; moving POIs;
- * groups merging. /mapmod selftest restart checks that what was saved loads again.
+ * groups merging; and MM-6's cleanup (no server terrain, no tile payloads, no minimap feature, no POI detail flag).
+ * /mapmod selftest restart checks that what was saved loads again.
  * <p>
  * {@code /mapmod worldtest ...} drives the smoke run's client for its screenshots (see {@link Control}). Every check
  * prints "SELFTEST map" (or "SELFTEST restart"); failures say FAIL.
@@ -181,15 +182,16 @@ public final class MapTests {
         FakePlayer fake = FakePlayer.get(level);
         boolean all = true;
         for (MapFeature f : MapFeature.values()) all &= UnlockProvider.ALWAYS.unlocked(fake, f) && MapModApi.unlocked(fake, f);
-        expect(source, "by default terrain, the minimap and the fullscreen map are unlocked", all, "");
+        expect(source, "by default terrain and the fullscreen map are unlocked", all, "");
         List<PoiCategory> cats = MapModApi.categories();
         expect(source, "the filter panel lists players, markers, then the registered categories in order",
             cats.size() >= 3 && cats.get(0) == MapModApi.PLAYERS && cats.get(1) == MapModApi.MARKERS && cats.get(2) == TestPois.FINDS, cats.size() + " categories");
         expect(source, "kinds keep their category, sub-types and filter switches", MapModApi.kind(TestPois.ORE.key()) == TestPois.ORE
             && TestPois.ORE.subFilters() && !TestPois.ORE.filter() && TestPois.ORE.subTypes().size() == 4 && TestPois.CAMP.filter() && TestPois.CART.category() == null, "");
         expect(source, "vanilla's player locator bar is switched off", !server.getGameRules().get(GameRules.LOCATOR_BAR), "");
-        expect(source, "the map saves into data/mapmod", MapTerrain.root() != null && MapTerrain.root().endsWith(MapMod.ID)
-            && Files.exists(MapTerrain.root().resolve("id.txt")), String.valueOf(MapTerrain.root()));
+        expect(source, "the map saves into data/mapmod", MapFiles.root() != null && MapFiles.root().endsWith(MapMod.ID)
+            && Files.exists(MapFiles.root().resolve("id.txt")), String.valueOf(MapFiles.root()));
+        cleanup(source);
 
         // ---- groups: fog is per group, and shared inside it
         TestPois.GROUPS.put(MEMBER_1, A);
@@ -203,32 +205,16 @@ public final class MapTests {
             cleared.size() + " chunks");
         expect(source, "another group's fog is its own", !MapModApi.explored(B, X >> 4, Z >> 4), "");
 
-        // ---- terrain: a loaded chunk is recorded at 4 by 4 pixels, and the tile packs and unpacks whole
+        // ---- the chunk hook, on a loaded chunk
         LevelChunk chunk = level.getChunk(X >> 4, Z >> 4);
         BlockPos beacon = new BlockPos((X & ~15) + 8, level.getMinY() + 12, (Z & ~15) + 8);
         BlockPos cache = beacon.offset(-4, 0, 3);
         level.setBlock(beacon, Blocks.BEACON.defaultBlockState(), 3);
         level.setBlock(cache, Blocks.ENCHANTING_TABLE.defaultBlockState(), 3);
         TestPois.OWNERS.put(cache, A);
-        MapTerrain.record(level, chunk);
+        MapFound.scan(level, chunk);
         long region = MapGrid.regionOfChunk(X >> 4, Z >> 4);
-        MapTile tile = MapTerrain.tile(region);
-        expect(source, "a loaded chunk is recorded as 256 pixels, a pixel a block", knownPixels(tile, X >> 4, Z >> 4) == 256, knownPixels(tile, X >> 4, Z >> 4) + " of 256");
-        boolean same = false;
-        int bytes = 0;
-        if (tile != null) {
-            try {
-                byte[] packed = tile.pack();
-                bytes = packed.length;
-                MapTile back = MapTile.unpack(packed);
-                same = back.version == tile.version && Arrays.equals(back.cell, tile.cell) && back.blocks.equals(tile.blocks) && back.biomes.equals(tile.biomes) && Arrays.equals(back.height, tile.height);
-            } catch (IOException e) {
-                same = false;
-            }
-        }
-        expect(source, "a tile packs small and unpacks the same", same && bytes < 400_000, bytes + " bytes");
-
-        // ---- the chunk hook
+        expect(source, "scanning a chunk writes no terrain on the server", terrainFiles().isEmpty(), terrainFiles().toString());
         List<MapPoi> seenB = MapModApi.foundIn(region, B), seenA = MapModApi.foundIn(region, A);
         expect(source, "the chunk hook finds a beacon in a recorded chunk, for everyone",
             has(seenB, TestPois.BEACON.key(), beacon.getX(), beacon.getZ()) && has(seenA, TestPois.BEACON.key(), beacon.getX(), beacon.getZ()), "");
@@ -271,13 +257,11 @@ public final class MapTests {
             });
         });
 
-        // ---- a reveal clears its range and fills unloaded land with the generator's guess
+        // ---- a reveal clears its range
         int rx = X + 4000, rz = Z;
-        MapModApi.reveal(level, B, new BlockPos(rx, 80, rz), REVEAL, true);
+        MapModApi.reveal(level, B, new BlockPos(rx, 80, rz), REVEAL);
         boolean in = MapModApi.explored(B, (rx + 1000) >> 4, rz >> 4), beyond = MapModApi.explored(B, (rx + 1200) >> 4, rz >> 4);
         expect(source, "a reveal clears the group's fog over its radius", in && !beyond && MapModApi.explored(B, rx >> 4, (rz - 900) >> 4), "");
-        when(source, level, () -> guessedAt(rx + 700, rz), 400, "the guess", () ->
-            expect(source, "land nobody loaded in the reveal is filled in from the world generator", guessedAt(rx + 700, rz), ""));
 
         // ---- markers: private, shared, and a second player of the group
         MapMarkers markers = MapMarkers.get(server);
@@ -330,8 +314,8 @@ public final class MapTests {
 
         // ---- unlocks: per-player gates
         TestPois.UNLOCKS.put(fake.getUUID(), MapFeature.TERRAIN.bit());
-        expect(source, "an unlock provider can give a player terrain but not the minimap or the fullscreen map",
-            MapModApi.unlocked(fake, MapFeature.TERRAIN) && !MapModApi.unlocked(fake, MapFeature.MINIMAP) && !MapModApi.unlocked(fake, MapFeature.FULLSCREEN), "");
+        expect(source, "an unlock provider can give a player terrain but not the fullscreen map",
+            MapModApi.unlocked(fake, MapFeature.TERRAIN) && !MapModApi.unlocked(fake, MapFeature.FULLSCREEN), "");
         TestPois.UNLOCKS.remove(fake.getUUID());
 
         // ---- moving POIs
@@ -351,23 +335,47 @@ public final class MapTests {
         MapFog.saveAll();
     }
 
-    private static int knownPixels(MapTile tile, int cx, int cz) {
-        int known = 0;
-        if (tile == null) return 0;
-        int bx = Math.floorMod(cx, MapGrid.REGION_CHUNKS) * MapGrid.CHUNK_PX, bz = Math.floorMod(cz, MapGrid.REGION_CHUNKS) * MapGrid.CHUNK_PX;
-        for (int pz = 0; pz < MapGrid.CHUNK_PX; pz++) {
-            for (int px = 0; px < MapGrid.CHUNK_PX; px++) {
-                int i = MapTile.index(bx + px, bz + pz);
-                if (tile.known(i) && !tile.guessed(i)) known++;
-            }
+    // ------------------------------------------------------------------------------------------------ MM-6 cleanup
+
+    /** Server terrain files ({@code r.<x>.<z>.bin}) in data/mapmod/terrain: the server keeps none since MM-6. */
+    private static List<String> terrainFiles() {
+        List<String> out = new ArrayList<>();
+        Path root = MapFiles.root();
+        if (root == null) return out;
+        try (var files = Files.list(root.resolve("terrain"))) {
+            files.map(f -> f.getFileName().toString()).filter(n -> n.startsWith("r.")).forEach(out::add);
+        } catch (Exception e) {
+            out.add(e.toString());
         }
-        return known;
+        return out;
     }
 
-    private static boolean guessedAt(int x, int z) {
-        MapTile t = MapTerrain.tile(MapGrid.regionOfBlock(x, z));
-        int px = Math.floorMod(x, MapGrid.REGION_BLOCKS) / MapGrid.PX_BLOCKS, pz = Math.floorMod(z, MapGrid.REGION_BLOCKS) / MapGrid.PX_BLOCKS;
-        return t != null && t.known(MapTile.index(px, pz));
+    private static boolean gone(String className) {
+        try {
+            Class.forName(className, false, MapTests.class.getClassLoader());
+            return false;
+        } catch (ClassNotFoundException e) {
+            return true;
+        }
+    }
+
+    /** MM-6's cleanup, on the server: what went is gone, and nothing on the map changed for it. */
+    private static void cleanup(CommandSourceStack source) {
+        List<String> left = new ArrayList<>();
+        for (String c : List.of("map.MapTerrain", "map.MapRecorder", "map.MapTile", "map.MapGuess", "map.MapPalette", "map.MapPayloads$Tile",
+            "map.MapPayloads$TileRequest")) {
+            if (!gone("com.meakaandre.mapmod." + c)) left.add(c);
+        }
+        expect(source, "the server's pixel terrain is gone: MapTerrain, MapRecorder, MapTile, MapGuess, the old map/MapPalette and the tile payloads",
+            left.isEmpty(), left.isEmpty() ? "" : "still there: " + left);
+        expect(source, "the name MapPalette is free for the API's", !gone("com.meakaandre.mapmod.api.MapPalette"), "");
+        expect(source, "the server writes no terrain files", terrainFiles().isEmpty(), terrainFiles().toString());
+        expect(source, "MapFeature has no MINIMAP: TERRAIN and FULLSCREEN, all two of them",
+            Arrays.stream(MapFeature.values()).map(Enum::name).toList().equals(List.of("TERRAIN", "FULLSCREEN")) && MapFeature.ALL == 3,
+            Arrays.toString(MapFeature.values()));
+        boolean noDetail = Arrays.stream(PoiKind.class.getMethods()).noneMatch(m -> m.getName().equals("detail"))
+            && Arrays.stream(PoiKind.Builder.class.getMethods()).noneMatch(m -> m.getName().equals("detail"));
+        expect(source, "PoiKind has no detail() (it was for the minimap)", noDetail, "");
     }
 
     private static boolean has(List<MapPoi> pois, String kind, int x, int z) {
@@ -390,12 +398,11 @@ public final class MapTests {
         RESTART.reset();
         RESTART.attempt(source, "the restart checks", () -> {
             long region = MapGrid.regionOfChunk(X >> 4, Z >> 4);
-            RESTART.expect(source, "the map keeps its id", MapTerrain.root() != null && Files.exists(MapTerrain.root().resolve("id.txt")), "");
+            RESTART.expect(source, "the map keeps its id", MapFiles.root() != null && Files.exists(MapFiles.root().resolve("id.txt")), "");
             RESTART.expect(source, "a group's fog loads again", MapModApi.explored(A, X >> 4, Z >> 4) && MapModApi.explored(B, (X + 4000) >> 4, Z >> 4), "");
-            RESTART.expect(source, "recorded terrain loads again", knownPixels(MapTerrain.tile(region), X >> 4, Z >> 4) == 256, "");
             RESTART.expect(source, "what the chunk hook found loads again", MapModApi.foundIn(region, B).stream().anyMatch(p -> p.kind().equals(TestPois.BEACON.key())), "");
             RESTART.expect(source, "markers load again", MapMarkers.get(server).all().stream().anyMatch(m -> m.name.equals("Restart check") && m.shared && m.group.equals(A)), "");
-            RESTART.expect(source, "the guessed land of a reveal loads again", guessedAt(X + 4700, Z), "");
+            RESTART.expect(source, "still no server terrain after a restart", terrainFiles().isEmpty(), terrainFiles().toString());
             RESTART.expect(source, "the map saves under data/mapmod in the world", Files.isDirectory(server.getWorldPath(net.minecraft.world.level.storage.LevelResource.DATA).resolve(MapMod.ID).resolve("terrain"))
                 && Files.isDirectory(server.getWorldPath(net.minecraft.world.level.storage.LevelResource.DATA).resolve(MapMod.ID).resolve("fog")), "");
         });
@@ -406,8 +413,8 @@ public final class MapTests {
     // ------------------------------------------------------------------------------------------------ the smoke run
 
     /**
-     * Puts every online player in the smoke group with a second player who is never online, reveals the land round them
-     * (with the generator's guess), and has that second player place a shared marker near them; adds a marker of their
+     * Puts every online player in the smoke group with a second player who is never online, reveals the land round them,
+     * and has that second player place a shared marker near them; adds a marker of their
      * own, a death marker, a beacon and an enchanting table the group owns, for the screenshots.
      */
     private static int setup(CommandContext<CommandSourceStack> context) {
@@ -420,7 +427,7 @@ public final class MapTests {
             TestPois.GROUPS.put(player.getUUID(), SMOKE);
             MapModApi.groupChanged(player);
             BlockPos at = player.blockPosition();
-            MapModApi.reveal(level, SMOKE, at, REVEAL, true);
+            MapModApi.reveal(level, SMOKE, at, REVEAL);
             MapServer.apply(server, MATE.toString(), SMOKE, MapPayloads.ADD, marker("Placed by a group mate", at.getX() + 60, at.getZ() - 40, true));
             MapMarker mine = marker("My marker", at.getX() - 70, at.getZ() + 30, false);
             mine.icon = 2;
@@ -431,8 +438,8 @@ public final class MapTests {
             level.setBlock(b, Blocks.BEACON.defaultBlockState(), 3);
             level.setBlock(e, Blocks.ENCHANTING_TABLE.defaultBlockState(), 3);
             TestPois.OWNERS.put(e.immutable(), SMOKE);
-            MapTerrain.record(level, level.getChunkAt(b));
-            MapTerrain.record(level, level.getChunkAt(e));
+            MapFound.scan(level, level.getChunkAt(b));
+            MapFound.scan(level, level.getChunkAt(e));
             SMOKE_REPORT.report(source, "map set up round " + at.toShortString() + " for " + player.getGameProfile().name());
         }
         SMOKE_REPORT.report(source, "setup done.");

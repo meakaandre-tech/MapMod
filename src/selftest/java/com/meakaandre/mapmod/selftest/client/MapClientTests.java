@@ -4,6 +4,9 @@ import com.google.gson.JsonParser;
 import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.api.MapFeature;
 import com.meakaandre.mapmod.api.MapGlyphs;
+import com.meakaandre.mapmod.api.MapLock;
+import com.meakaandre.mapmod.api.MapPalette;
+import com.meakaandre.mapmod.api.MapSurface;
 import com.meakaandre.mapmod.api.MapPoi;
 import com.meakaandre.mapmod.api.MovingPoi;
 import com.meakaandre.mapmod.client.capture.Capture;
@@ -11,8 +14,10 @@ import com.meakaandre.mapmod.client.map.LocalMap;
 import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.map.MapDraw;
 import com.meakaandre.mapmod.client.map.MapFilters;
+import com.meakaandre.mapmod.client.map.MapHud;
 import com.meakaandre.mapmod.client.map.MapScreen;
 import com.meakaandre.mapmod.client.map.MobRadar;
+import com.meakaandre.mapmod.client.capture.SurfaceClass;
 import com.meakaandre.mapmod.client.capture.SurfaceTile;
 import com.meakaandre.mapmod.client.paint.BakeCheck;
 import com.meakaandre.mapmod.client.paint.FogCheck;
@@ -31,6 +36,9 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
@@ -45,6 +53,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 /**
  * The smoke run's remote control of the map ({@link MapTests.Control}, from {@code /mapmod worldtest}): opens or closes
@@ -53,7 +62,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class MapClientTests {
     private static int passed, failed;
-    private static int palettesBeforeReload = Integer.MAX_VALUE;
+    private static int palettesBeforeReload = Integer.MAX_VALUE, paletteVersionBeforeReload;
 
     private MapClientTests() {
     }
@@ -62,6 +71,7 @@ public final class MapClientTests {
         ClientPlayNetworking.registerGlobalReceiver(MapTests.Control.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> control(p)));
         ClientTickEvents.END_CLIENT_TICK.register(MapClientTests::local);
         ClientTickEvents.END_CLIENT_TICK.register(MapClientTests::watch);
+        ApiClientTests.effects = MapClientTests::apiEffect;
         Capture.onTileChanged((tx, tz, revision) -> {
             events++;
             eventX = tx;
@@ -280,6 +290,204 @@ public final class MapClientTests {
         }
     }
 
+    // ------------------------------------------------------------------------------------------------ MM-6
+
+    /** The cleanup, as the client sees it on joining a server with MapMod. */
+    private static void cleanupJoin() {
+        expect("the client tells a server with MapMod by its Hello first", LocalMap.serverHasMapBy().equals("hello") && !LocalMap.active(),
+            "told by " + LocalMap.serverHasMapBy());
+        expect("the terrain tile payloads are gone: the client cannot ask the server for tiles",
+            !ClientPlayNetworking.canSend(new CustomPacketPayload.Type<>(MapMod.id("tile_request"))), "");
+        // a tile MM-1 wrote (its own SurfaceTile code and aircompressor 0.27), read with this release's
+        String fixture = "";
+        boolean old = false, again = false, header = false;
+        try (var in = MapClientTests.class.getResourceAsStream("/mapmod_selftest/mm1-tile.mmt")) {
+            byte[] bytes = in == null ? new byte[0] : in.readAllBytes();
+            SurfaceTile t = SurfaceTile.unpack(3, -2, bytes);
+            SurfaceTile want = mm1Fixture();
+            old = t.sameData(want) && t.exploredCount() == want.exploredCount();
+            byte[] packed = want.pack();
+            again = SurfaceTile.unpack(3, -2, packed).sameData(want);
+            // the header (magic, format, spacing, side, body length) is the same bytes as MM-1 wrote
+            header = java.util.Arrays.equals(java.util.Arrays.copyOf(bytes, 13), java.util.Arrays.copyOf(packed, 13));
+            fixture = bytes.length + " bytes from MM-1, " + packed.length + " now, " + t.exploredCount() + " explored";
+        } catch (Exception e) {
+            fixture = e.toString();
+        }
+        expect("a tile MM-1 wrote reads back the same with this release's zstd", old, fixture);
+        expect("a tile written now reads back the same, with MM-1's header (the tile format did not change)", again && header, fixture);
+        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT), arch = System.getProperty("os.arch", "");
+        boolean nativeHere = (os.contains("linux") && (arch.equals("amd64") || arch.equals("aarch64") || arch.equals("ppc64le")))
+            || (os.contains("mac") && arch.equals("aarch64"));
+        expect("tiles use the native zstd codec where aircompressor carries one (no sun.misc.Unsafe), the pure-Java one elsewhere",
+            SurfaceTile.codec().equals(nativeHere ? "native" : "java"), SurfaceTile.codec() + " on " + os + " " + arch);
+    }
+
+    /** The tile MM-1 wrote for the fixture: the same formula as the generator that wrote it. */
+    private static SurfaceTile mm1Fixture() {
+        SurfaceTile t = new SurfaceTile(3, -2);
+        for (int i = 0; i < SurfaceTile.AREA; i++) {
+            int sx = i % SurfaceTile.SIDE, sz = i / SurfaceTile.SIDE;
+            int h = 40 + (sx * 7 + sz * 13) % 97 + (sx * sz) % 11;
+            t.height[i] = (short) h;
+            t.water[i] = (byte) (h < 62 ? 62 - h : 0);
+            t.surface[i] = (byte) ((sx / 16 + sz / 16 + (sx * sz % 3 == 0 ? 1 : 0)) % 8);
+            t.tint[i] = (short) (0x5A60 + sx * 3 + sz * 5);
+            t.canopy[i] = (byte) ((sx * 31 + sz * 17) % 256);
+            if ((sx + sz) % 9 != 0) t.explored[i >>> 6] |= 1L << i;
+        }
+        return t;
+    }
+
+    /** What the API test did, as MapMod's insides show it: one check per point, done when the supplier says so. */
+    private static BooleanSupplier apiEffect(String point) {
+        Minecraft mc = Minecraft.getInstance();
+        switch (point) {
+            case "markers" -> {
+                long before = MapHud.apiMarkersDrawn;
+                int[] t = {0};
+                return () -> {
+                    if (MapHud.apiMarkersDrawn == before && ++t[0] < 100) return false;
+                    ApiClientTests.report("a mod's marker is drawn on the open map, in the markers layer", MapHud.apiMarkersDrawn > before,
+                        (MapHud.apiMarkersDrawn - before) + " drawn");
+                    return true;
+                };
+            }
+            case "palette" -> {
+                long before = PaintMap.bakes();
+                int[] t = {0};
+                return () -> {
+                    if (PaintMap.bakes() == before && ++t[0] < 600) return false;
+                    ApiClientTests.report("the override paints the map again: the baked tiles bake anew with the class colour",
+                        PaintMap.bakes() > before && PaintPalette.current().classColour()[0] == ApiClientTests.OVERRIDE_RGB,
+                        (PaintMap.bakes() - before) + " bakes, class 0 #" + Integer.toHexString(PaintPalette.current().classColour()[0]));
+                    return true;
+                };
+            }
+            case "surface" -> {
+                return new SurfaceCheck(mc);
+            }
+            case "layers" -> {
+                ApiClientTests.report("a locked layer is hidden whatever its switch says, and the switch is kept",
+                    MapLayer.POIS.locked() && !MapLayer.POIS.shown() && MapLayer.POIS.on() && !MapLayer.PINS.locked(), "");
+                return () -> true;
+            }
+            case "locked" -> {
+                long frames = PaintMap.frames(), panels = MapScreen.lockedFrames;
+                int[] t = {0};
+                return () -> {
+                    if (++t[0] < 10) return false;
+                    boolean open = mc.gui.screen() instanceof MapScreen screen && screen.locked();
+                    ApiClientTests.report("a locked map shows the locked panel, not an empty map, and paints no terrain",
+                        open && MapScreen.lockedFrames > panels && PaintMap.frames() == frames,
+                        (MapScreen.lockedFrames - panels) + " panel frames, " + (PaintMap.frames() - frames) + " painted frames");
+                    MapClient.open();
+                    ApiClientTests.report("M still opens a locked map (to its locked panel)", mc.gui.screen() instanceof MapScreen, "");
+                    return true;
+                };
+            }
+            case "unlocked" -> {
+                long frames = PaintMap.frames();
+                int[] t = {0};
+                return () -> {
+                    if (PaintMap.frames() == frames && ++t[0] < 100) return false;
+                    ApiClientTests.report("unlocked, the map paints again", PaintMap.frames() > frames && !MapLock.mapLocked(), "");
+                    return true;
+                };
+            }
+            default -> {
+                return () -> true;
+            }
+        }
+    }
+
+    /**
+     * A block override takes effect on new samples only: a captured sample keeps its class until its chunk is captured
+     * again, then takes the override; cleared, and captured again, it is back.
+     */
+    private static final class SurfaceCheck implements BooleanSupplier {
+        private final Minecraft mc;
+        private int stage, ticks, index, cx, cz, tx, tz, before;
+        private long revision;
+        private BlockState ground;
+
+        SurfaceCheck(Minecraft mc) {
+            this.mc = mc;
+        }
+
+        private SurfaceTile tile() {
+            try {
+                return Capture.tile(tx, tz).get(20, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        @Override
+        public boolean getAsBoolean() {
+            ticks++;
+            if (stage == 0) return start();
+            if (ticks % 5 != 0 && ticks < 400) return false;
+            SurfaceTile t = tile();
+            boolean newer = t != null && t.revision > revision;
+            if (stage == 1) {
+                if ((!newer || t.surface[index] != MapSurface.LAVA) && ticks < 400) return false;
+                ApiClientTests.report("captured again, the sample takes the block's override", t != null && t.surface[index] == MapSurface.LAVA,
+                    t == null ? "no tile" : "class " + SurfaceClass.name(t.surface[index]) + " for " + ground);
+                MapSurface.clear(ground.getBlock());
+                revision = t == null ? 0 : t.revision;
+                Capture.recapture(cx, cz);
+                stage = 2;
+                ticks = 0;
+                return false;
+            }
+            if ((!newer || t.surface[index] != before) && ticks < 400) return false;
+            ApiClientTests.report("the override cleared, captured again, the sample is back to its own class", t != null && t.surface[index] == before,
+                t == null ? "no tile" : SurfaceClass.name(t.surface[index]) + ", was " + SurfaceClass.name(before));
+            return true;
+        }
+
+        private boolean start() {
+            stage = 1;
+            ticks = 0;
+            if (mc.player == null || mc.level == null) {
+                ApiClientTests.report("a sample to put in another class", false, "no player");
+                return true;
+            }
+            tx = SurfaceTile.tileOfBlock(mc.player.getBlockX());
+            tz = SurfaceTile.tileOfBlock(mc.player.getBlockZ());
+            SurfaceTile t = tile();
+            int pcx = mc.player.getBlockX() >> 4, pcz = mc.player.getBlockZ() >> 4;
+            for (int dz = -2; dz <= 2 && ground == null; dz++) {
+                for (int dx = -2; dx <= 2 && ground == null; dx++) {
+                    int ccx = pcx + dx, ccz = pcz + dz;
+                    if (t == null || SurfaceTile.tileOfChunk(ccx) != tx || SurfaceTile.tileOfChunk(ccz) != tz || !mc.level.getChunkSource().hasChunk(ccx, ccz)) continue;
+                    int x = ccx * 16 + 2, z = ccz * 16 + 2, i = SurfaceTile.indexOfBlock(x, z);
+                    int c = t.surface[i];
+                    if (!t.explored(i) || c == MapSurface.LAVA || c == MapSurface.SNOW || c == MapSurface.FOREST) continue;
+                    BlockState s = mc.level.getBlockState(new BlockPos(x, t.height[i], z));
+                    if (s.isAir() || MapSurface.classOf(s) != c) continue;
+                    ground = s;
+                    index = i;
+                    before = c;
+                    cx = ccx;
+                    cz = ccz;
+                    revision = t.revision;
+                }
+            }
+            if (ground == null) {
+                ApiClientTests.report("a captured sample to put in another class", false, t == null ? "no tile" : "none found round the player");
+                return true;
+            }
+            MapSurface.override(ground.getBlock(), MapSurface.LAVA);
+            SurfaceTile now = tile();
+            ApiClientTests.report("an override does not touch what was captured before it", now != null && now.surface[index] == before,
+                ground + " was " + SurfaceClass.name(before));
+            Capture.recapture(cx, cz);
+            return false;
+        }
+    }
+
     private static void far() {
         passed = failed = 0;
         String frame = PaintMap.lastFrame();
@@ -407,11 +615,13 @@ public final class MapClientTests {
             MapClient.unlocked(MapFeature.TERRAIN) && MapClient.unlocked(MapFeature.FULLSCREEN),
             MapClient.mapId != null && MapClient.mapId.startsWith("server-"),
             MapClient.explored(px, pz) && MapClient.explored(px + 80, pz) && !MapClient.explored(px + 200, pz),
+            LocalMap.active() && LocalMap.serverHasMapBy().isEmpty(),
         };
         String[] what = {
             "with no MapMod on the server the whole map is open",
             "the client keeps its own map for this server (" + MapClient.mapId + ")",
             "the client clears its own fog round the player",
+            "a server that sends no Hello and takes none of MapMod's payloads is one without MapMod (the Hello first, MM-6)",
         };
         for (int i = 0; i < checks.length; i++) {
             MapMod.LOGGER.info("SELFTEST local {} {}", checks[i] ? "PASS" : "FAIL", what[i]);
@@ -718,6 +928,14 @@ public final class MapClientTests {
             dimensionBytesAt = PaintMap.cacheBytes();
             return;
         }
+        if (what.equals("api")) {
+            ApiClientTests.start();
+            return;
+        }
+        if (what.equals("apiunlock")) {
+            ApiClientTests.unlock();
+            return;
+        }
         if (what.equals("bake")) {
             bakePass = bakeFail = 0;
             bakeCheck = new BakeCheck(SyntheticTiles::make);
@@ -738,11 +956,13 @@ public final class MapClientTests {
             expect("on joining, M opens the fullscreen map", mc.gui.screen() instanceof MapScreen, "");
             if (mc.gui.screen() instanceof MapScreen) mc.gui.setScreen(null);
             painted();
+            cleanupJoin();
         } else if (what.equals("locked")) {
             expect("F3+T reloads the map palette", PaintPalette.loads() > palettesBeforeReload && PaintPalette.lastError().isEmpty(),
                 palettesBeforeReload + " -> " + PaintPalette.loads() + " loads " + PaintPalette.lastError());
-            expect("the provider's lock reaches the client: terrain on, minimap and fullscreen map off",
-                MapClient.unlocked(MapFeature.TERRAIN) && !MapClient.unlocked(MapFeature.MINIMAP) && !MapClient.unlocked(MapFeature.FULLSCREEN), Integer.toString(MapClient.unlocks));
+            ApiClientTests.afterReload(paletteVersionBeforeReload);
+            expect("the provider's lock reaches the client: terrain on, the fullscreen map off",
+                MapClient.unlocked(MapFeature.TERRAIN) && !MapClient.unlocked(MapFeature.FULLSCREEN), Integer.toString(MapClient.unlocks));
             MapClient.open();
             expect("the fullscreen map does not open while locked, with the provider's message", !(mc.gui.screen() instanceof MapScreen)
                 && MapClient.lockedKey.equals("mapmod_selftest.locked"), MapClient.lockedKey);
@@ -808,6 +1028,7 @@ public final class MapClientTests {
                 stats.stream().anyMatch(l -> l.contains("us/frame")) && stats.stream().anyMatch(l -> l.contains("uploads")), String.join(" | ", stats));
             // F3+T: the reload runs while the next checks are made, and the "locked" check sees the palette read again
             palettesBeforeReload = PaintPalette.loads();
+            paletteVersionBeforeReload = MapPalette.version();
             mc.reloadResourcePacks();
         }
         MapMod.LOGGER.info("SELFTEST client done {}: {} passed, {} failed", what, passed, failed);

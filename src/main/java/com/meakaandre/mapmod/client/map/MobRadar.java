@@ -67,7 +67,7 @@ public final class MobRadar {
     public static void draw(GuiGraphicsExtractor g, MapDraw.View v) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null || !MapClient.mappedHere()) return;
-        if (!MapFilters.on(MapFilters.MOBS) || !MapLayer.MOBS.on()) return;
+        if (!MapFilters.on(MapFilters.MOBS) || !MapLayer.MOBS.shown()) return;
         boolean hostiles = MapFilters.on(MapFilters.HOSTILE), passives = MapFilters.on(MapFilters.PASSIVE);
         if (!hostiles && !passives) return;
         int size = SIZE;

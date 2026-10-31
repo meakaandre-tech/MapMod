@@ -1,7 +1,7 @@
 package com.meakaandre.mapmod.mixin;
 
 import com.meakaandre.mapmod.map.ClientBlockHook;
-import com.meakaandre.mapmod.map.MapTerrain;
+import com.meakaandre.mapmod.map.MapFound;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
@@ -15,8 +15,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import java.util.function.BiConsumer;
 
 /**
- * Block changes reach the map: on the server it records the chunk again a little after a block in it changes; on the
- * client the surface capture samples it again if the change was at the surface. A hook on the chunk's data, not on
+ * Block changes reach the map: on the server the chunk hooks scan the chunk again a little after a block in it changes;
+ * on the client the surface capture samples it again if the change was at the surface. A hook on the chunk's data, not on
  * chunk rendering, so renderer rewrites (Sodium, Quicksilver) are not touched.
  */
 @Mixin(LevelChunk.class)
@@ -27,7 +27,7 @@ public abstract class LevelChunkMixin {
         LevelChunk chunk = (LevelChunk) (Object) this;
         Level level = chunk.getLevel();
         if (level instanceof ServerLevel server) {
-            MapTerrain.blockChanged(server, pos);
+            MapFound.blockChanged(server, pos);
         } else if (level.isClientSide()) {
             BiConsumer<LevelChunk, BlockPos> listener = ClientBlockHook.listener;
             if (listener != null) listener.accept(chunk, pos);

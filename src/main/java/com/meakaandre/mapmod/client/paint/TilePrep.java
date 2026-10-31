@@ -434,7 +434,7 @@ public final class TilePrep {
     }
 
     /** One axis of the shader's warp at a world position in samples, at unit strength (-1 to 1). */
-    static double warp(double sx, double sz, int axis) {
+    public static double warp(double sx, double sz, int axis) {
         double p = MapGpu.NOISE_PERIOD;
         double big = axis == 0 ? vnoise(sx / 16, sz / 16, p / 16) : vnoise(sx / 16 + 53, sz / 16 + 17, p / 16);
         double small = axis == 0 ? vnoise(sx / 4 + 7, sz / 4 + 91, p / 4) : vnoise(sx / 4 + 29, sz / 4 + 3, p / 4);

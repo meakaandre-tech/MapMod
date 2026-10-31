@@ -1,6 +1,7 @@
 package com.meakaandre.mapmod.client.capture;
 
 import com.meakaandre.mapmod.MapMod;
+import com.meakaandre.mapmod.api.MapTiles;
 import com.meakaandre.mapmod.map.ClientBlockHook;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
@@ -112,6 +113,7 @@ public final class Capture {
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> stop());
         Runtime.getRuntime().addShutdownHook(new Thread(Capture::stop, MapMod.NAME + " capture shutdown"));
         ClientBlockHook.listener = Capture::blockChanged;
+        MapMod.LOGGER.info("map tiles use the {} zstd codec", SurfaceTile.codec());
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
             LiteralArgumentBuilder.<FabricClientCommandSource>literal(MapMod.ID)
                 .then(LiteralArgumentBuilder.<FabricClientCommandSource>literal("stats").executes(c -> {
@@ -282,27 +284,20 @@ public final class Capture {
 
     // ------------------------------------------------------------------------------------------------ changes
 
-    /**
-     * Told when a tile the capture holds changes: its position and its new {@link SurfaceTile#revision}. Called on the
-     * client (render) thread, at the end of a client tick or when a renderer asks ({@link #dispatchChanges}); changes
-     * that come quicker than that are taken together, so a listener sees a tile's latest revision once.
-     */
-    @FunctionalInterface
-    public interface TileListener {
-        void changed(int tileX, int tileZ, long revision);
-    }
-
-    private static final List<TileListener> LISTENERS = new CopyOnWriteArrayList<>();
+    private static final List<MapTiles.Listener> LISTENERS = new CopyOnWriteArrayList<>();
     /** Tiles changed on the worker and not announced yet: key to latest revision. */
     private static final ConcurrentHashMap<Long, Long> CHANGED = new ConcurrentHashMap<>();
     private static final AtomicLong EVENTS = new AtomicLong();
 
-    /** Adds a listener for changed tiles (see {@link TileListener}). */
-    public static void onTileChanged(TileListener listener) {
+    /**
+     * Adds a listener for changed tiles (see {@link MapTiles.Listener}): told on the client (render) thread, at the end
+     * of a client tick or when a renderer asks ({@link #dispatchChanges}), a tile's latest revision once.
+     */
+    public static void onTileChanged(MapTiles.Listener listener) {
         LISTENERS.add(listener);
     }
 
-    public static void removeTileListener(TileListener listener) {
+    public static void removeTileListener(MapTiles.Listener listener) {
         LISTENERS.remove(listener);
     }
 
@@ -319,7 +314,7 @@ public final class Capture {
             if (revision == null) continue;
             EVENTS.incrementAndGet();
             int tx = CaptureStore.keyX(k), tz = CaptureStore.keyZ(k);
-            for (TileListener l : LISTENERS) {
+            for (MapTiles.Listener l : LISTENERS) {
                 try {
                     l.changed(tx, tz, revision);
                 } catch (RuntimeException e) {
@@ -384,6 +379,11 @@ public final class Capture {
     /** The revision of every explored tile the worker holds right now, keyed {@code tileX << 32 | tileZ}. */
     public static CompletableFuture<@Nullable Long2LongOpenHashMap> heldRevisions() {
         return ask(CaptureStore::revisions);
+    }
+
+    /** Samples a loaded chunk again soon, as a change at its surface would (for the selftests). Client thread. */
+    public static void recapture(int chunkX, int chunkZ) {
+        PENDING.add(key(chunkX, chunkZ));
     }
 
     /** Lines other parts of the client add to {@code /mapmod stats}. */

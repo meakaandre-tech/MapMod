@@ -2,6 +2,7 @@ package com.meakaandre.mapmod.client.paint;
 
 import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.api.MapFeature;
+import com.meakaandre.mapmod.api.MapLock;
 import com.meakaandre.mapmod.client.capture.Capture;
 import com.meakaandre.mapmod.client.capture.SurfaceTile;
 import com.meakaandre.mapmod.client.map.MapClient;
@@ -37,7 +38,8 @@ import java.util.concurrent.Executors;
  * The fog over unexplored land (MM-5) is exactly what this client has captured, on every server and in every group: the
  * group's fog of war decides POIs, never terrain, so nothing the player has seen is fogged (but for the soft rim of the
  * fog's edge). The painter keeps it as masks ({@link FogMasks}), made from the captured samples and what may show
- * ({@link #mayShow}: everything for now; MM-6's MapLock is what may hide land on purpose).
+ * ({@link #mayShow}: everything). Hiding the map on purpose is {@code api.MapLock}'s, which locks the whole map (the
+ * screen then paints nothing) or single layers, never parts of the land.
  */
 public final class PaintMap {
     /** Uploads, bakes and mip copies in one frame at most, together. */
@@ -153,7 +155,9 @@ public final class PaintMap {
         double blocksPerPixel = 1.0 / (v.scale() * scale);
         MapPainter.Frame f = new MapPainter.Frame(w, h, v.wx(v.left()), v.wz(v.top()), blocksPerPixel);
         TIMER.begin();
-        MapGpu.Target picture = p.paint(f, PaintPalette.current(), PaintPalette.version(), MapClient.contours, MapClient.unlocked(MapFeature.TERRAIN));
+        // contour lines show while switched on, unless a mod locks them (MM-6)
+        boolean contours = MapClient.contours && !MapLock.layerLocked(MapLock.CONTOURS);
+        MapGpu.Target picture = p.paint(f, PaintPalette.current(), PaintPalette.version(), contours, MapClient.unlocked(MapFeature.TERRAIN));
         TIMER.end();
         g.blit(picture.view, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
             v.left(), v.top(), v.left() + v.width(), v.top() + v.height(), 0f, 1f, 1f, 0f);
@@ -289,8 +293,7 @@ public final class PaintMap {
 
     /**
      * What of a region may show over what was captured, by chunk: every chunk, so the fog is exactly what this client
-     * captured (the group's fog or its own capture, which comes to the same). The one place MM-6's MapLock is meant to
-     * hide land on purpose.
+     * captured (the group's fog or its own capture, which comes to the same).
      */
     static long @Nullable [] mayShow(long region) {
         return ALL_EXPLORED;

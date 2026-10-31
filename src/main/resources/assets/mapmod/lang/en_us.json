@@ -40,5 +40,6 @@
   "mapmod.map.layer.pois": "Points of interest",
   "mapmod.map.layer.mobs": "Mob radar",
   "mapmod.map.layer_on": "Shown: click to hide",
-  "mapmod.map.layer_off": "Hidden: click to show"
+  "mapmod.map.layer_off": "Hidden: click to show",
+  "mapmod.map.locked_title": "Map locked"
 }

@@ -46,6 +46,13 @@ jobs:
           # the release jar holds no selftest code: that is all in the selftest jar
           jar=$(ls build/libs/mapmod-[0-9]*.jar | grep -v sources | head -1)
           if unzip -Z1 "$jar" | grep -E '^com/meakaandre/mapmod/selftest/'; then echo "selftest classes in $jar"; exit 1; fi
+          # the API test uses the public API only, as another mod would
+          if grep -nE '^import (static )?com\.meakaandre\.mapmod\.' src/selftest/java/com/meakaandre/mapmod/selftest/client/ApiClientTests.java | grep -vE 'com\.meakaandre\.mapmod\.api\.'; then
+            echo "ApiClientTests imports more than com.meakaandre.mapmod.api"; exit 1
+          fi
+          # zstd comes from aircompressor's v3 line, bundled; no other aircompressor
+          unzip -Z1 "$jar" | grep -E '^META-INF/jars/' | tee /tmp/nested.txt
+          grep -q 'aircompressor-v3-' /tmp/nested.txt && ! grep -qE 'aircompressor-0' /tmp/nested.txt
       - name: Dump game signatures on request
         if: always()
         shell: bash

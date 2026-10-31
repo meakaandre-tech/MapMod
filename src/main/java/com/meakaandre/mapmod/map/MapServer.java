@@ -9,7 +9,6 @@ import com.meakaandre.mapmod.api.MovingPoi;
 import com.meakaandre.mapmod.api.MovingSource;
 import com.meakaandre.mapmod.api.PoiArea;
 import com.meakaandre.mapmod.api.PoiSource;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
@@ -44,23 +43,15 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * The map's server side: fog of war shared by each group, the Overworld's terrain tiles, the POIs the providers supply,
- * markers and death markers, and the group's players for the compass. It sends each client only what its group has
- * explored, and terrain only once the player has it unlocked.
+ * The map's server side: fog of war shared by each group, the POIs the providers supply, markers and death markers,
+ * and the group's players for the compass. It sends each client only what its group has explored. The terrain is
+ * never sent: each client captures and paints its own.
  */
 public final class MapServer {
     /** Chunks round a player that count as visited. */
     public static final int VISIT_RADIUS = 6;
     /** Regions of POIs or fog sent in one packet at most. */
     private static final int BATCH = 64;
-    /** Tiles sent for one request at most. */
-    private static final int TILES_PER_REQUEST = 12;
-    /** Chunks a reveal's guess works out in one go on the worker. */
-    private static final int GUESS_BATCH = 48;
-    /** A player's tile requests are answered at most this often (ticks); the client asks once a second. */
-    private static final int TILE_REQUEST_TICKS = 10;
-    /** Regions of a tile request looked at, at most. */
-    private static final int REQUEST_REGIONS = 64;
     /** Regions of one source's POIs kept per group; past this the cache is emptied and worked out again as needed. */
     private static final int SOURCE_REGIONS_KEPT = 4096;
     /** Ticks in a second: fog clearing round players, group, unlock and stamp checks, and moving things run once a second. */
@@ -69,8 +60,6 @@ public final class MapServer {
     private static final int MATES_TICKS = 10;
     /** Ticks between fog saves (a minute). */
     private static final int FOG_SAVE_TICKS = 1200;
-    /** Packed tiles cached at most; past this the cache is emptied. */
-    private static final int PACKED_KEPT = 256;
 
     /** One source's POIs for one group. */
     private record Key(String group, int source) {
@@ -93,13 +82,8 @@ public final class MapServer {
     private static final Set<UUID> GREETED = new HashSet<>();
     /** What each online player was last told they have unlocked. */
     private static final Map<UUID, Integer> UNLOCKS = new HashMap<>();
-    /** When each player's last tile request was answered (server ticks). */
-    private static final Map<UUID, Integer> TILE_ASKED = new HashMap<>();
     /** Players last sent an empty list of mates or of moving things: an empty list is sent once, not every time. */
     private static final Set<UUID> NO_MATES = new HashSet<>(), NO_MOVING = new HashSet<>();
-    /** Packed tiles, kept while their version is current. */
-    private static final Long2ObjectOpenHashMap<byte[]> PACKED = new Long2ObjectOpenHashMap<>();
-    private static final Long2LongOpenHashMap PACKED_AT = new Long2LongOpenHashMap();
 
     private MapServer() {
     }
@@ -129,24 +113,22 @@ public final class MapServer {
         PayloadTypeRegistry.clientboundPlay().register(MapPayloads.Fog.TYPE, MapPayloads.Fog.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(MapPayloads.FogDelta.TYPE, MapPayloads.FogDelta.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(MapPayloads.Pois.TYPE, MapPayloads.Pois.CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(MapPayloads.Tile.TYPE, MapPayloads.Tile.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(MapPayloads.Markers.TYPE, MapPayloads.Markers.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(MapPayloads.Mates.TYPE, MapPayloads.Mates.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(MapPayloads.Moving.TYPE, MapPayloads.Moving.CODEC);
-        PayloadTypeRegistry.serverboundPlay().register(MapPayloads.TileRequest.TYPE, MapPayloads.TileRequest.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(MapPayloads.MarkerEdit.TYPE, MapPayloads.MarkerEdit.CODEC);
-        ServerPlayNetworking.registerGlobalReceiver(MapPayloads.TileRequest.TYPE, (payload, context) -> context.server().execute(() -> tiles(context.player(), payload)));
         ServerPlayNetworking.registerGlobalReceiver(MapPayloads.MarkerEdit.TYPE, (payload, context) -> context.server().execute(() -> edit(context.player(), payload)));
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-            MapTerrain.start(server);
+            MapFiles.start(server);
             mapId = readMapId();
             // group players show on the compass; vanilla's locator bar would show everyone, so it is switched off
             server.getGameRules().set(GameRules.LOCATOR_BAR, false, server);
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             MapFog.stop();
-            MapTerrain.stop();
+            MapFound.stop();
+            MapFiles.stop();
             COMPUTED.clear();
             STAMP.clear();
             PENDING.clear();
@@ -154,21 +136,17 @@ public final class MapServer {
             SYNCED.clear();
             GREETED.clear();
             UNLOCKS.clear();
-            TILE_ASKED.clear();
             NO_MATES.clear();
             NO_MOVING.clear();
-            PACKED.clear();
-            PACKED_AT.clear();
             mapId = null;
         });
-        ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> MapTerrain.loaded(level, chunk));
+        ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> MapFound.loaded(level, chunk));
         ServerPlayerEvents.JOIN.register(MapServer::sync);
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUUID();
             SYNCED.remove(id);
             GREETED.remove(id);
             UNLOCKS.remove(id);
-            TILE_ASKED.remove(id);
             NO_MATES.remove(id);
             NO_MOVING.remove(id);
         });
@@ -180,7 +158,7 @@ public final class MapServer {
     }
 
     private static String readMapId() {
-        Path root = MapTerrain.root();
+        Path root = MapFiles.root();
         if (root == null) return UUID.randomUUID().toString();
         Path file = root.resolve("id.txt");
         try {
@@ -201,7 +179,7 @@ public final class MapServer {
 
     private static void tick(MinecraftServer server) {
         ServerLevel overworld = server.overworld();
-        MapTerrain.tick(overworld);
+        MapFound.tick(overworld);
         int t = server.getTickCount();
         if (t % TICKS_PER_SECOND == 0) {
             checkPlayers(server);
@@ -211,7 +189,7 @@ public final class MapServer {
         if (t % TICKS_PER_SECOND == 15) moving(server);
         if (t % TICKS_PER_SECOND == 10) {
             checkStamps(server);
-            long[] changed = MapTerrain.takeFoundChanges();
+            long[] changed = MapFound.takeChanges();
             if (changed.length > 0) foundChanged(server, changed);
             runPending(server);
         }
@@ -440,7 +418,7 @@ public final class MapServer {
             if (list == null) continue;
             for (MapPoi p : list) if (shows(p, group)) out.add(p);
         }
-        for (MapPoi p : MapTerrain.foundFor(region, group)) if (shows(p, group)) out.add(p);
+        for (MapPoi p : MapFound.foundFor(region, group)) if (shows(p, group)) out.add(p);
         return out;
     }
 
@@ -456,7 +434,7 @@ public final class MapServer {
             List<MapPoi> list = computed == null ? null : computed.get(region);
             if (list != null) for (MapPoi p : list) if (chunks.contains(MapGrid.key(p.x() >> 4, p.z() >> 4))) return true;
         }
-        for (MapPoi p : MapTerrain.foundFor(region, group)) if (chunks.contains(MapGrid.key(p.x() >> 4, p.z() >> 4))) return true;
+        for (MapPoi p : MapFound.foundFor(region, group)) if (chunks.contains(MapGrid.key(p.x() >> 4, p.z() >> 4))) return true;
         return false;
     }
 
@@ -587,53 +565,15 @@ public final class MapServer {
         }
     }
 
-    // ------------------------------------------------------------------------------------------------ terrain tiles
-
-    private static void tiles(ServerPlayer player, MapPayloads.TileRequest request) {
-        if (ignored(player) || !MapModApi.unlocked(player, MapFeature.TERRAIN) || request.regions().length != request.versions().length) return;
-        String group = SYNCED.getOrDefault(player.getUUID(), "");
-        if (group.isEmpty()) return;
-        // at most one request answered every so often per player, and only so many of its regions looked at
-        int now = player.level().getServer().getTickCount();
-        Integer last = TILE_ASKED.get(player.getUUID());
-        if (last != null && now - last < TILE_REQUEST_TICKS && now >= last) return;
-        TILE_ASKED.put(player.getUUID(), now);
-        Long2ObjectOpenHashMap<long[]> fog = MapFog.of(group);
-        int sent = 0;
-        int looked = Math.min(request.regions().length, REQUEST_REGIONS);
-        for (int i = 0; i < looked && sent < TILES_PER_REQUEST; i++) {
-            long region = request.regions()[i];
-            if (!fog.containsKey(region)) continue;
-            MapTile tile = MapTerrain.tile(region);
-            if (tile == null || tile.version == 0 || tile.version <= request.versions()[i]) continue;
-            byte[] packed = PACKED.get(region);
-            if (packed == null || PACKED_AT.get(region) != tile.version) {
-                packed = tile.pack();
-                PACKED.put(region, packed);
-                PACKED_AT.put(region, tile.version);
-                if (PACKED.size() > PACKED_KEPT) {
-                    PACKED.clear();
-                    PACKED_AT.clear();
-                }
-            }
-            send(player, new MapPayloads.Tile(region, packed));
-            sent++;
-        }
-    }
-
     // ------------------------------------------------------------------------------------------------ reveal
 
-    /**
-     * Clears the group's fog over a disc round a spot and, with {@code guess}, fills land nobody has loaded there with
-     * the world generator's guess, so it shows on the map at once.
-     */
-    public static void reveal(ServerLevel level, String group, BlockPos at, int radiusBlocks, boolean guess) {
+    /** Clears the group's fog over a disc round a spot and sends it to the group's players. */
+    public static void reveal(ServerLevel level, String group, BlockPos at, int radiusBlocks) {
         if (!mapped(level) || group.isEmpty()) return;
         MinecraftServer server = level.getServer();
         int radius = Math.max(1, radiusBlocks >> 4);
         LongOpenHashSet newRegions = new LongOpenHashSet();
-        int ccx = at.getX() >> 4, ccz = at.getZ() >> 4;
-        LongArrayList cleared = MapFog.reveal(group, ccx, ccz, radius, newRegions);
+        LongArrayList cleared = MapFog.reveal(group, at.getX() >> 4, at.getZ() >> 4, radius, newRegions);
         if (!cleared.isEmpty()) {
             uncovered(server, group, cleared);
             // the touched regions' whole fog: far fewer bytes than the chunks one by one
@@ -647,27 +587,6 @@ public final class MapServer {
             }
         }
         if (!newRegions.isEmpty()) pendAll(group, newRegions);
-        if (!guess) return;
-        // guesses for every chunk in the disc with nothing recorded
-        LongArrayList wanted = new LongArrayList();
-        int r2 = radius * radius;
-        for (int dz = -radius; dz <= radius; dz++) {
-            for (int dx = -radius; dx <= radius; dx++) {
-                if (dx * dx + dz * dz > r2) continue;
-                if (MapTerrain.needsGuess(ccx + dx, ccz + dz)) wanted.add(MapGrid.key(ccx + dx, ccz + dz));
-            }
-        }
-        if (wanted.isEmpty()) return;
-        int sea = level.getSeaLevel();
-        // thousands of chunks: guessed a small batch at a time, so the worker is never held up for long
-        MapWorker.batched(server, wanted, GUESS_BATCH, batch -> {
-            List<MapTerrain.Guess> guesses = new ArrayList<>(batch.size());
-            for (long c : batch) guesses.add(MapTerrain.guess(level, MapGrid.keyX(c), MapGrid.keyZ(c), sea));
-            return guesses;
-        }, guesses -> {
-            if (guesses != null) MapTerrain.apply(guesses);
-        }, () -> {
-        });
     }
 
     // ------------------------------------------------------------------------------------------------ markers
