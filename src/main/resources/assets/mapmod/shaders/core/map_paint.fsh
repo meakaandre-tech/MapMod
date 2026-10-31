@@ -202,47 +202,55 @@ void main() {
     float shown = smoothstep(0.5, 0.9, explored);
 
     // land: the colours round the pixel, smooth where they agree; where they hold two, each side's mean, blended across
-    // a soft border where their weights cross. The split is along the colours' main axis (the farthest from the mean,
-    // refined twice against their spread), so it follows a border between any two colours, not only light and dark
+    // a soft border where their weights cross. The two sides are found by distance, not by sign along an axis, so the
+    // split never flips on rounding noise: seeded with the colour farthest from the mean and the one farthest from that,
+    // each texel goes to the nearer, twice. A colour that only just enters the 4x4 texels (weight near 0) is a side of
+    // its own with no say, so nothing jumps where it enters.
     // (no branch round this: fwidth below needs every pixel of the quad to run it)
     {
         mean /= max(landW, 1e-6);
-        vec3 axis = vec3(0.0);
-        float far = -1.0;
+        vec3 c1 = mean, c2 = mean;
+        float best = -1.0;
         for (int k = 0; k < 16; k++) {
             vec3 dv = cols[k] - mean;
             float q = wts[k] > 0.0 ? dot(dv, dv) : -1.0;
-            if (q > far) {
-                far = q;
-                axis = dv;
+            if (q > best) {
+                best = q;
+                c1 = cols[k];
             }
         }
-        for (int it = 0; it < 2; it++) {
-            vec3 next = vec3(0.0);
-            for (int k = 0; k < 16; k++) {
-                vec3 dv = cols[k] - mean;
-                next += wts[k] * dot(dv, axis) * dv;
-            }
-            axis = dot(next, next) > 1e-12 ? next : axis;
-        }
-        vec3 ca = vec3(0.0), cb = vec3(0.0);
-        float wa = 0.0, wb2 = 0.0;
+        best = -1.0;
         for (int k = 0; k < 16; k++) {
-            if (dot(cols[k] - mean, axis) > 0.0) {
-                ca += wts[k] * cols[k];
-                wa += wts[k];
-            } else {
-                cb += wts[k] * cols[k];
-                wb2 += wts[k];
+            vec3 dv = cols[k] - c1;
+            float q = wts[k] > 0.0 ? dot(dv, dv) : -1.0;
+            if (q > best) {
+                best = q;
+                c2 = cols[k];
             }
         }
-        ca = wa > 0.0 ? ca / wa : mean;
-        cb = wb2 > 0.0 ? cb / wb2 : mean;
+        float wa = 0.0, wb2 = 0.0;
+        for (int it = 0; it < 2; it++) {
+            vec3 ca = vec3(0.0), cb = vec3(0.0);
+            wa = 0.0;
+            wb2 = 0.0;
+            for (int k = 0; k < 16; k++) {
+                vec3 d1 = cols[k] - c1, d2 = cols[k] - c2;
+                if (dot(d1, d1) < dot(d2, d2)) {
+                    ca += wts[k] * cols[k];
+                    wa += wts[k];
+                } else {
+                    cb += wts[k] * cols[k];
+                    wb2 += wts[k];
+                }
+            }
+            c1 = wa > 0.0 ? ca / wa : c1;
+            c2 = wb2 > 0.0 ? cb / wb2 : c2;
+        }
         float share = wa / max(wa + wb2, 1e-6);
-        float soft = max(Edges.x, 1.5 * fwidth(share));
-        vec3 crisp = mix(cb, ca, smoothstep(0.5 - soft, 0.5 + soft, share));
+        float soft = max(Edges.x, min(1.5 * fwidth(share), 0.25));
+        vec3 crisp = mix(c2, c1, smoothstep(0.5 - soft, 0.5 + soft, share));
         // two colours only where they truly differ: a gentle gradient (a biome's tint) stays smooth
-        float split = smoothstep(0.03, 0.10, length(ca - cb));
+        float split = smoothstep(0.03, 0.10, length(c1 - c2));
         land = mix(mean, crisp, split);
     }
     if (landW <= 0.0) land = vec3(1.0);
