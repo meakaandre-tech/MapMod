@@ -444,8 +444,8 @@ public final class PaintMap {
             s.avgOps, s.lastMaxOps, UPLOADS_PER_FRAME, s.avgBakes, s.lastMaxBakes, s.uploads, s.bakes, s.mips, s.frames));
         if (p != null) {
             BakeCache c = p.cache;
-            lines.add(String.format(Locale.ROOT, "  baked tiles %d, mips %d, cache %.1f / %d MB, evicted %d; tiles known %d",
-                c.count(0), c.mips(), c.bytes() / 1048576.0, c.budget() / 1048576, c.evictions, p.index.size()));
+            lines.add(String.format(Locale.ROOT, "  baked tiles %d, mips %d, cache %.1f / %d MB, evicted %d; tiles known %d; children made from below, not paper %d",
+                c.count(0), c.mips(), c.bytes() / 1048576.0, c.budget() / 1048576, c.evictions, p.index.size(), c.emptySplitsAvoided));
             lines.add("  last frame: " + lastFrame() + ", textures " + p.textures() + "; pictures painted " + p.painted + ", shown again " + p.reused);
             long n = p.prepared();
             lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d",

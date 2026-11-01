@@ -23,11 +23,18 @@ import java.util.Optional;
  * from the whole subtree; only its quarters whose tiles changed since ({@link TileIndex#changedAt}) are out of date, so
  * only the changed tiles bake again. Each quarter keeps how many levels coarser than its cell its picture is (its
  * deficit) and when it was made; a cell shown on screen wants a deficit of 0, one used to make its parent may be a level
- * coarser. Render thread only.
+ * coarser.
+ * <p>
+ * MM-8d: a quarter only ever takes a child with real content (baked tiles, or a mip made from them). A quarter that
+ * was never copied in ({@link #EMPTY}) holds paper, so its missing child is made from below, never "made again" from
+ * that paper: that once marked paper clean, so explored land showed as paper rectangles at far zoom for good. Render
+ * thread only.
  */
 final class BakeCache implements AutoCloseable {
     static final int SIDE = SurfaceTile.BLOCKS;
     static final int LEVELS = TileIndex.LEVELS;
+    /** A mip quarter's {@code builtAt} while nothing has been copied into it: it holds paper, not a picture (MM-8d). */
+    static final long EMPTY = Long.MAX_VALUE;
 
     static final class Baked {
         final int level, x, z;
@@ -61,6 +68,11 @@ final class BakeCache implements AutoCloseable {
     private long frame;
     /** Counted since the cache was made. */
     long leafBakes, mipBuilds, evictions, splits;
+    /**
+     * MM-8d: times a missing child under a quarter that had never been copied in was made from its children instead of
+     * from the parent's paper (before MM-8d it was "made again" from that paper, counted clean, and the paper stayed).
+     */
+    long emptySplitsAvoided;
 
     BakeCache(TileIndex index, long budget) {
         this.index = index;
@@ -205,10 +217,13 @@ final class BakeCache implements AutoCloseable {
             if (c != null && usable(c, allowed + 1)) {
                 ready = true;
                 touch(c);
-            } else if (c == null && b != null && dirty && b.deficit[q] <= allowed && level - 1 >= 1) {
+            } else if (c == null && b != null && dirty && b.deficit[q] <= allowed && level - 1 >= 1 && b.builtAt[q] != EMPTY) {
                 // the child was evicted: made again from this cell's own picture of it, out of date only where it changed
                 jobs.split(level, x, z, q);
             } else {
+                // MM-8d: a quarter never copied in holds paper, not a picture of its child: the child is made from its
+                // own children (baked tiles, in the end), never from that paper
+                if (c == null && b != null && dirty && level - 1 >= 1 && b.builtAt[q] == EMPTY) emptySplitsAvoided++;
                 need(level - 1, cx, cz, allowed + 1, jobs);
             }
         }
@@ -240,7 +255,7 @@ final class BakeCache implements AutoCloseable {
         if (fresh) {
             b = add(level, x, z);
             b.dirty = occ;
-            Arrays.fill(b.builtAt, Long.MAX_VALUE);
+            Arrays.fill(b.builtAt, EMPTY);
         }
         // a quarter with no tile under it holds paper and nothing in it can change
         b.dirty &= occ;
@@ -275,7 +290,8 @@ final class BakeCache implements AutoCloseable {
     boolean split(MapGpu gpu, int level, int x, int z, int q) {
         Baked b = get(level, x, z);
         int cx = x * 2 + (q & 1), cz = z * 2 + (q >> 1);
-        if (b == null || level < 2 || get(level - 1, cx, cz) != null) return false;
+        // MM-8d: never from a quarter that holds paper, not a picture
+        if (b == null || level < 2 || get(level - 1, cx, cz) != null || b.builtAt[q] == EMPTY) return false;
         Baked c = add(level - 1, cx, cz);
         touch(b);
         touch(c);
