@@ -224,7 +224,8 @@ final class WaypointClientTests {
                 next();
             }
             case 9 -> {
-                if (ticks < 60) return;
+                // the toast shows for 2.5 s: looked at well within that
+                if (ticks < 30) return;
                 Component toast = MapToast.current();
                 check("while a mod locks the markers, B does nothing but say \"Map locked\" (in game and on the map)",
                     Waypoints.refused >= refusedAt + 2 && MapClient.markers.size() == markersAt && toast != null && toast.getString().equals("Map locked"),
@@ -236,7 +237,7 @@ final class WaypointClientTests {
                 next();
             }
             case 10 -> {
-                if (ticks < 60) return;
+                if (ticks < 30) return;
                 check("while a mod locks the map, B does nothing but say \"Map locked\"", Waypoints.refused >= refusedAt + 1 && MapClient.markers.size() == markersAt,
                     (Waypoints.refused - refusedAt) + " refused, " + (MapClient.markers.size() - markersAt) + " new markers");
                 MapLock.unlockAll(OWNER);

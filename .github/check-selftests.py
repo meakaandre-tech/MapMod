@@ -251,33 +251,41 @@ def fog_geometry(ci):
     return out
 
 
-def fog_edge(px, w, h, cx, cy, r0, r1):
+def chunk_aligned(px, w, h, x0, z0, ppb, skip):
     """
-    The land's edge round a point, per degree: how far out (pixels) a ray from it first meets three pixels of fog in a
-    row, from r0 to r1 pixels; None where it meets none.
+    Where the land meets the fog (MM-8c), how much of it lies on the chunk grid: along each pixel row and column, every
+    crossing between land and fog, at its world position; the share within a block of a chunk line (3 of every 16 blocks
+    for an edge that ignores the grid, nearly all for one along chunk staircases), and how many crossings there were.
+    Crossings within skip blocks of world 0, 0 (the patch's strips, sand among them) are left out.
     """
-    out = []
-    for deg in range(360):
-        a = math.radians(deg)
-        dx, dy = math.cos(a), math.sin(a)
-        found, run = None, 0
-        r = r0
-        while r <= r1:
-            x, y = int(round(cx + dx * r)), int(round(cy + dy * r))
-            if x < 285 or y < 40 or x >= w - 1 or y >= h - 30:
-                break
-            run = run + 1 if fogged(px[x, y]) else 0
-            if run == 3:
-                found = r - 2
-                break
-            r += 1
-        out.append(found)
-    return out
+    fog = [[fogged(px[x, y]) for x in range(w)] for y in range(h)]
+    near = total = 0
+    for y in range(40, h - 30):
+        wz = (y + 0.5 - z0) / ppb
+        for x in range(290, w - 2):
+            if fog[y][x] == fog[y][x + 1]:
+                continue
+            wx = (x + 1 - x0) / ppb
+            if abs(wx) <= skip and abs(wz) <= skip:
+                continue
+            total += 1
+            near += 1 if (wx % 16 <= 1 or wx % 16 >= 15) else 0
+    for x in range(290, w - 2):
+        wx = (x + 0.5 - x0) / ppb
+        for y in range(40, h - 31):
+            if fog[y][x] == fog[y + 1][x]:
+                continue
+            wz = (y + 1 - z0) / ppb
+            if abs(wx) <= skip and abs(wz) <= skip:
+                continue
+            total += 1
+            near += 1 if (wz % 16 <= 1 or wz % 16 >= 15) else 0
+    return (near / total if total else 1.0), total
 
 
 def fog(ci, Image, bad):
     """
-    The fog at three zooms (MM-8c): close up its edge runs round the land the player captured with no chunk steps; far
+    The fog at three zooms (MM-8c): close up its edge runs round the land the player captured off the chunk grid; far
     out (8 and 32 blocks a pixel) the land round the player and the 80-block patch far east of it are clearly visible,
     and the fog lies between them.
     """
@@ -305,29 +313,14 @@ def fog(ci, Image, bad):
                         shown += 0 if fogged(px[x, y]) else 1
             return shown, n
 
-        # the player's land: steps along its edge (a chunk is ppb * 16 pixels; the edge wanders smoothly with the warp)
-        if name in ("fog-near", "fog-mid"):
-            cx, cy = at(pwx + 0.5, pwz + 0.5)
-            r0, r1 = max(4, int(50 * ppb)), int(600 * ppb) + 8
-            edge = fog_edge(px, w, h, cx, cy, r0, r1)
-            found = [r for r in edge if r is not None]
-            if len(found) < 300:
-                print(f"{shot} ({name}): the land's edge round the player found on {len(found)} of 360 rays")
-                bad.append(f"the land's edge round the player could not be traced in {shot}")
-            else:
-                med = []
-                for i in range(360):
-                    win = [edge[(i + k) % 360] for k in (-1, 0, 1) if edge[(i + k) % 360] is not None]
-                    med.append(sorted(win)[len(win) // 2] if win else None)
-                jumps = [abs(med[i] - med[i - 1]) for i in range(360) if med[i] is not None and med[i - 1] is not None]
-                chunk = 16 * ppb
-                # a chunk step would jump a chunk; the warp moves the edge a pixel or two a degree at most
-                limit = max(2.5, min(0.4 * chunk, 0.08 * (sum(found) / len(found))))
-                ok = max(jumps) <= limit
-                print(f"{shot} ({name}): the land's edge round the player, {sum(found) / len(found):.0f} px out on average, moves "
-                      f"{max(jumps):.1f} px a degree at most (limit {limit:.1f}, a chunk is {chunk:.1f} px) {'ok' if ok else 'STEPPED'}")
-                if not ok:
-                    bad.append(f"the fog's edge round the player shows steps in {shot}")
+        # close up, the fog's edge round the player's land: no chunk steps (its crossings do not gather on chunk lines)
+        if name == "fog-near":
+            share, total = chunk_aligned(px, w, h, x0, z0, ppb, 48)
+            ok = total >= 200 and share <= 0.3
+            print(f"{shot} ({name}): {total} crossings between land and fog, {share:.2f} of them within a block of a chunk line "
+                  f"(0.19 for an edge that ignores the grid) {'ok' if ok else 'STEPPED'}")
+            if not ok:
+                bad.append(f"the fog's edge round the player shows chunk steps in {shot}")
         if name == "fog-near":
             continue
         shown, n = land_share(pwx + 0.5, pwz + 0.5, 1)

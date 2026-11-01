@@ -276,7 +276,8 @@ final class ColourClientTests {
                 int gui = state == 9 ? 3 : 4;
                 if (++waited == 1) {
                     if (!(mc.gui.screen() instanceof MapScreen)) open(3f);
-                    guiBefore = mc.options.guiScale().get();
+                    // the scale to go back to is the one before the first of the two (MM-8c: not 3)
+                    if (state == 9) guiBefore = mc.options.guiScale().get();
                     mc.options.guiScale().set(gui);
                     mc.resizeGui();
                 }
