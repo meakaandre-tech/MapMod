@@ -41,6 +41,7 @@ final class WaypointClientTests {
     private static int n0, px, py, pz, cursorX, cursorY, cursorZ;
     private static long refused0, toastsAt, framesAt;
     private static boolean openedLocked;
+    private static String cursorName = "";
     private static int markersAt;
     private static @Nullable String rejoinId, rejoinName;
     private static @Nullable String deletedId;
@@ -273,12 +274,14 @@ final class WaypointClientTests {
                     done();
                     return;
                 }
+                // the name it was given (the numbering goes on from the highest "Waypoint N" left, "Base camp" not counting)
+                cursorName = w.nameValue();
                 w.save();
                 check("saving it goes back to the map", mc.gui.screen() == screen, String.valueOf(mc.gui.screen()));
                 next();
             }
             case 11 -> {
-                MapMarker m = mine(mc, nameOf(n0 + 2));
+                MapMarker m = mine(mc, cursorName);
                 if (m == null && ticks < PATIENCE) return;
                 check("on the map it is placed where the mouse pointed, not where the player stands", m != null && m.x == cursorX && m.z == cursorZ && m.y == cursorY
                     && MapClient.pinned(m.pinKey()), m == null ? "none" : m.x + " " + m.y + " " + m.z + " for " + cursorX + " " + cursorY + " " + cursorZ);
