@@ -16,7 +16,7 @@ layout(std140) uniform MapQuad {
     vec4 Rect;
     vec4 Samples;
     vec4 Params;            // x: 0 copy, 1 copy and finish, 2 paper and finish  y: paper grain  z: vignette  w: share of Src2
-    vec4 View;              // xy: size of the target (pixels)  z: 1 with a fog mask
+    vec4 View;              // xy: size of the target (pixels)  z: 1 with a fog mask  w: the fog mask's sharpness
     vec4 Paper;             // rgb
     vec4 Samples2;
     vec4 MaskUv;
@@ -63,11 +63,13 @@ float clouds(vec2 ws) {
     return c;
 }
 
-// unexplored land fades into fog: its edge from the mask, roughened by the clouds, which also mottle the fog itself
+// unexplored land fades into fog: its edge from the mask, roughened by the clouds, which also mottle the fog itself. The
+// mask holds the signed distance to the edge's middle (0.5 there); View.w scales it to the edge's width at this zoom
+// (MM-8c), so the edge is a few pixels wide far out and about 48 blocks close up, as smooth either way
 vec3 fog(vec3 c, float mask) {
     float cl = clouds(world);
     float s = FogColour.a;
-    float shown = smoothstep(0.55, 0.95, mask + (cl - 0.5) * 0.3 * s);
+    float shown = smoothstep(0.0, 1.0, 0.5 + (mask - 0.5) * View.w + (cl - 0.5) * 0.75 * s);
     vec3 f = mix(FogColour.rgb, Paper.rgb, s * smoothstep(0.35, 0.75, cl));
     return mix(f, c, shown);
 }

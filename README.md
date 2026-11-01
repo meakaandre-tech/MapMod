@@ -7,7 +7,12 @@ A Satisfactory-style map for Fabric 26.3, for any modpack (working name; the rea
 - a **painted fullscreen map** (M): smooth shaded terrain at any zoom, no blocks and no pixels, unexplored land fading
   into soft, cloudy fog, with a **filter panel**, **pins**, **markers** (an icon, a colour and a name, private or shared
   with your group), **death markers** and the mob radar on top, and a switch per overlay layer in its top bar. There is
-  no minimap.
+  no minimap;
+- **waypoints** (B): one key drops a waypoint where you stand, in whatever dimension you are in ("Waypoint 1", "Waypoint
+  2"..., each in the next of a few colours, private), pinned to the compass strip at once and saved like any marker; on
+  the open map B drops one where the mouse points. Right click one on the map to rename it, change its colour, unpin or
+  remove it. A short note in the top right corner says "Waypoint added (Waypoint N)"; while a mod locks the map or its
+  markers, B does nothing but say "Map locked".
 
 Terrain is captured by the client itself (see below), so it works on any server and with any world generator. Only the
 Overworld's surface is mapped. Vanilla's locator bar is switched
@@ -19,8 +24,8 @@ own fog and keeps its own markers, death markers and pins, all of it open (there
 then, which only a server can supply), in `mapmod/server-<address>/` in the game folder.
 
 Saves: `data/mapmod/` in the world (`fog/`, `id.txt`, `markers.dat`, and `terrain/` for what mods' chunk hooks found;
-the server keeps no terrain of its own); client tiles, pins and settings: `mapmod/` in the game folder. Keys are under
-**Map** in the controls.
+the server keeps no terrain of its own); client tiles, pins and settings: `mapmod/` in the game folder. Keys (open the
+map, add a waypoint) are under **MapMod** in the controls.
 
 ## Surface capture and the painted map (client)
 
@@ -53,9 +58,15 @@ top bar and kept in `mapmod/settings.json` as `contours`), and a light paper gra
 
 Unexplored land fades into fog: what is shown is everything this client has captured, on any server and in any group
 (the group's fog of war gates POIs, never terrain), so nothing you have seen is fogged but for the soft rim of the
-fog's edge. It is blurred into a soft mask per cell off the render thread and wanders with the same world-space noise
-as region edges, so there are no chunk corners or straight runs at any zoom, with a static cloud texture in it. The fog
-goes on as the screen's pixels are written, never into the baked tiles. A change of zoom level cross-fades over about 150 ms; a drag let go while moving glides on briefly (any click
+fog's edge. The edge's width follows the zoom: about 48 blocks close up (`fog.edge` in the palette), shrinking to a few
+screen pixels far out. Close up it lies just inside the captured land, so the chunk staircase along its border stays
+under the fog, but moves out where the land is thin, so a fresh base or a small island always shows; far out, where a
+chunk is a pixel or two, it lies just outside the captured land, and a patch smaller than the masks' texels gets a
+small clearing round it, so captured land stays visible at every zoom. Each cell's mask holds the signed distance to
+the edge (worked out off the render thread from the captured land on a grid of chunks), so the edge is a smooth curve
+even where it is narrower than a texel, and wanders with the same world-space noise as region edges: no chunk steps or
+straight runs at any zoom, with a static cloud texture in it. The fog goes on as the screen's pixels are written, never
+into the baked tiles, so neither exploring nor zooming bakes anything. A change of zoom level cross-fades over about 150 ms; a drag let go while moving glides on briefly (any click
 stops it). Icons shrink as the map zooms out, and mobs of one kind (as mob faces), markers, pins and moving things
 (boats, vehicles) of one kind that would overlap are drawn once with a count. The top bar has a switch per overlay layer (players, markers, pins, POIs, mob radar), kept in
 `mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.

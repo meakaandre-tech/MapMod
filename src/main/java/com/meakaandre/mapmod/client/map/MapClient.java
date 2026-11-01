@@ -40,10 +40,12 @@ import java.util.Set;
 /**
  * The map on the client: what the server has sent (unlocks, fog, POIs, markers, the group's players, moving things),
  * what the player chose (pins and filters, kept in the game folder's {@code mapmod} folder) and the key: M opens the
- * map (changeable under "Map"). The terrain is the client's own surface capture, painted by {@code client.paint}.
+ * map and B places a waypoint ({@link Waypoints}; both changeable under "MapMod"). The terrain is the client's own surface
+ * capture, painted by {@code client.paint}.
  */
 public final class MapClient {
-    private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(MapMod.id("map"));
+    /** The map's keys in the controls, under MapMod. */
+    static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(MapMod.id("map"));
     public static final KeyMapping OPEN = new KeyMapping("key.mapmod.open", InputConstants.KEY_M, CATEGORY);
 
     public static @Nullable String mapId;
@@ -87,6 +89,7 @@ public final class MapClient {
 
     public static void register() {
         KeyMappingHelper.registerKeyMapping(OPEN);
+        Waypoints.register();
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Hello.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> hello(p.mapId(), p.sharedKey())));
         ClientPlayNetworking.registerGlobalReceiver(MapPayloads.Unlocks.TYPE, (p, c) -> Minecraft.getInstance().execute(() -> {
             unlocks = p.mask();
@@ -141,6 +144,15 @@ public final class MapClient {
         PINS.clear();
         SEEN.clear();
         firstMarkers = true;
+        Waypoints.clear();
+    }
+
+    /**
+     * For the selftests: what leaving the server does on the client (everything the server sent and the pins go; the
+     * pins are on disk), so a rejoin can be played by having the server send everything again, as on a join.
+     */
+    public static void leaveForTests() {
+        reset();
     }
 
     static void hello(String id, String shared) {
@@ -171,8 +183,11 @@ public final class MapClient {
         Minecraft mc = Minecraft.getInstance();
         String me = mc.player == null ? "" : mc.player.getUUID().toString();
         for (MapMarker m : list) {
+            boolean fresh = SEEN.add(m.id);
             // a death marker that is new since joining is pinned at once, so the way back shows on the compass
-            if (SEEN.add(m.id) && !firstMarkers && m.death && m.owner.equals(me)) pin(markerPin(m));
+            if (fresh && !firstMarkers && m.death && m.owner.equals(me)) pin(markerPin(m));
+            // and so is a waypoint the key placed (MM-8c), once it is back
+            else if (fresh && !m.death && m.owner.equals(me) && Waypoints.claim(m)) pin(markerPin(m));
         }
         firstMarkers = false;
         markers = list;
@@ -363,6 +378,7 @@ public final class MapClient {
         if (mc.player == null || mc.level == null) return;
         LocalMap.tick(mc);
         if (mc.gui.screen() == null) while (OPEN.consumeClick()) open();
+        Waypoints.tick(mc);
     }
 
     /** Opens the fullscreen map, if the player has it and is in the Overworld. */

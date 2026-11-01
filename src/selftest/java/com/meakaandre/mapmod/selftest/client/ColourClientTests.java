@@ -331,7 +331,7 @@ final class ColourClientTests {
     private static final java.util.List<net.minecraft.resources.Identifier> overlaysHidden = new java.util.ArrayList<>();
 
     /** Switches every map layer and overlay off (remembering which were on), or back on. */
-    private static void layers(boolean on) {
+    static void layers(boolean on) {
         if (!on) {
             for (com.meakaandre.mapmod.client.map.MapLayer l : com.meakaandre.mapmod.client.map.MapLayer.values()) {
                 if (MapClient.LAYERS_OFF.add(l)) layersHidden.add(l);
@@ -355,6 +355,8 @@ final class ColourClientTests {
         if (mcScreenOpen()) Minecraft.getInstance().gui.setScreen(null);
         MapMod.LOGGER.info("SELFTEST colours done: {} passed, {} failed", pass, fail);
         state = -1;
+        // MM-8c: the fog at three zooms follows
+        FogShotTests.start();
     }
 
     private static boolean mcScreenOpen() {
@@ -412,7 +414,8 @@ final class ColourClientTests {
         // the whole hint is shown (it wraps, but is never cut)
         int shown = 0;
         for (var line : bar.hint()) shown += mc.font.width(line);
-        return shown + 8 * bar.hint().size() >= mc.font.width(net.minecraft.network.chat.Component.translatable("mapmod.map.help"));
+        return shown + 8 * bar.hint().size() >= mc.font.width(net.minecraft.network.chat.Component.translatable("mapmod.map.help",
+            com.meakaandre.mapmod.client.map.Waypoints.ADD.getTranslatedKeyMessage()));
     }
 
     private static String describe(MapScreen.Bar bar) {

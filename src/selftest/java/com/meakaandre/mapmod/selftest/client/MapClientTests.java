@@ -231,6 +231,7 @@ public final class MapClientTests {
         glideWatch(mc);
         dimensionWatch(mc);
         ownFogWatch(mc);
+        WaypointClientTests.tick(mc);
         if (bakeCheck != null) {
             List<BakeCheck.Result> results = bakeCheck.step();
             if (results != null) {
@@ -661,6 +662,23 @@ public final class MapClientTests {
         MapMod.LOGGER.info("SELFTEST local {} markers are placed and changed on the client's own map", kept ? "PASS" : "FAIL");
         if (kept) pass++;
         else fail++;
+        // MM-8c: the waypoint key on the client's own map: placed where the player stands, pinned, saved with its dimension
+        int number = com.meakaandre.mapmod.client.map.Waypoints.next();
+        boolean placed2 = com.meakaandre.mapmod.client.map.Waypoints.atPlayer();
+        MapMarker wp = named(net.minecraft.network.chat.Component.translatable("mapmod.waypoint.name", Integer.toString(number)).getString());
+        String json = "";
+        try {
+            Path markersFile = mc.gameDirectory.toPath().resolve(MapMod.ID).resolve(MapClient.mapId == null ? "none" : MapClient.mapId).resolve("markers.json");
+            json = Files.readString(markersFile).replace(" ", "");
+        } catch (Exception e) {
+            json = e.toString();
+        }
+        boolean wpOk = placed2 && wp != null && wp.x == px && wp.z == pz && MapClient.pinned(wp.pinKey()) && wp.dimension.equals("minecraft:overworld")
+            && json.contains("\"name\":\"" + wp.name.replace(" ", "") + "\"") && json.contains("\"dimension\":\"minecraft:overworld\"");
+        MapMod.LOGGER.info("SELFTEST local {} B places a waypoint on the client's own map: where the player stands, pinned, saved with its dimension{}",
+            wpOk ? "PASS" : "FAIL", wp == null ? " (none)" : "");
+        if (wpOk) pass++;
+        else fail++;
         LocalMap.save();
         Path dir = mc.gameDirectory.toPath().resolve(MapMod.ID).resolve(MapClient.mapId == null ? "none" : MapClient.mapId);
         boolean saved = Files.exists(dir.resolve("fog.bin")) && Files.exists(dir.resolve("markers.json"));
@@ -1088,6 +1106,11 @@ public final class MapClientTests {
         }
         if (what.equals("fog")) {
             fogCheck = new FogCheck(SyntheticTiles::make);
+            return;
+        }
+        if (what.startsWith("waypoints")) {
+            // MM-8c: the waypoint key
+            WaypointClientTests.start(what.substring("waypoints".length()).trim());
             return;
         }
         if (what.equals("overlays")) {

@@ -35,9 +35,10 @@ import java.util.Set;
  * The fullscreen map (M), laid out like Satisfactory's: the filter panel down the left, the painted map
  * ({@link PaintMap}) filling the rest, with everything on it drawn over, and a button per overlay layer
  * ({@link MapLayer}) in the top bar. Drag to move (let go while moving and it glides on a moment, framerate-independent,
- * until any click), scroll to zoom round the mouse, C to centre on the player. Left click pins or unpins what is under the mouse (pins
- * show on the compass with their distance); right click on an empty spot places a marker there, and on one of your
- * markers (or a shared one of your group) changes or removes it. A marker gets an icon, a colour and a name, and is
+ * until any click), scroll to zoom round the mouse, C to centre on the player, and the waypoint key (B) drops a waypoint
+ * where the mouse points ({@link Waypoints}). Left click pins or unpins what is under the mouse (pins show on the compass
+ * with their distance); right click on an empty spot places a marker there, and on one of your markers (or a shared one
+ * of your group) renames it, changes its icon or colour, pins or unpins it, or removes it. A marker gets an icon, a colour and a name, and is
  * private or shared with the group. Mods' overlay layers ({@link MapOverlay}) draw over the painted map, each with a
  * button in the top bar after the map's own; while a mod locks the map ({@link MapLock}) it shows a locked panel instead.
  */
@@ -82,6 +83,8 @@ public class MapScreen extends Screen {
     private double dragVx, dragVz, glideVx, glideVz;
     private long lastDragNanos;
     private @Nullable Hover hover;
+    /** Where the mouse was last drawn at (GUI pixels): where the waypoint key drops a waypoint. */
+    private double mouseX = -1, mouseY = -1;
 
     // the marker form
     private boolean editing;
@@ -89,7 +92,9 @@ public class MapScreen extends Screen {
     private int editX, editY, editZ, editIcon, editColour;
     private boolean editShared;
     private @Nullable EditBox nameBox;
-    private @Nullable Button privacyButton;
+    private @Nullable Button privacyButton, pinButton;
+    /** What the form's pin button does (null: no such button). */
+    private @Nullable Runnable pinAction;
 
     /** What is under the mouse. */
     private record Hover(List<Component> lines, MapClient.@Nullable Pin pin, @Nullable MapMarker marker) {
@@ -286,7 +291,7 @@ public class MapScreen extends Screen {
         }
         if (!inFoot) boxes.add(new Box("coordinates", coordsX, cw));
         int hintWidth = Math.max(40, width - 12 - (inFoot ? cw + 12 : 0));
-        List<net.minecraft.util.FormattedCharSequence> lines = font.split(Component.translatable("mapmod.map.help"), hintWidth);
+        List<net.minecraft.util.FormattedCharSequence> lines = font.split(Component.translatable("mapmod.map.help", Waypoints.ADD.getTranslatedKeyMessage()), hintWidth);
         if (lines.size() > HINT_LINES) lines = lines.subList(0, HINT_LINES);
         int foot = Math.max(FOOT, 4 + HINT_LINE * Math.max(1, lines.size()));
         return new Bar(boxes, coordsX, inFoot, lines, foot, hintWidth);
@@ -294,6 +299,8 @@ public class MapScreen extends Screen {
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+        this.mouseX = mouseX;
+        this.mouseY = mouseY;
         hover = editing || MapLock.mapLocked() ? null : findHover(mouseX, mouseY);
         if (editing) formBack(g);
         super.extractRenderState(g, mouseX, mouseY, partialTick);
@@ -308,6 +315,8 @@ public class MapScreen extends Screen {
                     .withColor(0x8A949E)), mouseX, mouseY);
             }
         }
+        // a note ("Waypoint added") over the map, as the HUD shows it in game
+        MapToast.draw(g, width);
     }
 
     // ------------------------------------------------------------------------------------------------ locked, overlays
@@ -656,15 +665,26 @@ public class MapScreen extends Screen {
             return true;
         }
         if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
-            if (h != null && h.marker != null) {
-                editMarker(h.marker);
-            } else if (h == null) {
-                MapDraw.View v = view();
-                newMarker((int) Math.floor(v.wx(mx)), (int) Math.floor(v.wz(my)));
-            }
+            rightClick(mx, my);
             return true;
         }
         return false;
+    }
+
+    /**
+     * A right click on the map: on one of your markers (or a shared one of your group) opens the form to change it, on an
+     * empty spot the form for a new marker there (also used by the selftests). Returns whether a form opened.
+     */
+    public boolean rightClick(double mx, double my) {
+        if (editing || MapLock.mapLocked() || !inMap(mx, my)) return false;
+        Hover h = findHover((int) mx, (int) my);
+        if (h != null && h.marker != null) {
+            editMarker(h.marker);
+        } else if (h == null) {
+            MapDraw.View v = view();
+            newMarker((int) Math.floor(v.wx(mx)), (int) Math.floor(v.wz(my)));
+        }
+        return editing;
     }
 
     @Override
@@ -729,6 +749,11 @@ public class MapScreen extends Screen {
             onClose();
             return true;
         }
+        if (Waypoints.ADD.matches(event)) {
+            pressed();
+            addWaypointAt(mouseX, mouseY);
+            return true;
+        }
         if (event.key() == InputConstants.KEY_C) {
             Minecraft mc = Minecraft.getInstance();
             pressed();
@@ -739,6 +764,20 @@ public class MapScreen extends Screen {
             return true;
         }
         return super.keyPressed(event);
+    }
+
+    /**
+     * The waypoint key on the map: a waypoint where the mouse points on it (at the ground's height there, where the map
+     * knows it), else where the player stands. Returns whether one was placed (also used by the selftests).
+     */
+    public boolean addWaypointAt(double mx, double my) {
+        if (!MapLock.mapLocked() && inMap(mx, my)) {
+            MapDraw.View v = view();
+            int x = (int) Math.floor(v.wx(mx)), z = (int) Math.floor(v.wz(my));
+            Integer h = PaintMap.height(x, z);
+            return Waypoints.add(x, h == null ? DEFAULT_MARKER_Y : h + 1, z, Level.OVERWORLD.identifier().toString());
+        }
+        return Waypoints.atPlayer();
     }
 
     // ------------------------------------------------------------------------------------------------ the marker form
@@ -795,18 +834,34 @@ public class MapScreen extends Screen {
         addRenderableWidget(nameBox);
         setInitialFocus(nameBox);
         boolean death = editingMarker != null && editingMarker.death;
+        // an existing marker's form also pins or unpins it (MM-8c), next to its privacy
+        MapMarker pinnable = editingMarker;
+        int privacyW = pinnable == null ? FORM_W - 16 : (FORM_W - 16 - 4) / 2;
         privacyButton = Button.builder(privacyText(), b -> {
             editShared = !editShared;
             b.setMessage(privacyText());
-        }).bounds(l + 8, t + 84, FORM_W - 16, 16).build();
+        }).bounds(l + 8, t + 84, privacyW, 16).build();
         privacyButton.active = !death;
         addRenderableWidget(privacyButton);
+        if (pinnable != null) {
+            Runnable act = () -> {
+                MapClient.togglePin(MapClient.markerPin(pinnable));
+                if (pinButton != null) pinButton.setMessage(pinText(pinnable));
+            };
+            pinAction = act;
+            pinButton = Button.builder(pinText(pinnable), b -> act.run()).bounds(l + 12 + privacyW, t + 84, FORM_W - 16 - 4 - privacyW, 16).build();
+            addRenderableWidget(pinButton);
+        }
         int bw = (FORM_W - 16 - 8) / 3;
         addRenderableWidget(Button.builder(Component.translatable("mapmod.map.save"), b -> save()).bounds(l + 8, t + 106, bw, 18).build());
         Button delete = Button.builder(Component.translatable("mapmod.map.delete"), b -> delete()).bounds(l + 12 + bw, t + 106, bw, 18).build();
         delete.active = editingMarker != null;
         addRenderableWidget(delete);
         addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), b -> closeForm()).bounds(l + 16 + 2 * bw, t + 106, bw, 18).build());
+    }
+
+    private static Component pinText(MapMarker m) {
+        return Component.translatable(MapClient.pinned(m.pinKey()) ? "mapmod.map.unpin" : "mapmod.map.pin");
     }
 
     private Component privacyText() {
@@ -880,6 +935,48 @@ public class MapScreen extends Screen {
         editingMarker = null;
         nameBox = null;
         privacyButton = null;
+        pinButton = null;
+        pinAction = null;
         rebuildWidgets();
+    }
+
+    // the form as the selftests use it (the same steps its fields and buttons take)
+
+    /** The marker the open form changes (null: a new one, or no form open). */
+    public @Nullable MapMarker formMarker() {
+        return editing ? editingMarker : null;
+    }
+
+    /** True while the marker form is open. */
+    public boolean formOpen() {
+        return editing;
+    }
+
+    /** Types a name into the open form. */
+    public void formName(String name) {
+        if (nameBox != null) nameBox.setValue(name);
+    }
+
+    /** Picks a colour in the open form (of {@link MapMarker#COLOURS}). */
+    public void formColour(int colour) {
+        editColour = Math.floorMod(colour, MapMarker.COLOURS.length);
+    }
+
+    /** Presses the open form's pin button (an existing marker's only); returns whether there was one. */
+    public boolean formTogglePin() {
+        Runnable a = pinAction;
+        if (a == null) return false;
+        a.run();
+        return true;
+    }
+
+    /** Presses the open form's save button. */
+    public void formSave() {
+        if (editing) save();
+    }
+
+    /** Presses the open form's remove button. */
+    public void formDelete() {
+        if (editing && editingMarker != null) delete();
     }
 }

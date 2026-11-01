@@ -216,12 +216,59 @@ public final class FogCheck implements AutoCloseable {
         int worst = 0;
         for (int z = 0; z < FogMasks.SIZE; z++) worst = Math.max(worst, Math.abs((m[FogMasks.SIZE - 1 + z * FogMasks.SIZE] & 0xFF) - (east[1 + z * FogMasks.SIZE] & 0xFF)));
         expect("two cells' masks meet exactly", worst <= 1, "largest difference " + worst);
+        // MM-8c: the edge's width follows the zoom, about 48 blocks close up and a few pixels far out; captured land shows
+        // at every level, a small patch too, and the edge stays smooth (no steps where the land steps in chunks)
+        double near = edgePixels(0, cov, bits, edge), far = edgePixels(4, cov, bits, edge);
+        expect("the fog's edge is about the palette's width close up and a few pixels far out", near >= 20 && far > 0 && far <= 2 * FogEdge.MIN_PX,
+            String.format(java.util.Locale.ROOT, "%.1f px at a pixel a block (%.0f blocks), %.1f px at 16 blocks a pixel", near, near, far));
+        Long2ObjectOpenHashMap<long[]> patch = new Long2ObjectOpenHashMap<>();
+        for (long k : bits.keySet()) patch.put(k, new long[MapGrid.FOG_LONGS]);
+        // an 80-block patch, 5 chunks square (blocks 160 to 239), alone
+        long[] small = patch.get(TileIndex.key(0, 0));
+        for (int cz = 10; cz < 15; cz++) for (int cx = 10; cx < 15; cx++) MapGrid.set(small, MapGrid.fogBit(cx, cz));
+        StringBuilder lv = new StringBuilder();
+        boolean patchShows = true, borderShows = true;
+        for (int level = 0; level <= 6; level++) {
+            double mid = shown(TilePrep.fogMask(level, 0, 0, edge, cov, patch), level, edge, 200, 200);
+            double square = level >= FogEdge.FAR_LEVEL ? shown(TilePrep.fogMask(level, 0, 0, edge, cov, bits), level, edge, 130, 256) : 1;
+            patchShows &= mid >= 1;
+            borderShows &= square >= 1;
+            lv.append(String.format(java.util.Locale.ROOT, " L%d %.2f/%.2f", level, mid, square));
+        }
+        expect("an 80-block patch shows in full at every zoom, and far out the explored land right to its border", patchShows && borderShows,
+            "patch middle / the square's border, 1 and over shows:" + lv);
         // captured but not explored by the group, and explored but not captured: both fog
         Long2ObjectOpenHashMap<long[]> none = new Long2ObjectOpenHashMap<>();
         for (long k : cov.keySet()) none.put(k, new long[SurfaceTile.AREA / 64]);
         byte[] uncaptured = TilePrep.fogMask(0, 0, 0, edge, none, bits);
         expect("land the group explored but the client never captured stays under the fog", (uncaptured[33 + 33 * FogMasks.SIZE] & 0xFF) == 0,
             Integer.toString(uncaptured[33 + 33 * FogMasks.SIZE] & 0xFF));
+    }
+
+    /** A level's mask (of cell 0, 0) read at a block as the screen's fog reads it: 0 or under fogged, 1 or over shown, before the clouds. */
+    private static double shown(byte[] m, int level, float edge, double bx, double bz) {
+        double x = bx / TilePrep.maskTexel(level) + 0.5, z = bz / TilePrep.maskTexel(level) + 0.5;
+        int ix = (int) Math.floor(x), iz = (int) Math.floor(z);
+        double fx = x - ix, fz = z - iz;
+        int s = FogMasks.SIZE;
+        double a = m[ix + iz * s] & 0xFF, b = m[ix + 1 + iz * s] & 0xFF, c = m[ix + (iz + 1) * s] & 0xFF, d = m[ix + 1 + (iz + 1) * s] & 0xFF;
+        double v = ((a + (b - a) * fx) * (1 - fz) + (c + (d - c) * fx) * fz) / 255;
+        return 0.5 + (v - 0.5) * TilePrep.maskParams(level, edge).sharp();
+    }
+
+    /** The width (screen pixels at the level's 2^level blocks a pixel) over which the square's west edge goes from fogged to shown, along its middle. */
+    private static double edgePixels(int level, Long2ObjectOpenHashMap<long[]> cov, Long2ObjectOpenHashMap<long[]> bits, float edge) {
+        byte[] m = TilePrep.fogMask(level, 0, 0, edge, cov, bits);
+        double x0 = -1, x1 = -1;
+        for (double bx = 0; bx <= 256; bx += 0.25) {
+            double u = shown(m, level, edge, bx, 256);
+            if (x0 < 0 && u > 0) x0 = bx;
+            if (x1 < 0 && u >= 1) {
+                x1 = bx;
+                break;
+            }
+        }
+        return x0 < 0 || x1 < 0 ? -1 : (x1 - x0) / (1 << level);
     }
 
     /** A level-0 mask read bilinearly at a block position in its cell, 0 to 255. */

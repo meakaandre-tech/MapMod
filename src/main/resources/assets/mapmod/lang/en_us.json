@@ -1,16 +1,17 @@
 {
-  "key.category.mapmod.map": "Map",
+  "key.category.mapmod.map": "MapMod",
   "key.mapmod.open": "Open the map",
+  "key.mapmod.waypoint": "Add waypoint",
   "mapmod.map.title": "Map",
   "mapmod.map.filters": "Filters",
   "mapmod.map.filter.players": "Players",
   "mapmod.map.filter.markers": "Map markers",
   "mapmod.map.filter.placed": "Placed markers",
   "mapmod.map.filter.deaths": "Death markers",
-  "mapmod.map.help": "Drag: move · Scroll: zoom · C: centre · Left click: pin · Right click: marker",
+  "mapmod.map.help": "Drag: move · Scroll: zoom · C: centre · %s: waypoint · Left click: pin · Right click: marker",
   "mapmod.map.click_pin": "Left click: pin to the compass",
   "mapmod.map.click_unpin": "Left click: unpin",
-  "mapmod.map.click_edit": "Right click: change or remove",
+  "mapmod.map.click_edit": "Right click: rename, colour, unpin or remove",
   "mapmod.map.marker": "Marker",
   "mapmod.map.death_marker": "Where you died",
   "mapmod.map.new_marker": "New marker",
@@ -41,5 +42,10 @@
   "mapmod.map.layer.mobs": "Mob radar",
   "mapmod.map.layer_on": "Shown: click to hide",
   "mapmod.map.layer_off": "Hidden: click to show",
-  "mapmod.map.locked_title": "Map locked"
+  "mapmod.map.locked_title": "Map locked",
+  "mapmod.map.pin": "Pin",
+  "mapmod.map.unpin": "Unpin",
+  "mapmod.waypoint.name": "Waypoint %s",
+  "mapmod.waypoint.added": "Waypoint added (%s)",
+  "mapmod.waypoint.not_yet": "The map isn't ready yet"
 }

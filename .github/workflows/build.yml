@@ -249,6 +249,12 @@ jobs:
                   waitfor 600 "SELFTEST colours shot gui3" run/logs/latest.log && lshot
                   waitfor 120 "SELFTEST colours shot gui4" run/logs/latest.log && lshot
                   waitfor 120 "SELFTEST colours done" run/logs/latest.log
+                  # MM-8c: the fog close up round the player, then far out over the player's land and an 80-block patch
+                  # far east of it (8 and 32 blocks a pixel)
+                  waitfor 600 "SELFTEST fogshots shot fog-near" run/logs/latest.log && lshot
+                  waitfor 600 "SELFTEST fogshots shot fog-mid" run/logs/latest.log && lshot
+                  waitfor 600 "SELFTEST fogshots shot fog-far" run/logs/latest.log && lshot
+                  waitfor 300 "SELFTEST fogshots done" run/logs/latest.log
                 fi
                 pkill -f KnotClient; sleep 5
                 tail -c 200000 client-local-gradle.log > /tmp/ci/client-local-gradle.log

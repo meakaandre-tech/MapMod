@@ -47,7 +47,7 @@ layout(std140) uniform MapTile {
     vec4 Origin;            // xy: world position of texel (0, 0) in noise units (4 blocks), wrapped to PERIOD  z: noise units a texel
     vec4 View;              // xy: picture size (pixels)  z: 1 on screen (fog, grain and vignette)  w: 1 with contours on
     vec4 MaskUv;
-    vec4 Mask;              // x: 1 with a fog mask
+    vec4 Mask;              // x: 1 with a fog mask  y: its sharpness (MM-8c)
 };
 
 layout(location = 0) in vec2 samplePos;   // in texels of this tile's textures: texel i's centre is at i
@@ -134,7 +134,7 @@ float clouds(vec2 ws) {
 vec3 fog(vec3 c, float mask, vec2 ws) {
     float cl = clouds(ws);
     float s = FogColour.a;
-    float shown = smoothstep(0.55, 0.95, mask + (cl - 0.5) * 0.3 * s);
+    float shown = smoothstep(0.0, 1.0, 0.5 + (mask - 0.5) * Mask.y + (cl - 0.5) * 0.75 * s);
     vec3 f = mix(FogColour.rgb, Paper.rgb, s * smoothstep(0.35, 0.75, cl));
     return mix(f, c, shown);
 }
