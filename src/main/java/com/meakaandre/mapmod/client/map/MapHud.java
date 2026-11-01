@@ -52,6 +52,7 @@ public final class MapHud {
 
     public static void register() {
         HudElementRegistry.addLast(MapMod.id("compass"), MapHud::compass);
+        HudElementRegistry.addLast(MapMod.id("toast"), (g, delta) -> MapToast.draw(g, g.guiWidth()));
         HudElementRegistry.replaceElement(VanillaHudElements.BOSS_BAR, vanilla -> (g, delta) -> shifted(g, delta, vanilla, BAND + 12));
     }
 
@@ -169,6 +170,7 @@ public final class MapHud {
             }
         }
         marks.sort((a, b) -> Boolean.compare(a.pinned, b.pinned));
+        List<String> pinKeys = new ArrayList<>();
         int iy = TOP + BAND / 2;
         // the distance labels under the strip: one too close to another (markers at nearly the same bearing) goes down a
         // row, so they never run into each other; the bearing under the middle keeps its place
@@ -187,6 +189,7 @@ public final class MapHud {
             switch (mark.kind) {
                 case 0 -> {
                     MapClient.Pin pin = (MapClient.Pin) mark.what;
+                    pinKeys.add(pin.key());
                     MapIcons.centred(g, MapGlyphs.DISC, x, iy, 0xC0101418);
                     MapIcons.centred(g, pin.icon(), x, iy, pin.argb());
                     String label = MapDraw.distance(mark.distance);
@@ -202,6 +205,8 @@ public final class MapHud {
                 }
             }
         }
+        lastPins = List.copyOf(pinKeys);
+        compassFrames++;
         // the middle, and the bearing under it
         g.fill(cx, TOP - 1, cx + 1, TOP + BAND + 1, 0xFFFFA530);
         small(g, bearingText, cx + 1, TOP + BAND + 2, 0xFFFFA530);
@@ -241,6 +246,10 @@ public final class MapHud {
         }
         return out;
     }
+
+    /** The pins the compass strip drew last, by key, and the frames it has drawn (for the selftests). */
+    public static volatile List<String> lastPins = List.of();
+    public static long compassFrames;
 
     /** Mods' markers drawn on the fullscreen map since the game started (for the selftests). */
     public static long apiMarkersDrawn;

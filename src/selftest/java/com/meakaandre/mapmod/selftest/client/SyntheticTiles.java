@@ -83,6 +83,26 @@ final class SyntheticTiles {
     }
 
     /**
+     * MM-8c: writes one made-up tile with only a square of it explored ({@code size} blocks from block {@code x0, z0}, a
+     * fresh base or a small island far from anything else), for the fog's far-zoom check. Returns the file.
+     */
+    static Path writePatch(Path dir, int tx, int tz, int x0, int z0, int size) throws IOException {
+        Files.createDirectories(dir);
+        SurfaceTile t = make(tx, tz);
+        for (int sz = 0; sz < SurfaceTile.SIDE; sz++) {
+            for (int sx = 0; sx < SurfaceTile.SIDE; sx++) {
+                int bx = tx * SurfaceTile.BLOCKS + sx * SurfaceTile.SPACING, bz = tz * SurfaceTile.BLOCKS + sz * SurfaceTile.SPACING;
+                if (bx >= x0 && bx < x0 + size && bz >= z0 && bz < z0 + size) continue;
+                int i = SurfaceTile.index(sx, sz);
+                t.explored[i >>> 6] &= ~(1L << i);
+            }
+        }
+        Path f = dir.resolve(tx + "_" + tz + ".mmt");
+        Files.write(f, t.pack());
+        return f;
+    }
+
+    /**
      * Writes made-up tiles in a square ring round a tile: within {@code outer} tiles of it but beyond {@code inner}, so
      * the ground the player really explored stays as captured. Returns how many were written.
      */

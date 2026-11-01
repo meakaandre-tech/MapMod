@@ -123,6 +123,7 @@ public final class MapTests {
                         .then(Commands.argument("marker", StringArgumentType.greedyString())
                             .executes(context -> control(context, Action.OPEN, StringArgumentType.getString(context, "marker"), FloatArgumentType.getFloat(context, "zoom"))))))
                     .then(Commands.literal("close").executes(context -> control(context, Action.CLOSE, "", 0)))
+                    .then(Commands.literal("resync").executes(MapTests::resync))
                     .then(Commands.literal("edit").executes(context -> control(context, Action.EDIT, "", 0)))
                     .then(Commands.literal("check").then(Commands.argument("what", StringArgumentType.greedyString())
                         .executes(context -> control(context, Action.CHECK, StringArgumentType.getString(context, "what"), 0))))
@@ -389,6 +390,16 @@ public final class MapTests {
         return n;
     }
 
+    /**
+     * MM-8c: sends every online player's client everything again, as their join did: the second half of a rejoin, after
+     * the client let go of what it held as it does on leaving (the waypoint check).
+     */
+    private static int resync(CommandContext<CommandSourceStack> context) {
+        for (ServerPlayer player : context.getSource().getServer().getPlayerList().getPlayers()) MapServer.sync(player);
+        MapMod.LOGGER.info("SELFTEST smoke resync sent.");
+        return 1;
+    }
+
     // ------------------------------------------------------------------------------------------------ after a restart
 
     private static int restart(CommandContext<CommandSourceStack> context) {
@@ -402,6 +413,11 @@ public final class MapTests {
             RESTART.expect(source, "a group's fog loads again", MapModApi.explored(A, X >> 4, Z >> 4) && MapModApi.explored(B, (X + 4000) >> 4, Z >> 4), "");
             RESTART.expect(source, "what the chunk hook found loads again", MapModApi.foundIn(region, B).stream().anyMatch(p -> p.kind().equals(TestPois.BEACON.key())), "");
             RESTART.expect(source, "markers load again", MapMarkers.get(server).all().stream().anyMatch(m -> m.name.equals("Restart check") && m.shared && m.group.equals(A)), "");
+            // MM-8c: the smoke run's player placed waypoints with the key, in the Overworld and in the Nether
+            RESTART.expect(source, "waypoints placed with the key load again, each in its own dimension",
+                MapMarkers.get(server).all().stream().anyMatch(m -> m.name.startsWith("Waypoint ") && m.dimension.equals("minecraft:overworld") && !m.shared)
+                    && MapMarkers.get(server).all().stream().anyMatch(m -> m.name.startsWith("Waypoint ") && m.dimension.equals("minecraft:the_nether")),
+                MapMarkers.get(server).all().stream().filter(m -> m.name.startsWith("Waypoint ")).map(m -> m.name + " in " + m.dimension).toList().toString());
             RESTART.expect(source, "still no server terrain after a restart", terrainFiles().isEmpty(), terrainFiles().toString());
             RESTART.expect(source, "the map saves under data/mapmod in the world", Files.isDirectory(server.getWorldPath(net.minecraft.world.level.storage.LevelResource.DATA).resolve(MapMod.ID).resolve("terrain"))
                 && Files.isDirectory(server.getWorldPath(net.minecraft.world.level.storage.LevelResource.DATA).resolve(MapMod.ID).resolve("fog")), "");

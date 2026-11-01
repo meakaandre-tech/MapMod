@@ -10,5 +10,6 @@ public final class SelfTestsClient implements ClientModInitializer {
         MapClientTests.register();
         ReadyClientTests.register();
         ColourClientTests.register();
+        FogShotTests.register();
     }
 }

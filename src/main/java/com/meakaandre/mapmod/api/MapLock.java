@@ -23,7 +23,8 @@ import java.util.Set;
  * no terrain, no layers, no markers. The compass strip stays; lock layers too to keep their things off it.</li>
  * <li>A locked <b>layer</b> is hidden on the fullscreen map and on the compass strip, its switch leaves the top bar,
  * and the player's own setting for it is kept for when it unlocks. Layers are {@link #CONTOURS} (the painted map's
- * contour lines), {@link #PLAYERS}, {@link #MARKERS} (placed and death markers, and {@link MapMarkers}' markers),
+ * contour lines), {@link #PLAYERS}, {@link #MARKERS} (placed and death markers, waypoints, and {@link MapMarkers}'
+ * markers; while it is locked the waypoint key places none, as while the map is),
  * {@link #PINS}, {@link #POIS} (POIs and moving things) and {@link #MOB_RADAR}, and each {@link MapOverlay} by its
  * id.</li>
  * </ul>

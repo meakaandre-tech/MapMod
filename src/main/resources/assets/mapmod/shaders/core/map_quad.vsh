@@ -10,7 +10,7 @@ layout(std140) uniform MapQuad {
     vec4 Rect;      // x0, y0, x1, y1
     vec4 Samples;   // u0, v0, u1, v1
     vec4 Params;    // x: 0 copy, 1 copy and finish, 2 paper and finish  y: paper grain  z: vignette  w: share of Src2
-    vec4 View;      // xy: size of the target (pixels)  z: 1 with a fog mask
+    vec4 View;      // xy: size of the target (pixels)  z: 1 with a fog mask  w: the fog mask's sharpness
     vec4 Paper;     // rgb
     vec4 Samples2;  // Src2's u0, v0, u1, v1
     vec4 MaskUv;    // the fog mask's u0, v0, u1, v1

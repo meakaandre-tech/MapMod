@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * The fog over unexplored land (MM-5): one small mask per cell of the mip grid that is drawn ({@link TilePrep#fogMask},
  * worked out off the render thread), applied as the screen's pixels are written and never baked, so exploring changes a
- * mask and no bake. A mask is made from the explored samples of the tiles round its cell (kept here from the data the
+ * mask and no bake, and neither does zooming: each level's masks carry that level's edge (MM-8c, {@link FogEdge}). A mask is made from the explored samples of the tiles round its cell (kept here from the data the
  * tiles were last prepared from, so a fog change needs no tile data) and the group's fog bits of their regions. Each
  * mask counts the changes that reach it and remembers which count its texture shows; a cell whose mask is behind is
  * made again (two at a time), and until then the old one, or a coarser level's, is drawn. Render thread only.
@@ -35,8 +35,11 @@ final class FogMasks implements AutoCloseable {
         long @Nullable [] bits(long region);
     }
 
-    /** A mask and its texture coordinates at the corners of a rectangle (v down, as the mask's rows). */
-    record Uv(GpuTextureView view, float u0, float v0, float u1, float v1) {
+    /**
+     * A mask and its texture coordinates at the corners of a rectangle (v down, as the mask's rows), and what the shader
+     * multiplies its distance by ({@link FogEdge.Params#sharp}: the edge's width differs by level, MM-8c).
+     */
+    record Uv(GpuTextureView view, float u0, float v0, float u1, float v1, float sharp) {
     }
 
     private static final class Mask {
@@ -69,6 +72,8 @@ final class FogMasks implements AutoCloseable {
     private int busy;
     private long frame;
     private float edge = PaintPalette.DEFAULT.fogEdge();
+    /** Each level's {@link FogEdge.Params#sharp} for the edge width now. */
+    private final float[] sharp = new float[TileIndex.LEVELS];
     /** Bumped whenever a mask's texture changes: a picture painted before is out of date. */
     long version;
     /** Counted since made. */
@@ -81,12 +86,18 @@ final class FogMasks implements AutoCloseable {
         this.fog = fog;
         this.prep = prep;
         for (int k = 0; k < levels.length; k++) levels[k] = new Long2ObjectOpenHashMap<>();
+        sharpen();
+    }
+
+    private void sharpen() {
+        for (int k = 0; k < sharp.length; k++) sharp[k] = TilePrep.maskParams(k, edge).sharp();
     }
 
     /** The palette's edge width (blocks): every mask is made again when it changes. */
     void edge(float e) {
         if (e == edge) return;
         edge = e;
+        sharpen();
         reset();
     }
 
@@ -217,7 +228,7 @@ final class FogMasks implements AutoCloseable {
             m.used = frame;
             double t = TilePrep.maskTexel(lv), ox = (double) (x >> s) * ((long) BakeCache.SIDE << lv), oz = (double) (z >> s) * ((long) BakeCache.SIDE << lv);
             return new Uv(m.tex.getTextureView(), (float) (((wx0 - ox) / t + 1) / SIZE), (float) (((wz0 - oz) / t + 1) / SIZE),
-                (float) (((wx1 - ox) / t + 1) / SIZE), (float) (((wz1 - oz) / t + 1) / SIZE));
+                (float) (((wx1 - ox) / t + 1) / SIZE), (float) (((wz1 - oz) / t + 1) / SIZE), sharp[lv]);
         }
         return null;
     }
@@ -251,24 +262,35 @@ final class FogMasks implements AutoCloseable {
 
     /** For the selftests: the level-0 mask at a block, made now on this thread from what is held, 0 to 1 (-1: nothing held there). */
     float valueAt(int x, int z, float e) {
+        return valueAt(0, x, z, e);
+    }
+
+    /**
+     * For the selftests: a level's mask at a block, made now on this thread from what is held, on the old scale (0.55
+     * where the fog starts to clear, 0.95 and over where the land shows in full, before the clouds; -1: nothing held there).
+     */
+    float valueAt(int level, int x, int z, float e) {
         int tx = Math.floorDiv(x, BakeCache.SIDE), tz = Math.floorDiv(z, BakeCache.SIDE);
         if (!coverage.containsKey(TileIndex.key(tx, tz))) return -1;
+        long cellBlocks = (long) BakeCache.SIDE << level;
+        int cx = (int) Math.floorDiv(x, cellBlocks), cz = (int) Math.floorDiv(z, cellBlocks);
         Long2ObjectOpenHashMap<long[]> cov = new Long2ObjectOpenHashMap<>(), bits = new Long2ObjectOpenHashMap<>();
-        int m = TilePrep.maskMarginTiles(0, e);
-        for (int dz = -m; dz <= m; dz++) {
-            for (int dx = -m; dx <= m; dx++) {
-                long k = TileIndex.key(tx + dx, tz + dz);
+        int m = TilePrep.maskMarginTiles(level, e);
+        for (int dz = (cz << level) - m; dz <= ((cz + 1) << level) - 1 + m; dz++) {
+            for (int dx = (cx << level) - m; dx <= ((cx + 1) << level) - 1 + m; dx++) {
+                long k = TileIndex.key(dx, dz);
                 long[] c = coverage.get(k);
                 if (c != null) take(k, c, cov, bits);
             }
         }
-        byte[] texels = TilePrep.fogMask(0, tx, tz, e, cov, bits);
-        int t = TilePrep.maskTexel(0);
-        double fx = Math.floorMod(x, BakeCache.SIDE) / (double) t + 0.5, fz = Math.floorMod(z, BakeCache.SIDE) / (double) t + 0.5;
+        byte[] texels = TilePrep.fogMask(level, cx, cz, e, cov, bits);
+        int t = TilePrep.maskTexel(level);
+        double fx = (x - cx * (double) cellBlocks) / t + 0.5, fz = (z - cz * (double) cellBlocks) / t + 0.5;
         int ix = (int) Math.floor(fx), iz = (int) Math.floor(fz);
         double ax = fx - ix, az = fz - iz;
         double a = texels[ix + iz * SIZE] & 0xFF, b = texels[ix + 1 + iz * SIZE] & 0xFF, c = texels[ix + (iz + 1) * SIZE] & 0xFF, d = texels[ix + 1 + (iz + 1) * SIZE] & 0xFF;
-        return (float) (((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) / 255);
+        float v = (float) (((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) / 255);
+        return FogEdge.shown(TilePrep.maskParams(level, e), v);
     }
 
     /** Whether this client captured the sample at a block, as the fog knows it (from the tiles prepared so far). */

@@ -164,6 +164,8 @@ public final class LocalMap {
             if (MARKERS.stream().filter(m -> !m.death).count() >= MapMarkers.MAX_PER_PLAYER) return;
             MapMarker m = new MapMarker();
             m.id = UUID.randomUUID().toString();
+            // the dimension it was placed in (MM-8c: a waypoint can be placed anywhere); the map's own are the Overworld's
+            if (!in.dimension.isEmpty()) m.dimension = in.dimension;
             m.x = in.x;
             m.y = in.y;
             m.z = in.z;
@@ -194,6 +196,7 @@ public final class LocalMap {
         while (deaths.size() >= MapMarkers.DEATHS_KEPT) MARKERS.remove(deaths.remove(0));
         MapMarker m = new MapMarker();
         m.id = UUID.randomUUID().toString();
+        if (Minecraft.getInstance().level != null) m.dimension = Minecraft.getInstance().level.dimension().identifier().toString();
         m.x = player.getBlockX();
         m.y = player.getBlockY();
         m.z = player.getBlockZ();
@@ -270,6 +273,7 @@ public final class LocalMap {
         for (MapMarker m : MARKERS) {
             JsonObject o = new JsonObject();
             o.addProperty("id", m.id);
+            o.addProperty("dimension", m.dimension);
             o.addProperty("x", m.x);
             o.addProperty("y", m.y);
             o.addProperty("z", m.z);
@@ -297,6 +301,7 @@ public final class LocalMap {
                 JsonObject o = e.getAsJsonObject();
                 MapMarker m = new MapMarker();
                 m.id = o.get("id").getAsString();
+                if (o.has("dimension")) m.dimension = o.get("dimension").getAsString();
                 m.x = o.get("x").getAsInt();
                 m.y = o.get("y").getAsInt();
                 m.z = o.get("z").getAsInt();

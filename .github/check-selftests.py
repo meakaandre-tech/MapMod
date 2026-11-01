@@ -9,10 +9,10 @@ import os
 import re
 import sys
 
-SCREENSHOTS = 11
+SCREENSHOTS = 12
 # on the server without MapMod: ready, done, the patch close up / at a pixel a block / far, replaced, the resource pack,
-# GUI scales 3 and 4
-LOCAL_SCREENSHOTS = 9
+# GUI scales 3 and 4, and the fog close up / far / farther (MM-8c)
+LOCAL_SCREENSHOTS = 12
 # suite prefix -> (log file, the line that says it ran to its end)
 SUITES = {
     "SELFTEST map ": ("server.log", "SELFTEST map done (later checks)"),
@@ -26,6 +26,8 @@ SUITES = {
     "SELFTEST colours ": ("client-local.log", "SELFTEST colours done"),
     # MM-6: the public API, used the way another mod would (and its effects inside the map)
     "SELFTEST api ": ("client.log", "SELFTEST api done after reload"),
+    # MM-8c: the fog at three zooms, on a server without MapMod (the shots are read by fog() below)
+    "SELFTEST fogshots ": ("client-local.log", "SELFTEST fogshots done"),
 }
 
 
@@ -147,15 +149,15 @@ def patch(ci, Image, bad):
             means[strip] = c
             ok = looks(strip, c)
             print(f"{shot} ({name}): {strip} #{c[0]:02X}{c[1]:02X}{c[2]:02X} {'ok' if ok else 'WRONG'}")
-            if not ok and name != "patch-far":
+            # MM-8c: far out too, now the fog no longer swallows the patch
+            if not ok:
                 bad.append(f"{strip} is not its real colour in {shot}")
         # MM-8b: every border between strips is a smooth curve, with no 1- or 2-block steps, where it is straight in the
         # blocks and where the blocks step in a staircase: from one pixel row to the next it moves little, and it keeps
         # close to its own 4-block moving average. MM-8's crisp borders traced the staircases at 0.13-0.18 blocks rms
         # off it close up, 0.11-0.22 at a pixel a block. A block is 6 pixels close up and 1 at a pixel a block, so the
         # limits never go under what a pixel can show. Far out a block is a quarter of a pixel, so no 1- or 2-block step
-        # can show at all; and there this run's patch, 80 blocks across, is under the fog's edge (it fades in over 48
-        # blocks), so the far shot is only reported
+        # can show at all, and a border is a pixel or two of blend: the far shot's borders are only reported
         jump_lim, rms_lim = max(0.5, 1.5 / ppb), max(0.08, 0.12 / ppb)
         for (sa, sb), expect in BORDERS.items():
             for part, (za, zb) in (("straight", STRAIGHT), ("stairs", STAIRS)):
@@ -228,6 +230,116 @@ def patch(ci, Image, bad):
                 bad.append(f"the {sa}/{sb} border is soft ({med:.1f} blocks) in {shot}")
 
 
+# MM-8c: the 80-block patch far east of the player (FogShotTests), the land round the player, and half way between
+FOG_PATCH = (8248.0, 248.0)
+FOG_MID = (4104.0, 124.0)
+FOG_PAPER = (0xE6, 0xDC, 0xC6)
+
+
+def fogged(p):
+    """Paper or fog: the paper colour times one brightness (grain, vignette, the fog a shade darker), within rounding."""
+    k = sum(p) / sum(FOG_PAPER)
+    return 0.7 <= k <= 1.15 and all(abs(p[i] - k * FOG_PAPER[i]) <= 8 for i in range(3))
+
+
+def fog_geometry(ci):
+    out = {}
+    for l in read(os.path.join(ci, "client-local.log")) or []:
+        m = re.search(r"SELFTEST fogshots geometry (\S+) x0 ([-\d.]+) z0 ([-\d.]+) ppb ([\d.]+) px (-?\d+) pz (-?\d+)", l)
+        if m:
+            out[m.group(1)] = tuple(float(m.group(i)) for i in range(2, 7))
+    return out
+
+
+def chunk_aligned(px, w, h, x0, z0, ppb, skip):
+    """
+    Where the land meets the fog (MM-8c), how much of it lies on the chunk grid: along each pixel row and column, every
+    crossing between land and fog, at its world position; the share within a block of a chunk line (3 of every 16 blocks
+    for an edge that ignores the grid, nearly all for one along chunk staircases), and how many crossings there were.
+    Crossings within skip blocks of world 0, 0 (the patch's strips, sand among them) are left out.
+    """
+    fog = [[fogged(px[x, y]) for x in range(w)] for y in range(h)]
+    near = total = 0
+    for y in range(40, h - 30):
+        wz = (y + 0.5 - z0) / ppb
+        for x in range(290, w - 2):
+            if fog[y][x] == fog[y][x + 1]:
+                continue
+            wx = (x + 1 - x0) / ppb
+            if abs(wx) <= skip and abs(wz) <= skip:
+                continue
+            total += 1
+            near += 1 if (wx % 16 <= 1 or wx % 16 >= 15) else 0
+    for x in range(290, w - 2):
+        wx = (x + 0.5 - x0) / ppb
+        for y in range(40, h - 31):
+            if fog[y][x] == fog[y + 1][x]:
+                continue
+            wz = (y + 1 - z0) / ppb
+            if abs(wx) <= skip and abs(wz) <= skip:
+                continue
+            total += 1
+            near += 1 if (wz % 16 <= 1 or wz % 16 >= 15) else 0
+    return (near / total if total else 1.0), total
+
+
+def fog(ci, Image, bad):
+    """
+    The fog at three zooms (MM-8c): close up its edge runs round the land the player captured off the chunk grid; far
+    out (8 and 32 blocks a pixel) the land round the player and the 80-block patch far east of it are clearly visible,
+    and the fog lies between them.
+    """
+    geo = fog_geometry(ci)
+    for shot, name in (("local-10.png", "fog-near"), ("local-11.png", "fog-mid"), ("local-12.png", "fog-far")):
+        path = os.path.join(ci, shot)
+        if name not in geo or not os.path.exists(path):
+            bad.append(f"no {name} screenshot or geometry for the fog check")
+            continue
+        x0, z0, ppb, pwx, pwz = geo[name]
+        im = Image.open(path).convert("RGB")
+        px, (w, h) = im.load(), im.size
+
+        def at(wx, wz):
+            return x0 + wx * ppb, z0 + wz * ppb
+
+        def land_share(wx, wz, r):
+            cx, cy = at(wx, wz)
+            n = shown = 0
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    x, y = int(round(cx + dx)), int(round(cy + dy))
+                    if 285 <= x < w and 40 <= y < h - 20:
+                        n += 1
+                        shown += 0 if fogged(px[x, y]) else 1
+            return shown, n
+
+        # close up, the fog's edge round the player's land: no chunk steps (its crossings do not gather on chunk lines)
+        if name == "fog-near":
+            share, total = chunk_aligned(px, w, h, x0, z0, ppb, 48)
+            ok = total >= 200 and share <= 0.3
+            print(f"{shot} ({name}): {total} crossings between land and fog, {share:.2f} of them within a block of a chunk line "
+                  f"(0.19 for an edge that ignores the grid) {'ok' if ok else 'STEPPED'}")
+            if not ok:
+                bad.append(f"the fog's edge round the player shows chunk steps in {shot}")
+        if name == "fog-near":
+            continue
+        shown, n = land_share(pwx + 0.5, pwz + 0.5, 1)
+        ok = shown >= 5
+        print(f"{shot} ({name}): round the player {shown} of {n} pixels show land {'ok' if ok else 'FOGGED'}")
+        if not ok:
+            bad.append(f"the land round the player is not visible in {shot}")
+        shown, n = land_share(*FOG_PATCH, 1)
+        ok = shown >= (5 if name == "fog-mid" else 1)
+        print(f"{shot} ({name}): the 80-block patch: {shown} of {n} pixels show land {'ok' if ok else 'FOGGED'}")
+        if not ok:
+            bad.append(f"the 80-block patch is not visible in {shot}")
+        shown, n = land_share(*FOG_MID, 1)
+        ok = shown == 0
+        print(f"{shot} ({name}): half way between them {n - shown} of {n} pixels are fog {'ok' if ok else 'NOT FOG'}")
+        if not ok:
+            bad.append(f"the unexplored land between the player and the patch is not fogged in {shot}")
+
+
 def main():
     ci = sys.argv[1]
     bad = []
@@ -256,7 +368,8 @@ def main():
     # and MM-5's
     for end in ("SELFTEST client done bake", "SELFTEST client done far", "SELFTEST client done unload",
                 "SELFTEST client done fog", "SELFTEST client done overlays", "SELFTEST client done dimension",
-                "SELFTEST client done ownfog"):
+                "SELFTEST client done ownfog", "SELFTEST client done waypoints:", "SELFTEST client done waypoints rejoin",
+                "SELFTEST client done waypoints nether"):
         if not any(end in l for l in client):
             print(f"client: {end!r} missing, DID NOT FINISH")
             bad.append(f"{end!r} not in client.log")
@@ -276,7 +389,7 @@ def main():
         bad.append("Pillow is missing, so the tile-gap check could not run")
     # 02 level 2, 03 live, 04 close, 05 far (a large made-up area, level 3), 06 level 1, 07 level 0 baked, 08 filters
     for shot in ("client-02.png", "client-03.png", "client-04.png", "client-05.png", "client-06.png", "client-07.png", "client-08.png",
-                 "local-02.png", "local-03.png", "local-04.png", "local-05.png"):
+                 "local-02.png", "local-03.png", "local-04.png", "local-05.png", "local-10.png", "local-11.png", "local-12.png"):
         if Image is None or not os.path.exists(os.path.join(ci, shot)):
             continue
         im = Image.open(os.path.join(ci, shot)).convert("RGB")
@@ -305,6 +418,7 @@ def main():
             bad.append(f"lines between map tiles in {shot}")
     if Image is not None:
         patch(ci, Image, bad)
+        fog(ci, Image, bad)
     for log in ("server.log", "server2.log", "client.log", "client-local.log"):
         lines = read(os.path.join(ci, log)) or []
         # a stack trace through the map's code is a failure, even where no check noticed it

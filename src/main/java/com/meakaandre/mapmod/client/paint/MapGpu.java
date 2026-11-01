@@ -133,15 +133,18 @@ final class MapGpu implements AutoCloseable {
      * all unexplored) and the mask's texture coordinates at the corners.
      */
     record PaintQuad(TileTextures tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float ox, float oz,
-                     @Nullable GpuTextureView mask, float m0, float n0, float m1, float n1) {
+                     @Nullable GpuTextureView mask, float m0, float n0, float m1, float n1, float sharp) {
         PaintQuad(TileTextures tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float ox, float oz) {
-            this(tex, x0, y0, x1, y1, u0, v0, u1, v1, ox, oz, null, 0, 0, 0, 0);
+            this(tex, x0, y0, x1, y1, u0, v0, u1, v1, ox, oz, null, 0, 0, 0, 0, NO_MASK_SHARP);
         }
 
         PaintQuad withMask(FogMasks.@Nullable Uv m) {
-            return m == null ? this : new PaintQuad(tex, x0, y0, x1, y1, u0, v0, u1, v1, ox, oz, m.view(), m.u0(), m.v0(), m.u1(), m.v1());
+            return m == null ? this : new PaintQuad(tex, x0, y0, x1, y1, u0, v0, u1, v1, ox, oz, m.view(), m.u0(), m.v0(), m.u1(), m.v1(), m.sharp());
         }
     }
+
+    /** The fog's sharpness where a quad has no mask (it reads 0: all fog, clouds or not). */
+    static final float NO_MASK_SHARP = 4;
 
     /**
      * One texture to copy: its corners in the target's pixels and its texture coordinates there (v up, see above). A
@@ -151,10 +154,10 @@ final class MapGpu implements AutoCloseable {
      */
     record TexQuad(@Nullable GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1,
                    @Nullable GpuTextureView src2, float s0, float t0, float s1, float t1, float fade,
-                   @Nullable GpuTextureView mask, float m0, float n0, float m1, float n1,
+                   @Nullable GpuTextureView mask, float m0, float n0, float m1, float n1, float sharp,
                    float wx0, float wz0, float wx1, float wz1) {
         TexQuad(@Nullable GpuTextureView src, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1) {
-            this(src, x0, y0, x1, y1, u0, v0, u1, v1, null, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0, 0, 0, 0);
+            this(src, x0, y0, x1, y1, u0, v0, u1, v1, null, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, NO_MASK_SHARP, 0, 0, 0, 0);
         }
 
         /** Paper over the whole of a target. */
@@ -163,15 +166,15 @@ final class MapGpu implements AutoCloseable {
         }
 
         TexQuad withFade(@Nullable GpuTextureView from, float s0, float t0, float s1, float t1, float fade) {
-            return new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, from, s0, t0, s1, t1, fade, mask, m0, n0, m1, n1, wx0, wz0, wx1, wz1);
+            return new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, from, s0, t0, s1, t1, fade, mask, m0, n0, m1, n1, sharp, wx0, wz0, wx1, wz1);
         }
 
         TexQuad withMask(FogMasks.@Nullable Uv m) {
-            return m == null ? this : new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, src2, s0, t0, s1, t1, fade, m.view(), m.u0(), m.v0(), m.u1(), m.v1(), wx0, wz0, wx1, wz1);
+            return m == null ? this : new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, src2, s0, t0, s1, t1, fade, m.view(), m.u0(), m.v0(), m.u1(), m.v1(), m.sharp(), wx0, wz0, wx1, wz1);
         }
 
         TexQuad withWorld(float wx0, float wz0, float wx1, float wz1) {
-            return new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, src2, s0, t0, s1, t1, fade, mask, m0, n0, m1, n1, wx0, wz0, wx1, wz1);
+            return new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, src2, s0, t0, s1, t1, fade, mask, m0, n0, m1, n1, sharp, wx0, wz0, wx1, wz1);
         }
     }
 
@@ -292,7 +295,7 @@ final class MapGpu implements AutoCloseable {
             PaintQuad q = quads.get(i);
             b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1)
                 .putVec4(q.ox, q.oz, (float) SurfaceTile.SPACING / NOISE_UNIT, 0).putVec4(t.width, t.height, finish, flag)
-                .putVec4(q.m0, q.n0, q.m1, q.n1).putVec4(q.mask == null ? 0 : 1, 0, 0, 0);
+                .putVec4(q.m0, q.n0, q.m1, q.n1).putVec4(q.mask == null ? 0 : 1, q.sharp, 0, 0);
         });
         GpuTextureView none = blank();
         GpuSampler smooth = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
@@ -347,7 +350,7 @@ final class MapGpu implements AutoCloseable {
             float mode = q.src == null ? 2 : screen == null ? 0 : 1;
             float fade = q.src2 == null ? 0 : q.fade;
             b.putVec4(q.x0, q.y0, q.x1, q.y1).putVec4(q.u0, q.v0, q.u1, q.v1).putVec4(mode, grain, vignette, fade)
-                .putVec4(t.width, t.height, q.mask == null ? 0 : 1, 0);
+                .putVec4(t.width, t.height, q.mask == null ? 0 : 1, q.sharp);
             colour(b, paper, 0);
             b.putVec4(q.s0, q.t0, q.s1, q.t1).putVec4(q.m0, q.n0, q.m1, q.n1).putVec4(q.wx0, q.wz0, q.wx1, q.wz1);
             colour(b, fog, clouds);

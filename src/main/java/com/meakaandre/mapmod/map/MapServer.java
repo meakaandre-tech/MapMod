@@ -628,7 +628,7 @@ public final class MapServer {
             if (markers.countOf(player) >= MapMarkers.MAX_PER_PLAYER) return "mapmod.map.too_many";
             MapMarker m = new MapMarker();
             m.id = UUID.randomUUID().toString();
-            m.dimension = Level.OVERWORLD.identifier().toString();
+            m.dimension = dimensionOf(server, in.dimension);
             m.x = in.x;
             m.y = in.y;
             m.z = in.z;
@@ -669,6 +669,18 @@ public final class MapServer {
         markersChanged(server, before);
         markersChanged(server, m);
         return null;
+    }
+
+    /**
+     * The dimension a marker is placed in: the one the client asked for if the server has it (MM-8c: a waypoint can be
+     * placed in any dimension; the map's own markers are the Overworld's), else the Overworld.
+     */
+    private static String dimensionOf(MinecraftServer server, String asked) {
+        for (ServerLevel level : server.getAllLevels()) {
+            String id = level.dimension().identifier().toString();
+            if (id.equals(asked)) return id;
+        }
+        return Level.OVERWORLD.identifier().toString();
     }
 
     /** A death marker where the player died (or stands, for the tests); only the last few are kept. */

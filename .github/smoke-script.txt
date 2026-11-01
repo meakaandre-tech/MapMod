@@ -86,8 +86,17 @@ wait 40 SELFTEST smoke stamp done.
 cmd mapmod worldtest check dimension
 cmd execute in minecraft:the_nether run tp @p 0 100 0
 wait 90 SELFTEST client done dimension
+cmd mapmod worldtest check waypoints nether
+wait 60 SELFTEST client done waypoints nether
 cmd execute in minecraft:overworld run tp @p ~ ~ ~
 sleep 5
+cmd mapmod worldtest check waypoints
+wait 180 SELFTEST client waypoints left
+cmd mapmod worldtest resync
+cmd mapmod worldtest check waypoints rejoin
+wait 120 SELFTEST client done waypoints rejoin
+sleep 2
+shot
 cmd mapmod worldtest lock
 sleep 3
 cmd mapmod worldtest check locked
