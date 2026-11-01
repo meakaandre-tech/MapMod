@@ -792,6 +792,12 @@ public class MapScreen extends Screen {
         return mouseY;
     }
 
+    /** Puts the mouse at a spot of the screen as moving it there does, until the next frame (for the selftests). */
+    public void pointAt(double mx, double my) {
+        mouseX = mx;
+        mouseY = my;
+    }
+
     // ------------------------------------------------------------------------------------------------ the marker form
 
     private static final int FORM_W = 220, FORM_H = 132;

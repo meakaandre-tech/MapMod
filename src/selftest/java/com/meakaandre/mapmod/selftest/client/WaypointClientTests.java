@@ -26,7 +26,7 @@ import java.util.Locale;
  * MM-8c's waypoint key and its "New waypoint" screen, on a server with MapMod, driven by the smoke run ({@code check
  * waypoints}, then {@code check waypoints rejoin} once the server has sent everything again, and {@code check waypoints
  * nether} in the Nether). The key is pressed the way the keyboard does (its mapping clicked, so the game's own tick opens
- * the screen; on the open map a key event sent to the screen, with the mouse where it is), and the screen is filled in
+ * the screen; on the open map a key event sent to the screen, with the mouse put on a spot of it), and the screen is filled in
  * through its boxes, saved or cancelled with its buttons' actions or with Enter and Esc. Logs "SELFTEST client" checks and "SELFTEST client done
  * waypoints[ rejoin| nether]" at the end of each part; the first part ends with "SELFTEST client waypoints left".
  */
@@ -257,6 +257,9 @@ final class WaypointClientTests {
                 }
                 if (ticks < 10) return;
                 MapDraw.View v = screen.view();
+                // the mouse 40 blocks east and 24 north of the player (clear of the waypoints at the player), as the run's
+                // own mouse may be anywhere
+                screen.pointAt(v.sx(px + 40.5), v.sy(pz - 24.5));
                 double sx = screen.lastMouseX(), sy = screen.lastMouseY();
                 cursorX = (int) Math.floor(v.wx(sx));
                 cursorZ = (int) Math.floor(v.wz(sy));
