@@ -9,6 +9,7 @@ import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import org.jspecify.annotations.Nullable;
 
@@ -71,7 +72,7 @@ public final class Waypoints {
      * Opens "New waypoint" at a block of a dimension, going back to {@code parent} when it closes; or, while a mod locks
      * the map or its markers (or the server's map is not there yet), opens nothing and says why. Returns whether it opened.
      */
-    public static boolean open(@Nullable net.minecraft.client.gui.screens.Screen parent, int x, int y, int z, String dimension) {
+    public static boolean open(@Nullable Screen parent, int x, int y, int z, String dimension) {
         if (!allowed()) return false;
         Minecraft.getInstance().gui.setScreen(new WaypointScreen(parent, x, y, z, dimension));
         return true;
