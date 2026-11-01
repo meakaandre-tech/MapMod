@@ -40,7 +40,7 @@ import java.util.Set;
 /**
  * The map on the client: what the server has sent (unlocks, fog, POIs, markers, the group's players, moving things),
  * what the player chose (pins and filters, kept in the game folder's {@code mapmod} folder) and the key: M opens the
- * map and B places a waypoint ({@link Waypoints}; both changeable under "MapMod"). The terrain is the client's own surface
+ * map and B opens "New waypoint" ({@link Waypoints}; both changeable under "MapMod"). The terrain is the client's own surface
  * capture, painted by {@code client.paint}.
  */
 public final class MapClient {

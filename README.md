@@ -8,11 +8,12 @@ A Satisfactory-style map for Fabric 26.3, for any modpack (working name; the rea
   into soft, cloudy fog, with a **filter panel**, **pins**, **markers** (an icon, a colour and a name, private or shared
   with your group), **death markers** and the mob radar on top, and a switch per overlay layer in its top bar. There is
   no minimap;
-- **waypoints** (B): one key drops a waypoint where you stand, in whatever dimension you are in ("Waypoint 1", "Waypoint
-  2"..., each in the next of a few colours, private), pinned to the compass strip at once and saved like any marker; on
-  the open map B drops one where the mouse points. Right click one on the map to rename it, change its colour, unpin or
-  remove it. A short note in the top right corner says "Waypoint added (Waypoint N)"; while a mod locks the map or its
-  markers, B does nothing but say "Map locked".
+- **waypoints** (B): one key opens "New waypoint", filled in with where you stand in whatever dimension you are in (on
+  the open map: where the mouse points, Y the captured ground's there): a name ("Waypoint 1", "Waypoint 2"..., selected
+  so typing replaces it), X, Y and Z, a row of colours (the next in the cycle picked), "Pin to compass" (on), Save and
+  Cancel (Enter and Esc). Saved, it is a private marker like any other, pinned to the compass strip if ticked, with a
+  short note in the top right corner ("Waypoint added (Waypoint N)"). Right click one on the map to rename it, change
+  its colour, unpin or remove it. While a mod locks the map or its markers, B opens nothing and says "Map locked".
 
 Terrain is captured by the client itself (see below), so it works on any server and with any world generator. Only the
 Overworld's surface is mapped. Vanilla's locator bar is switched

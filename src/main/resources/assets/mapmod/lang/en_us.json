@@ -47,5 +47,7 @@
   "mapmod.map.unpin": "Unpin",
   "mapmod.waypoint.name": "Waypoint %s",
   "mapmod.waypoint.added": "Waypoint added (%s)",
-  "mapmod.waypoint.not_yet": "The map isn't ready yet"
+  "mapmod.waypoint.not_yet": "The map isn't ready yet",
+  "mapmod.waypoint.new": "New waypoint",
+  "mapmod.waypoint.pin": "Pin to compass"
 }

@@ -662,9 +662,13 @@ public final class MapClientTests {
         MapMod.LOGGER.info("SELFTEST local {} markers are placed and changed on the client's own map", kept ? "PASS" : "FAIL");
         if (kept) pass++;
         else fail++;
-        // MM-8c: the waypoint key on the client's own map: placed where the player stands, pinned, saved with its dimension
+        // MM-8c: the waypoint key on the client's own map: "New waypoint" at the player, saved as it is: placed where the
+        // player stands, pinned, kept with its dimension
         int number = com.meakaandre.mapmod.client.map.Waypoints.next();
-        boolean placed2 = com.meakaandre.mapmod.client.map.Waypoints.atPlayer();
+        boolean placed2 = com.meakaandre.mapmod.client.map.Waypoints.atPlayer()
+            && mc.gui.screen() instanceof com.meakaandre.mapmod.client.map.WaypointScreen ws && ws.xValue().equals(Integer.toString(px))
+            && ws.zValue().equals(Integer.toString(pz));
+        if (mc.gui.screen() instanceof com.meakaandre.mapmod.client.map.WaypointScreen ws) ws.save();
         MapMarker wp = named(net.minecraft.network.chat.Component.translatable("mapmod.waypoint.name", Integer.toString(number)).getString());
         String json = "";
         try {
@@ -675,7 +679,7 @@ public final class MapClientTests {
         }
         boolean wpOk = placed2 && wp != null && wp.x == px && wp.z == pz && MapClient.pinned(wp.pinKey()) && wp.dimension.equals("minecraft:overworld")
             && json.contains("\"name\":\"" + wp.name.replace(" ", "") + "\"") && json.contains("\"dimension\":\"minecraft:overworld\"");
-        MapMod.LOGGER.info("SELFTEST local {} B places a waypoint on the client's own map: where the player stands, pinned, saved with its dimension{}",
+        MapMod.LOGGER.info("SELFTEST local {} B opens \"New waypoint\" at the player on the client's own map; saved, it is there, pinned, kept with its dimension{}",
             wpOk ? "PASS" : "FAIL", wp == null ? " (none)" : "");
         if (wpOk) pass++;
         else fail++;

@@ -35,8 +35,8 @@ import java.util.Set;
  * The fullscreen map (M), laid out like Satisfactory's: the filter panel down the left, the painted map
  * ({@link PaintMap}) filling the rest, with everything on it drawn over, and a button per overlay layer
  * ({@link MapLayer}) in the top bar. Drag to move (let go while moving and it glides on a moment, framerate-independent,
- * until any click), scroll to zoom round the mouse, C to centre on the player, and the waypoint key (B) drops a waypoint
- * where the mouse points ({@link Waypoints}). Left click pins or unpins what is under the mouse (pins show on the compass
+ * until any click), scroll to zoom round the mouse, C to centre on the player, and the waypoint key (B) opens "New
+ * waypoint" at where the mouse points ({@link WaypointScreen}). Left click pins or unpins what is under the mouse (pins show on the compass
  * with their distance); right click on an empty spot places a marker there, and on one of your markers (or a shared one
  * of your group) renames it, changes its icon or colour, pins or unpins it, or removes it. A marker gets an icon, a colour and a name, and is
  * private or shared with the group. Mods' overlay layers ({@link MapOverlay}) draw over the painted map, each with a
@@ -767,17 +767,29 @@ public class MapScreen extends Screen {
     }
 
     /**
-     * The waypoint key on the map: a waypoint where the mouse points on it (at the ground's height there, where the map
-     * knows it), else where the player stands. Returns whether one was placed (also used by the selftests).
+     * The waypoint key on the map: "New waypoint" filled in with where the mouse points on it (Y the captured ground's
+     * there, else the player's), coming back to the map; off the map, where the player stands. Returns whether it opened.
      */
     public boolean addWaypointAt(double mx, double my) {
+        Minecraft mc = Minecraft.getInstance();
         if (!MapLock.mapLocked() && inMap(mx, my)) {
             MapDraw.View v = view();
             int x = (int) Math.floor(v.wx(mx)), z = (int) Math.floor(v.wz(my));
             Integer h = PaintMap.height(x, z);
-            return Waypoints.add(x, h == null ? DEFAULT_MARKER_Y : h + 1, z, Level.OVERWORLD.identifier().toString());
+            int y = h != null ? h + 1 : mc.player != null ? mc.player.getBlockY() : DEFAULT_MARKER_Y;
+            return Waypoints.open(this, x, y, z, Level.OVERWORLD.identifier().toString());
         }
-        return Waypoints.atPlayer();
+        if (mc.player == null) return false;
+        return Waypoints.open(this, mc.player.getBlockX(), mc.player.getBlockY(), mc.player.getBlockZ(), Level.OVERWORLD.identifier().toString());
+    }
+
+    /** Where the mouse was when the map was last drawn (GUI pixels): where the waypoint key points (for the selftests). */
+    public double lastMouseX() {
+        return mouseX;
+    }
+
+    public double lastMouseY() {
+        return mouseY;
     }
 
     // ------------------------------------------------------------------------------------------------ the marker form
