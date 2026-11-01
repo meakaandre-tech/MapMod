@@ -108,7 +108,8 @@ final class MapGpu implements AutoCloseable {
 
         Target(String name, int width, int height) {
             GpuDevice device = RenderSystem.getDevice();
-            texture = device.createTexture(() -> MapMod.ID + " " + name, GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING,
+            // copy source too: the selftests read a baked tile or mip back (MM-8d)
+            texture = device.createTexture(() -> MapMod.ID + " " + name, GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_COPY_SRC,
                 GpuFormat.RGBA8_UNORM, width, height, 1, 1);
             view = device.createTextureView(texture);
             this.width = width;
@@ -176,6 +177,33 @@ final class MapGpu implements AutoCloseable {
         TexQuad withWorld(float wx0, float wz0, float wx1, float wz1) {
             return new TexQuad(src, x0, y0, x1, y1, u0, v0, u1, v1, src2, s0, t0, s1, t1, fade, mask, m0, n0, m1, n1, sharp, wx0, wz0, wx1, wz1);
         }
+    }
+
+    /**
+     * For the selftests (MM-8d): reads a target's pixels back from the GPU, as ARGB, row by row as the texture holds
+     * them. The copy runs with the frame's other commands, so the result arrives a frame or so later.
+     */
+    static java.util.concurrent.CompletableFuture<int[]> readBack(Target t) {
+        GpuDevice device = RenderSystem.getDevice();
+        int n = t.width * t.height;
+        GpuBuffer buffer = device.createBuffer(() -> MapMod.ID + " map read-back", GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_COPY_DST, (long) n * 4);
+        java.util.concurrent.CompletableFuture<int[]> out = new java.util.concurrent.CompletableFuture<>();
+        device.createCommandEncoder().copyTextureToBuffer(t.texture, buffer, 0, () -> {
+            try (GpuBufferSlice.MappedView v = buffer.map(true, false)) {
+                ByteBuffer d = v.data();
+                int[] px = new int[n];
+                for (int i = 0; i < n; i++) {
+                    int r = d.get(i * 4) & 255, g = d.get(i * 4 + 1) & 255, b = d.get(i * 4 + 2) & 255, a = d.get(i * 4 + 3) & 255;
+                    px[i] = a << 24 | r << 16 | g << 8 | b;
+                }
+                out.complete(px);
+            } catch (RuntimeException e) {
+                out.completeExceptionally(e);
+            } finally {
+                buffer.close();
+            }
+        }, 0);
+        return out;
     }
 
     /** One projection per target size used: a tile's 512 and the screen's. */
