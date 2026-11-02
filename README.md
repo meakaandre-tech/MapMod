@@ -4,8 +4,9 @@ A Satisfactory-style map for Fabric 26.3, for any modpack (working name; the rea
 `gradle.properties` as `mod_name`, read back in code as `MapMod.NAME`):
 
 - a **compass strip** across the top of the screen, with pins and their distance, group players, markers and nearby POIs;
-- a **painted fullscreen map** (M): smooth shaded terrain at any zoom, no blocks and no pixels, unexplored land fading
-  into soft, cloudy fog, with a **filter panel**, **pins**, **markers** (an icon, a colour and a name, private or shared
+- a **fullscreen map** (M) in the style of Xaero's World Map: one pixel per block in each block's real colour, shaded
+  by height, water showing the ground under it, crisp blocks close up and clean averages far out, unexplored land a
+  flat dark background, with a **filter panel**, **pins**, **markers** (an icon, a colour and a name, private or shared
   with your group), **death markers** and the mob radar on top, and a switch per overlay layer in its top bar. There is
   no minimap;
 - **waypoints** (B): one key opens "New waypoint", filled in with where you stand in whatever dimension you are in (on
@@ -28,66 +29,63 @@ Saves: `data/mapmod/` in the world (`fog/`, `id.txt`, `markers.dat`, and `terrai
 the server keeps no terrain of its own); client tiles, pins and settings: `mapmod/` in the game folder. Keys (open the
 map, add a waypoint) are under **MapMod** in the controls.
 
-## Surface capture and the painted map (client)
+## Surface capture and the map (client)
 
-The client captures the surface itself, on any server and with any world generator: every chunk it loads, and every chunk whose surface changes, is sampled every 2 blocks on a
-background thread (height, water depth, the colour seen from above, one of eight surface classes from block tags then
-map colour, biome tint as RGB565, canopy density). The colour is each block's real one: the average colour of its top
-face's texture, as the loaded resource packs give it (any mod's blocks too, read off their models), times its tint (the
-biome's grass, foliage or water colour), averaged over the 2x2 columns; leaves and mushroom caps over the ground show,
-and snow layers. It is worked out once per block state and again after every resource reload, when the loaded chunks
-are sampled again. Huge mushrooms count as canopy over the ground, like trees, without making it forest floor. Samples go into 512x512-block tiles, zstd-compressed, in
+The client captures the surface itself, on any server and with any world generator: every chunk it loads, and every
+chunk whose surface changes, is sampled at every block on a background thread (MM-9; every 2 blocks before): the
+ground's height, the water depth over it, the colour seen from above, how far above the ground the top that shows is
+(a tree's crown), one of eight surface classes from block tags then map colour, the biome tint as RGB565, and the
+water's own colour. The colour is each block's real one: the average colour of its top face's texture, as the loaded
+resource packs give it (any mod's blocks too, read off their models), times its tint (the biome's grass, foliage or
+water colour); leaves, mushroom caps and snow layers over the ground show, and under water the floor does, with the
+water's colour kept apart. It is worked out once per block state and again after every resource reload, when the loaded
+chunks are sampled again. Samples go into 512x512-block tiles, zstd-compressed, in
 `mapmod/<server address or world folder>/<dimension>/<x>_<z>.mmt` in the game folder; the layout is documented in
 `SurfaceTile`. zstd is [aircompressor](https://github.com/airlift/aircompressor)'s v3 line, bundled: it calls the zstd
 library it carries for Linux (x64, arm64, ppc64le) and macOS (arm64) through `java.lang.foreign`, and its pure-Java codec
 on other platforms (Windows among them), which still uses `sun.misc.Unsafe`. Both read and write the same files.
 
-The fullscreen map reads the saved tiles it shows on a background thread (and takes newer ones from the capture), works
-out each tile's textures on another (the land's colour pulled toward a muted painted palette, near colours merged and
-stray blocks folded into the region round them, then run through a Kuwahara filter, so flat ground reads as broad
-strokes while borders between colours stay put; that colour blurred, for where borders run; forest and snow weights; a
-signed distance to the shore; canopy),
-lets them go when it closes, uploads one or two a frame to the GPU and paints them with one fragment shader per tile
-(`assets/mapmod/shaders/core/map_paint.*`): bicubic height, a hillshade lit from the northwest (its slope sharpened against a smoothed one, so ridges and cliffs
-read crisp), the colours read smoothly (never nearest) and split in two where two meet, the side a pixel is on read off
-the blurred colour, so borders between colours are narrow (about a block) but run as smooth curves through the
-staircases of the terrain and wander with low-frequency noise in world space (no steps, no straight runs, no chunk
-edges, no block grid, the same across tiles and at any zoom), darker lowlands and paler peaks, snow above a height,
-forests darkened by canopy with a soft brush, water deep to shallow by depth and distance from the shore, tinted by its
-biome's water colour, with a pale band along it (coasts and rivers as smooth curves), optional contour lines (off by default; the switch is in the map's
-top bar and kept in `mapmod/settings.json` as `contours`), and a light paper grain and vignette over it all.
+The fullscreen map (MM-9) looks like Xaero's World Map, recreated from the technique alone (no code, textures or
+assets of Xaero's, which are All Rights Reserved). It reads the saved tiles it shows on a background thread (and takes
+newer ones from the capture), works out each tile's picture on another, one texel per block, and lets the tiles' data
+go when it closes:
 
-Unexplored land fades into fog: what is shown is everything this client has captured, on any server and in any group
-(the group's fog of war gates POIs, never terrain), so nothing you have seen is fogged but for the soft rim of the
-fog's edge. The edge's width follows the zoom: about 48 blocks close up (`fog.edge` in the palette), shrinking to a few
-screen pixels far out. Close up it lies just inside the captured land, so the chunk staircase along its border stays
-under the fog, but moves out where the land is thin, so a fresh base or a small island always shows; far out, where a
-chunk is a pixel or two, it lies just outside the captured land, and a patch smaller than the masks' texels gets a
-small clearing round it, so captured land stays visible at every zoom. Each cell's mask holds the signed distance to
-the edge (worked out off the render thread from the captured land on a grid of chunks), so the edge is a smooth curve
-even where it is narrower than a texel, and wanders with the same world-space noise as region edges: no chunk steps or
-straight runs at any zoom, with a static cloud texture in it. The fog goes on as the screen's pixels are written, never
-into the baked tiles, so neither exploring nor zooming bakes anything. A change of zoom level cross-fades over about 150 ms; a drag let go while moving glides on briefly (any click
-stops it). Icons shrink as the map zooms out, and mobs of one kind (as mob faces), markers, pins and moving things
-(boats, vehicles) of one kind that would overlap are drawn once with a count. The top bar has a switch per overlay layer (players, markers, pins, POIs, mob radar), kept in
-`mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.
+- each block in its real colour (or its class's, where the palette overrides it);
+- **height shading**: each block against its north and west neighbours (read across tile borders, so tiles meet without
+  a seam), higher lighter and lower darker, in five clear steps; on land the height is the top that shows, so trees
+  stand up from the ground and coasts are lit against the water's surface;
+- **water** shows the ground under it, less and darker the deeper it is, in its biome's water colour;
+- **unexplored land** is one flat dark colour, with the hard edges of the chunks captured: what shows is everything this
+  client has captured, on any server and in any group (the group's fog of war gates POIs, never terrain).
 
-Resource packs restyle it through `assets/mapmod/map_palette.json` (`colour`: the pull toward a muted painted palette,
-`saturation` and `value`, `merge`, how close two colours must be to merge into one, and the brush's `brush_size` in
-blocks; optional class colour overrides `classes` 0-7, none
-by default, each replacing the real colours of its class; water, shore band, paper, height tint, snow line, hillshade
-share, `edges`, `forest`, `contours`, `finish`, `fog`: colour, edge width in blocks, cloud strength); every value is
-optional and falls back on its own; F3+T reloads it. A resource pack that changes a block's texture changes its colour
-on the map as well.
+Pictures are uploaded one or two a frame and copied texel for texel into baked tiles, with a mip pyramid over them
+(each level the exact mean of the one below; unexplored land averages in as background), all within a GPU budget
+(`cache_mb` in `mapmod/settings.json`). Close up the tiles are drawn nearest, so blocks are crisp squares; zoomed out
+each pixel is the average of what it covers, read from the mip level nearest a pixel, so the picture does not shimmer
+as it moves. One shader does all of it (`assets/mapmod/shaders/core/map_quad.*`). A change of zoom level cross-fades
+over about 150 ms; a drag let go while moving glides on briefly (any click stops it). Icons shrink as the map zooms
+out, and mobs of one kind (as mob faces), markers, pins and moving things (boats, vehicles) of one kind that would
+overlap are drawn once with a count. The top bar has a switch per overlay layer (players, markers, pins, POIs, mob
+radar), kept in `mapmod/settings.json` as `layers`. Going to another dimension frees the GPU cache at once.
+
+Resource packs restyle it through `assets/mapmod/map_palette.json`: optional class colour overrides `classes` 0-7 (none
+by default, each replacing the real colours of its class, tinted by the biome as much as its `tint` says), `shading`
+(the height shading's strength, 0 to 2), `water` (`opacity`: how much of the water's colour lies over the ground a block
+deep; `depth`: the depth at which the ground no longer shows; `darken`: how much darker the water is there) and
+`background` (unexplored land). Every value is optional and falls back on its own; F3+T reloads it. A resource pack
+that changes a block's texture changes its colour on the map as well. The painted look's keys from before MM-9
+(`colour`, `paper`, `height_tint`, `snow`, `hillshade`, `edges`, `forest`, `contours`, `finish`, `fog` and the old
+`water` keys) are ignored.
 
 `/mapmod probe` shows what the map makes of the ground under you: the block, its surface class, its top face's texture,
 that texture's average colour and its tint, the colour, tint and class the capture would store now, what is stored
-(class, colour, tint, height, tile revision) and the colour the map paints it. If the
+(class, colour, tint, height, tile revision) and the colour the map gives it before shading. If the
 stored sample differs from the ground now, the tile was not captured again after a change.
 
 `/mapmod stats` shows tiles cached, dirty tiles, the worker queue, samples per second, and with the map open its render
-time, uploads per frame, the off-thread preparation time per tile and the bake time per tile (prep with the brush, and the bake pass), the fog masks made and held, mips made again from
-their parent after an eviction, and frames cross-faded.
+time, uploads per frame, the off-thread preparation time per tile and the bake time per tile (prep, and the bake pass),
+a tile's memory and the tile files' size on disk, mips made again from their parent after an eviction, and frames
+cross-faded.
 
 ## For other mods: `com.meakaandre.mapmod.api`
 
@@ -121,21 +119,20 @@ for them: a mod that bases a lock, marker or overlay on server state syncs that 
 
 | What | API |
 | --- | --- |
-| **Overlay layers** drawn over the painted map, each with a top-bar switch (kept in `settings.json`'s `layers`); never baked, no grain or vignette | `MapOverlay.register(id, label, glyph, (graphics, MapView view) -> ...)`; `enabled`, `setEnabled`, `shown`; `warpX`/`warpZ` and `WARP_PERIOD` (8192 blocks) to follow the painted borders |
+| **Overlay layers** drawn over the map, each with a top-bar switch (kept in `settings.json`'s `layers`); never baked | `MapOverlay.register(id, label, glyph, (graphics, MapView view) -> ...)`; `enabled`, `setEnabled`, `shown` |
 | **Markers** (glyph, colour, optional label, per dimension; hover and pin like a player's) | `MapMarkers.add(new Marker(id, dimension, x, z, glyph, argb, label))`, `move(id, [dimension,] x, z)`, `remove(id)`, `removeAll(namespace)`, `get`, `in(dimension)`; cleared on leaving a world |
-| **Palette overrides** over the resource packs' `map_palette.json`, kept across F3+T. Since MM-8 the land is painted in real block colours, and a class colour is an optional override on top of them | `MapPalette.classColour(classId, rgb)` (paints that class in it instead of its real colours), `classTint`, `colour(key, rgb)`, `number(key, value)` (`colour.saturation`, `colour.value`, `colour.brush_size`, `water.tint`...), `edit()...apply()`, `clear(key)`, `clearAll()`; `keys()`, `version()` |
-| **Locks**: the only way to hide things on purpose | `MapLock.lockMap(owner, reason)` / `unlockMap(owner)`: a "map locked" panel instead of the map; `lockLayer(owner, layer)` / `unlockLayer` for `CONTOURS`, `PLAYERS`, `MARKERS`, `PINS`, `POIS`, `MOB_RADAR` or an overlay's id (hidden on the map and the compass); `unlockAll(owner)`. The fog rule does not change |
-| **Surface classes** (ids 0-7 as `MapSurface.GRASS`...`LAVA`, fixed by the tile format; since MM-8 they decide effects and class colour overrides, not the colour) | `MapSurface.override(block or tag, classId)`, `clear`, `classOf(state)`: thread-safe, new samples only |
+| **Palette overrides** over the resource packs' `map_palette.json`, kept across F3+T. Blocks show in their real colours, and a class colour is an optional override on top of them | `MapPalette.classColour(classId, rgb)` (shows that class in it instead of its real colours), `classTint`, `colour(key, rgb)` (`background`), `number(key, value)` (`shading`, `water.opacity`, `water.depth`, `water.darken`), `edit()...apply()`, `clear(key)`, `clearAll()`; `keys()`, `isDeprecated(key)`, `version()` |
+| **Locks**: the only way to hide things on purpose | `MapLock.lockMap(owner, reason)` / `unlockMap(owner)`: a "map locked" panel instead of the map; `lockLayer(owner, layer)` / `unlockLayer` for `PLAYERS`, `MARKERS`, `PINS`, `POIS`, `MOB_RADAR` or an overlay's id (hidden on the map and the compass); `unlockAll(owner)`. What the terrain shows does not change |
+| **Surface classes** (ids 0-7 as `MapSurface.GRASS`...`LAVA`, fixed by the tile format; they decide which class colour override applies, not the colour) | `MapSurface.override(block or tag, classId)`, `clear`, `classOf(state)`: thread-safe, new samples only |
 | **Tile events** | `MapTiles.addListener((tileX, tileZ, revision) -> ...)`: client thread, merged per tile, `long` revisions (ms, never going down); tiles are `MapTiles.BLOCKS` (512) blocks |
 
-A layer of your own, following the painted coasts:
+A layer of your own:
 
 ```java
 MapOverlay.register(Identifier.fromNamespaceAndPath("mymod", "territory"), Component.literal("Territory"), MapGlyphs.RING,
     (g, view) -> {
         for (BlockPos p : myClaims()) {
-            double x = p.getX() - MapOverlay.warpX(p.getX(), p.getZ()), z = p.getZ() - MapOverlay.warpZ(p.getX(), p.getZ());
-            int sx = (int) view.screenX(x), sy = (int) view.screenY(z), r = (int) Math.max(2, 16 * view.scale());
+            int sx = (int) view.screenX(p.getX()), sy = (int) view.screenY(p.getZ()), r = (int) Math.max(2, 16 * view.scale());
             g.fill(sx - r, sy - r, sx + r, sy + r, 0x302080FF);
         }
     });
@@ -150,12 +147,12 @@ MapMarkers.move(truck, newX, newZ);
 MapMarkers.remove(truck);
 ```
 
-Locked until a research is done, then unlocked, with the contours only later:
+Locked until a research is done, then unlocked, with the POIs only later:
 
 ```java
 Identifier me = Identifier.fromNamespaceAndPath("mymod", "research");
 MapLock.lockMap(me, Component.literal("Research the map in the HUB"));
-MapLock.lockLayer(me, MapLock.CONTOURS);
+MapLock.lockLayer(me, MapLock.POIS);
 // ... once the research is done:
 MapLock.unlockMap(me);
 ```
@@ -163,13 +160,31 @@ MapLock.unlockMap(me);
 Restyle from code, and put a mod's blocks in a class:
 
 ```java
-MapPalette.edit().number("colour.saturation", 0.6f).colour("water.deep", 0x2E5F7E).number("edges.warp", 3).apply();
+MapPalette.edit().number("shading", 1.5f).number("water.depth", 24).colour("background", 0x101010).apply();
 MapPalette.classColour(MapSurface.SNOW, 0xE8F0F4); // an override: all snow in one colour instead of its blocks' own
 MapSurface.override(MyBlocks.ASH, MapSurface.DIRT);
 MapSurface.override(MyTags.SALT_FLATS, MapSurface.SNOW);
 ```
 
 Group ids are free text and are used in file names with anything but `A-Za-z0-9_-` replaced.
+
+### Deprecated in MM-9 (the painted look is gone)
+
+The map changed from the painted look to one pixel per block (Xaero-style). Nothing in the API changed its signature;
+what no longer means anything is deprecated and kept compiling:
+
+- `MapOverlay.warpX` / `warpZ` always return 0 and `WARP_PERIOD` is unused: the map shows every block where it is, so
+  overlays need no offset (code that subtracts the warp still lines up).
+- `MapLock.CONTOURS`: there are no contour lines; locking it is accepted and does nothing.
+- The painted look's palette keys (`paper`, `hillshade`, `edges.*`, `forest.*`, `contours.*`, `finish.*`, `fog.*`,
+  `colour.*`, `height_tint.*`, `snow.*`, `water.shallow`, `water.deep`, `water.deep_at`, `water.deep_dist`,
+  `water.shore`, `water.shore_width`, `water.tint`) are no longer in `MapPalette.keys()`; setting or clearing one is
+  accepted, logged once and has no effect (`MapPalette.isDeprecated(key)`). The new keys are `shading`,
+  `water.opacity`, `water.depth`, `water.darken` and `background`; `classes.<id>.colour` and `.tint` are unchanged.
+- `MapSurface` overrides still work: a block's class picks which class colour override applies, so they change the map's
+  colours together with `MapPalette.classColour`.
+- The contours switch is gone from the map's top bar, and `contours` from `settings.json`.
+- Tiles are format 3 (a sample a block): tiles saved before MM-9 are dropped and the land captured again.
 
 ## Building and CI
 

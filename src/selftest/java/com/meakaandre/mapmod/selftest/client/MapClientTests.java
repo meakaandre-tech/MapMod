@@ -20,7 +20,7 @@ import com.meakaandre.mapmod.client.map.MobRadar;
 import com.meakaandre.mapmod.client.capture.SurfaceClass;
 import com.meakaandre.mapmod.client.capture.SurfaceTile;
 import com.meakaandre.mapmod.client.paint.BakeCheck;
-import com.meakaandre.mapmod.client.paint.FogCheck;
+import com.meakaandre.mapmod.client.paint.EdgeCheck;
 import com.meakaandre.mapmod.client.map.MapLayer;
 import com.meakaandre.mapmod.client.paint.PaintMap;
 import com.meakaandre.mapmod.client.paint.PaintPalette;
@@ -103,8 +103,8 @@ public final class MapClientTests {
 
     // ------------------------------------------------------------------------------------------------ MM-5
 
-    /** The fog check, stepped from the tick while it runs. */
-    private static FogCheck fogCheck;
+    /** The picture check (MM-9; the fog check before), stepped from the tick while it runs. */
+    private static EdgeCheck edgeCheck;
     /** The glide check on the open map: ticks since it started (0: not running), where it started, and its results. */
     private static int glideTicks;
     private static double glideX, glideZ;
@@ -201,7 +201,7 @@ public final class MapClientTests {
         boolean away = mc.level != null && !MapClient.mappedHere();
         if (!(away && PaintMap.dimensionFrees() > dimensionFreesAt) && dimensionTicks < 1200) return;
         dimensionArmed = false;
-        report("dimension", "going to another dimension lets the baked tiles, mips and fog masks go at once",
+        report("dimension", "going to another dimension lets the baked tiles and mips go at once",
             away && PaintMap.dimensionFrees() > dimensionFreesAt && PaintMap.cacheBytes() == 0 && PaintMap.bakedTiles() == 0 && PaintMap.mips() == 0
                 && dimensionBytesAt > 0, dimensionBytesAt / 1048576 + " MB held before, " + PaintMap.cacheBytes() + " bytes after, " + dimensionTicks + " ticks");
         MapMod.LOGGER.info("SELFTEST client done dimension");
@@ -215,10 +215,11 @@ public final class MapClientTests {
     }
 
     private static void watch(Minecraft mc) {
-        if (fogCheck != null) {
-            List<BakeCheck.Result> results = fogCheck.step();
+        if (edgeCheck != null) {
+            List<BakeCheck.Result> results = edgeCheck.step();
             if (results != null) {
-                fogCheck = null;
+                edgeCheck.close();
+                edgeCheck = null;
                 int pass = 0, fail = 0;
                 for (BakeCheck.Result r : results) {
                     MapMod.LOGGER.info("SELFTEST client {} {}{}", r.ok() ? "PASS" : "FAIL", r.what(), r.detail().isEmpty() ? "" : " (" + r.detail() + ")");
@@ -299,10 +300,10 @@ public final class MapClientTests {
             "told by " + LocalMap.serverHasMapBy());
         expect("the terrain tile payloads are gone: the client cannot ask the server for tiles",
             !ClientPlayNetworking.canSend(new CustomPacketPayload.Type<>(MapMod.id("tile_request"))), "");
-        // a tile MM-1 wrote (its own SurfaceTile code and aircompressor 0.27): MM-8's format (2-block samples with colour)
-        // refuses it, so old tiles are dropped and captured again; a tile written now reads back the same
+        // a tile MM-1 wrote (its own SurfaceTile code and aircompressor 0.27): MM-9's format (a sample a block) refuses
+        // it, so old tiles are dropped and captured again, as it does MM-8's (format 2); a tile written now reads back the same
         String fixture = "";
-        boolean refused = false, again = false, header = false;
+        boolean refused = false, again = false, header = false, mm8 = false;
         try (var in = MapClientTests.class.getResourceAsStream("/mapmod_selftest/mm1-tile.mmt")) {
             byte[] bytes = in == null ? new byte[0] : in.readAllBytes();
             try {
@@ -314,16 +315,25 @@ public final class MapClientTests {
             SurfaceTile want = fixture();
             byte[] packed = want.pack();
             again = SurfaceTile.unpack(3, -2, packed).sameData(want);
-            // the header keeps MM-1's layout (magic, format, spacing, side, body length), with format 2 and 2-block samples
+            // the header keeps MM-1's layout (magic, format, spacing, side, body length), with format 3 and 1-block samples
             java.nio.ByteBuffer h = java.nio.ByteBuffer.wrap(packed).order(java.nio.ByteOrder.LITTLE_ENDIAN);
             header = java.util.Arrays.equals(java.util.Arrays.copyOf(bytes, 4), java.util.Arrays.copyOf(packed, 4))
-                && h.getInt(0) == SurfaceTile.MAGIC && (h.getShort(4) & 0xFFFF) == 2 && h.get(6) == 2 && (h.getShort(7) & 0xFFFF) == 256;
+                && h.getInt(0) == SurfaceTile.MAGIC && (h.getShort(4) & 0xFFFF) == 3 && h.get(6) == 1 && (h.getShort(7) & 0xFFFF) == 512;
+            // an MM-8 tile (format 2) is refused too
+            byte[] old = packed.clone();
+            java.nio.ByteBuffer.wrap(old).order(java.nio.ByteOrder.LITTLE_ENDIAN).putShort(4, (short) 2).put(6, (byte) 2).putShort(7, (short) 256);
+            try {
+                SurfaceTile.unpack(3, -2, old);
+            } catch (java.io.IOException e) {
+                mm8 = e.getMessage().contains("format");
+            }
             fixture += "; " + bytes.length + " bytes from MM-1, " + packed.length + " now, " + want.exploredCount() + " explored";
         } catch (Exception e) {
             fixture = e.toString();
         }
         expect("a tile MM-1 wrote (format 1, 4-block samples, no colour) is refused, so it is dropped and captured again", refused, fixture);
-        expect("a tile written now (format 2: 2-block samples with an RGB colour plane) reads back the same", again && header, fixture);
+        expect("an MM-8 tile (format 2, 2-block samples) is refused, so it is dropped and captured again", mm8, "");
+        expect("a tile written now (format 3: a sample a block, with the floor's colour and the water's apart) reads back the same", again && header, fixture);
         String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT), arch = System.getProperty("os.arch", "");
         boolean nativeHere = (os.contains("linux") && (arch.equals("amd64") || arch.equals("aarch64") || arch.equals("ppc64le")))
             || (os.contains("mac") && arch.equals("aarch64"));
@@ -341,8 +351,9 @@ public final class MapClientTests {
             t.water[i] = (byte) (h < 62 ? 62 - h : 0);
             t.surface[i] = (byte) ((sx / 16 + sz / 16 + (sx * sz % 3 == 0 ? 1 : 0)) % 8);
             t.tint[i] = (short) (0x5A60 + sx * 3 + sz * 5);
-            t.canopy[i] = (byte) ((sx * 31 + sz * 17) % 256);
+            t.above[i] = (byte) ((sx * 31 + sz * 17) % 256);
             t.colour[i] = (sx * 97 + sz * 13) % 256 << 16 | (sx * 5 + sz * 71) % 256 << 8 | (sx * sz) % 256;
+            t.waterColour[i] = (short) (h < 62 ? 0x2A4F + sx * 3 - sz : 0);
             if ((sx + sz) % 9 != 0) t.explored[i >>> 6] |= 1L << i;
         }
         return t;
@@ -515,8 +526,12 @@ public final class MapClientTests {
             PaintMap.maxUploadsPerFrame() + " at most");
         String bakeTime = PaintMap.bakeTimeLine();
         MapMod.LOGGER.info("SELFTEST client{}", bakeTime.replace("  bake time per tile", " bake time per tile"));
-        expect("/mapmod stats reports the bake time per tile (prep with the brush off-thread, the bake pass on the render thread)",
-            stats.stream().anyMatch(l -> l.contains("bake time per tile") && l.contains("brush")), bakeTime.trim());
+        expect("/mapmod stats reports the bake time per tile (the prep off-thread, the bake pass on the render thread)",
+            stats.stream().anyMatch(l -> l.contains("bake time per tile") && l.contains("prep") && l.contains("bake pass")), bakeTime.trim());
+        String sizes = PaintMap.tileSizeLine();
+        MapMod.LOGGER.info("SELFTEST client{}", sizes.replace("  tiles:", " tile sizes:"));
+        expect("/mapmod stats reports a tile's memory and the tile files' size on disk (MM-9)",
+            stats.stream().anyMatch(l -> l.contains("in memory") && l.contains("on disk")), sizes.trim());
         expect("/mapmod stats shows GPU time (or n/a), baked tiles, mips, cache MB and bakes per frame",
             stats.stream().anyMatch(l -> l.contains("GPU ")) && stats.stream().anyMatch(l -> l.contains("baked tiles") && l.contains("mips") && l.contains(" MB"))
                 && stats.stream().anyMatch(l -> l.contains("bakes") && l.contains("/frame")), String.join(" | ", stats));
@@ -694,8 +709,6 @@ public final class MapClientTests {
             if (c.ok()) pass++;
             else fail++;
         }
-        // the local screenshot shows contours: switched on here, checked once the map has painted for a while
-        MapClient.setContours(true);
         MapScreen screen = new MapScreen();
         screen.centre(px, pz, 0.5f);
         MapClient.show(screen);
@@ -713,14 +726,13 @@ public final class MapClientTests {
     static boolean localDone;
     private static long framesAtOpen;
 
-    /** A few seconds after the local map opened with contours on: they were painted. */
+    /** A few seconds after the local map opened: it has been drawing. */
     private static void localLater() {
-        boolean painted = PaintMap.frames() > framesAtOpen && PaintMap.contoursPainted();
-        MapMod.LOGGER.info("SELFTEST local {} the map paints contour lines once they are switched on ({} frames)", painted ? "PASS" : "FAIL",
-            PaintMap.frames() - framesAtOpen);
-        if (painted) localPass++;
+        boolean drawn = PaintMap.frames() > framesAtOpen;
+        MapMod.LOGGER.info("SELFTEST local {} the open map draws its frames ({} frames)", drawn ? "PASS" : "FAIL", PaintMap.frames() - framesAtOpen);
+        if (drawn) localPass++;
         else localFail++;
-        // the fog checks follow once the open map holds the captured land round the player
+        // the unexplored-land checks follow once the open map holds the captured land round the player
         localFogTicks = 1;
     }
 
@@ -732,7 +744,7 @@ public final class MapClientTests {
         else localFail++;
     }
 
-    /** MM-5, on a server without MapMod: nothing this client captured is fogged. Waits (up to 30 s) for the open map. */
+    /** MM-5, on a server without MapMod: everything this client captured shows. Waits (up to 30 s) for the open map. */
     private static void localFog(Minecraft mc) {
         if (++localFogTicks < 600 && !ownCaptureReady(mc)) return;
         localFogTicks = 0;
@@ -743,13 +755,13 @@ public final class MapClientTests {
 
     /** True once the open map holds the captured land round the player and has nothing left to do. */
     private static boolean ownCaptureReady(Minecraft mc) {
-        return mc.player != null && PaintMap.idle() && PaintMap.fogAt(mc.player.getBlockX(), mc.player.getBlockZ()) >= 0;
+        return mc.player != null && PaintMap.idle() && PaintMap.captured(mc.player.getBlockX(), mc.player.getBlockZ());
     }
 
     /**
-     * The fog is this client's own capture, whatever the group's fog says (MM-5): with the group's fog cleared for the
-     * check (so every captured chunk lies past it, beyond the 6-chunk visit radius too), every captured chunk may show at
-     * the fog's source, every one further in than the fog's soft edge shows, and so does the land round the player.
+     * What shows is this client's own capture, whatever the group's fog says (MM-5; MM-9 with no soft edge): with the
+     * group's fog cleared for the check (so every captured chunk lies past it, beyond the 6-chunk visit radius too), every
+     * chunk the capture holds round the player shows on the map (the map knows it captured), and the player's own.
      */
     private static List<BakeCheck.Result> ownCapture(Minecraft mc) {
         List<BakeCheck.Result> out = new ArrayList<>();
@@ -758,29 +770,28 @@ public final class MapClientTests {
         MapClient.FOG.clear();
         try {
             int pcx = px >> 4, pcz = pz >> 4, r = mc.options.getEffectiveRenderDistance() + 2;
-            int rim = (int) Math.ceil(PaintPalette.current().fogEdge() / 16) + 1;
-            int captured = 0, beyondVisit = 0, unexplored = 0, inner = 0, hidden = 0;
+            int captured = 0, beyondVisit = 0, hidden = 0;
+            java.util.Map<Long, SurfaceTile> tiles = new java.util.HashMap<>();
             for (int dz = -r; dz <= r; dz++) {
                 for (int dx = -r; dx <= r; dx++) {
                     int bx = (pcx + dx) * 16 + 8, bz = (pcz + dz) * 16 + 8;
-                    if (!PaintMap.captured(bx, bz)) continue;
+                    int tx = SurfaceTile.tileOfBlock(bx), tz = SurfaceTile.tileOfBlock(bz);
+                    SurfaceTile t = tiles.computeIfAbsent((long) tx << 32 ^ (tz & 0xFFFFFFFFL), k -> {
+                        try {
+                            return Capture.tile(tx, tz).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    });
+                    if (t == null || !t.explored(SurfaceTile.indexOfBlock(bx, bz))) continue;
                     captured++;
                     if (dx * dx + dz * dz > MapServer.VISIT_RADIUS * MapServer.VISIT_RADIUS) beyondVisit++;
-                    if (!PaintMap.fogSourceExplores(bx, bz)) unexplored++;
-                    boolean deep = true;
-                    for (int k = -rim; k <= rim && deep; k++) {
-                        for (int j = -rim; j <= rim && deep; j++) deep = PaintMap.captured(bx + j * 16, bz + k * 16);
-                    }
-                    if (!deep) continue;
-                    inner++;
-                    if (!PaintMap.fogShows(bx, bz)) hidden++;
+                    if (!PaintMap.captured(bx, bz)) hidden++;
                 }
             }
-            float here = PaintMap.fogAt(px, pz);
-            out.add(new BakeCheck.Result("with the group's fog cleared, every captured chunk may show, those past the visit radius too",
-                captured > 0 && beyondVisit > 0 && unexplored == 0, captured + " captured chunks, " + beyondVisit + " past the visit radius, " + unexplored + " fogged at the source"));
-            out.add(new BakeCheck.Result("every captured chunk further in than the fog's soft edge (" + rim + " chunks) shows, and the land round the player fully",
-                inner > 0 && hidden == 0 && here >= 0.99f, inner + " chunks that far in, " + hidden + " of them fogged; mask round the player " + here));
+            out.add(new BakeCheck.Result("with the group's fog cleared, every chunk this client captured shows on the map, those past the visit radius too",
+                captured > 0 && beyondVisit > 0 && hidden == 0, captured + " captured chunks, " + beyondVisit + " past the visit radius, " + hidden + " not shown"));
+            out.add(new BakeCheck.Result("the land round the player shows", PaintMap.captured(px, pz), ""));
         } finally {
             MapClient.FOG.putAll(kept);
         }
@@ -838,251 +849,138 @@ public final class MapClientTests {
         }
     }
 
-    /** The painted map's shader and palette, before the map has been opened. */
-    private static void painted() {
+    /** The map's shader and palette, before the map has been opened (MM-9: the per-block look). */
+    private static void look() {
         String compiled = PaintMap.compileCheck();
-        expect("the painted map's shaders compile (paint, and quads for baked tiles, mips and the finish)", compiled == null, compiled == null ? "" : compiled);
+        expect("the map's shader compiles (quads for tile pictures, baked tiles, mips and the screen)", compiled == null, compiled == null ? "" : compiled);
         PaintPalette pal = PaintPalette.current();
-        expect("map_palette.json is read from the resources", PaintPalette.loads() > 0 && PaintPalette.lastError().isEmpty()
-            && pal.paper() == 0xE6DCC6 && pal.classColour()[0] == PaintPalette.NONE && pal.snowAbove() == 190 && pal.hillshade() == 0.5f,
-            PaintPalette.loads() + " loads " + PaintPalette.lastError());
+        expect("map_palette.json is read from the resources and carries MM-9's values (no class colours, shading 1, water 0.55 / 16 / 0.45, a dark background)",
+            PaintPalette.loads() > 0 && PaintPalette.lastError().isEmpty() && pal.background() == 0x16181D && pal.shading() == 1f
+                && pal.waterOpacity() == 0.55f && pal.waterDepth() == 16 && pal.waterDarken() == 0.45f
+                && java.util.Arrays.stream(pal.classColour()).allMatch(c -> c == PaintPalette.NONE),
+            PaintPalette.loads() + " loads " + PaintPalette.lastError() + " " + pal);
+        PaintPalette d = PaintPalette.DEFAULT;
         PaintPalette broken = PaintPalette.parse(JsonParser.parseString(
-            "{\"classes\": {\"2\": {\"colour\": \"#123456\"}, \"3\": {\"colour\": \"not a colour\"}}, \"snow\": {\"above\": 150}}").getAsJsonObject());
+            "{\"classes\": {\"2\": {\"colour\": \"#123456\"}, \"3\": {\"colour\": \"not a colour\"}}, \"shading\": \"lots\", \"water\": {\"depth\": 4}}")
+            .getAsJsonObject());
         expect("a palette keeps the built-in value for whatever it leaves out or gets wrong",
-            broken.classColour()[2] == 0x123456 && broken.classColour()[3] == PaintPalette.DEFAULT.classColour()[3]
-                && broken.snowAbove() == 150 && broken.paper() == PaintPalette.DEFAULT.paper(), "");
-        expect("map_palette.json carries the MM-3 values (edges, forest, contours, finish), MM-7's (a shore band half as strong and narrower), MM-8's (real colours: no class colours, the painted pull, the water's tint) and MM-8b's (a wider brush, colours merged)",
-            pal.shore() == 0xB0CCD0 && pal.shoreWidth() == 3 && pal.deepDist() == 40 && pal.edgeWarp() == 5 && pal.forestDarken() == 0.12f
-                && pal.colourSaturation() == 0.8f && pal.colourValue() == 0.2f && pal.brushSize() == 12 && pal.colourMerge() == 0.1f && pal.waterTint() == 0.5f
-                && java.util.Arrays.stream(pal.classColour()).allMatch(c -> c == PaintPalette.NONE)
-                && pal.contourInterval() == 16 && pal.grain() == 0.035f && pal.vignette() == 0.18f, pal.toString());
-        PaintPalette partial = PaintPalette.parse(JsonParser.parseString(
-            "{\"water\": {\"shore\": \"#102030\", \"shore_width\": \"wide\"}, \"forest\": {\"stipple\": 0.5}, \"contours\": {\"interval\": 8},"
-                + " \"finish\": {\"vignette\": null}, \"edges\": 3}").getAsJsonObject());
-        PaintPalette d = PaintPalette.DEFAULT;
-        expect("each new palette value falls back on its own",
-            partial.shore() == 0x102030 && partial.shoreWidth() == d.shoreWidth() && partial.deepDist() == d.deepDist()
-                && partial.forestStipple() == 0.5f && partial.forestDarken() == d.forestDarken() && partial.contourInterval() == 8
-                && partial.contourStrength() == d.contourStrength() && partial.vignette() == d.vignette() && partial.grain() == d.grain()
-                && partial.edgeSoftness() == d.edgeSoftness() && partial.edgeWarp() == d.edgeWarp()
-                && partial.waterShallow() == d.waterShallow(), partial.toString());
-        PaintPalette fogged = PaintPalette.parse(JsonParser.parseString("{\"fog\": {\"edge\": 96, \"clouds\": \"lots\"}}").getAsJsonObject());
-        expect("map_palette.json carries the fog (colour, edge width, clouds), each value falling back on its own",
-            pal.fogColour() == 0xD8CFBA && pal.fogEdge() == 48 && pal.fogClouds() == 0.6f && fogged.fogEdge() == 96
-                && fogged.fogClouds() == d.fogClouds() && fogged.fogColour() == d.fogColour(), pal.fogColour() + " " + pal.fogEdge() + " " + pal.fogClouds());
-        distanceField();
-        realColours();
-        organicBorders();
-        String canopy = PaintMap.canopyCheck();
-        expect("canopy is prepared and uploaded as the surface texture's alpha", canopy == null, canopy == null ? "" : canopy);
-        contourToggle();
-    }
-
-    /**
-     * MM-8 on the CPU: the painted pull keeps hues and mutes them, a class colour override replaces the real colour of
-     * its class only, and the brush settles speckle into patches while a border between two colours stays where it is
-     * and stays sharp.
-     */
-    private static void realColours() {
-        PaintPalette d = PaintPalette.DEFAULT;
-        int grass = d.paint(0x4E7A2C), stone = d.paint(0x7D7D7D), mycelium = d.paint(0x6F6369);
-        expect("the painted pull keeps each colour's hue and mutes it: grass stays green, stone grey, mycelium purple-grey",
-            ColourClientTests.green(grass) && ColourClientTests.grey(stone) && ColourClientTests.purpleGrey(mycelium)
-                && saturation(grass) < saturation(0x4E7A2C),
-            ColourClientTests.hex(grass) + " " + ColourClientTests.hex(stone) + " " + ColourClientTests.hex(mycelium));
+            broken.classColour()[2] == 0x123456 && broken.classColour()[3] == d.classColour()[3] && broken.shading() == d.shading()
+                && broken.waterDepth() == 4 && broken.waterOpacity() == d.waterOpacity() && broken.background() == d.background(), broken.toString());
+        // a resource pack's palette from before MM-9 (the painted look's keys only) reads as the built-in one
+        PaintPalette old = PaintPalette.parse(JsonParser.parseString("{\"paper\": \"#e6dcc6\", \"hillshade\": 0.5, \"edges\": {\"warp\": 5},"
+            + " \"fog\": {\"colour\": \"#d8cfba\", \"edge\": 48}, \"water\": {\"shallow\": \"#8db6c2\", \"deep_at\": 20}, \"contours\": {\"interval\": 16}}").getAsJsonObject());
+        expect("a palette from before MM-9 (the painted look's keys) reads as the built-in one", old.background() == d.background()
+            && old.shading() == d.shading() && old.waterOpacity() == d.waterOpacity() && old.waterDepth() == d.waterDepth() && old.waterDarken() == d.waterDarken(), old.toString());
         PaintPalette over = PaintPalette.parse(JsonParser.parseString("{\"classes\": {\"3\": {\"colour\": \"#204080\", \"tint\": 0}}}").getAsJsonObject());
         expect("a class colour override replaces the real colour of that class only",
             over.landBase(SurfaceClass.ROCK, 0x7D7D7D, 0x91BD59) == 0x204080 && over.landBase(SurfaceClass.GRASS, 0x4E7A2C, 0x91BD59) == 0x4E7A2C
                 && d.landBase(SurfaceClass.ROCK, 0x7D7D7D, 0x91BD59) == 0x7D7D7D, "");
-        // a tile: west half grass, east half stone, a speckle of dirt in the grass every few samples
-        SurfaceTile t = new SurfaceTile(0, 0);
-        int speck = 0x866043, half = SurfaceTile.SIDE / 2;
-        for (int i = 0; i < SurfaceTile.AREA; i++) {
-            int sx = i % SurfaceTile.SIDE, sz = i / SurfaceTile.SIDE;
-            boolean west = sx < half;
-            t.surface[i] = west ? SurfaceClass.GRASS : SurfaceClass.ROCK;
-            t.colour[i] = west ? (sx % 5 == 2 && sz % 5 == 2 ? speck : 0x4E7A2C) : 0x7D7D7D;
-            t.height[i] = 70;
-            t.explored[i >>> 6] |= 1L << i;
-        }
-        SurfaceTile[][] around = new SurfaceTile[3][3];
-        around[1][1] = t;
-        // MM-8b: once to warm the JIT up, then the fastest of three (a single run on the busy CI machine timed the
-        // compiler and the game's other threads as much as the brush)
-        TilePrep.prepare(around, d);
-        TilePrep.Result r = null;
-        long ms = Long.MAX_VALUE, brushNanos = Long.MAX_VALUE;
-        for (int run = 0; run < 3; run++) {
-            long t0 = System.nanoTime();
-            r = TilePrep.prepare(around, d);
-            ms = Math.min(ms, (System.nanoTime() - t0) / 1_000_000);
-            brushNanos = Math.min(brushNanos, r.brushNanos());
-        }
-        int a = TilePrep.APRON, z = 100 + a;
-        int specked = r.pixel(TilePrep.SURFACE, 52 + a, 52 + a) & 0xFFFFFF, plain = r.pixel(TilePrep.SURFACE, 50 + a, 50 + a) & 0xFFFFFF;
-        int left = r.pixel(TilePrep.SURFACE, half - 1 + a, z) & 0xFFFFFF, right = r.pixel(TilePrep.SURFACE, half + a, z) & 0xFFFFFF;
-        expect("the brush settles a speckle of another block into the patch round it", ColourClientTests.diff(specked, plain) <= 24,
-            ColourClientTests.hex(specked) + " where the speckle was, " + ColourClientTests.hex(plain) + " beside it");
-        expect("the brush keeps a border between two blocks where it is and sharp: the samples either side keep their own colours",
-            ColourClientTests.diff(left, d.paint(0x4E7A2C)) <= 24 && ColourClientTests.diff(right, d.paint(0x7D7D7D)) <= 6 && ColourClientTests.diff(left, right) >= 40,
-            ColourClientTests.hex(left) + " | " + ColourClientTests.hex(right));
-        MapMod.LOGGER.info("SELFTEST client brush: a tile prepared in {} ms, the brush {} ms", ms, brushNanos / 1_000_000);
-        expect("the brush (with MM-8b's merge and region blur) is cheap enough to run once per tile off the render thread (under 150 ms here, warm)", brushNanos < 150_000_000L,
-            brushNanos / 1_000_000 + " ms for the brush, " + ms + " ms for the whole prep (fastest of three)");
+        shading(d);
+        water(d);
+        blocks(d);
+        String picture = PaintMap.pictureCheck();
+        expect("a tile's picture is prepared and uploaded block for block: unexplored transparent, explored in its colour, shaded by height",
+            picture == null, picture == null ? "" : picture);
+    }
+
+    private static int luma(int c) {
+        return (c >> 16 & 255) * 3 + (c >> 8 & 255) * 6 + (c & 255);
+    }
+
+    /** MM-9: the height shading's five clear steps, and its strength. */
+    private static void shading(PaintPalette d) {
+        int c = 0x6A8F3C;
+        int m2 = d.shade(c, -2), m1 = d.shade(c, -1), p1 = d.shade(c, 1), p2 = d.shade(c, 2);
+        expect("the height shading has five clear steps: two or more lower, one lower, level, one higher, two or more higher",
+            d.shade(c, 0) == c && luma(m2) < luma(m1) && luma(m1) < luma(c) && luma(c) < luma(p1) && luma(p1) < luma(p2)
+                && d.shade(c, 7) == p2 && d.shade(c, -9) == m2 && luma(c) - luma(m1) >= 60 && luma(p1) - luma(c) >= 60,
+            ColourClientTests.hex(m2) + " " + ColourClientTests.hex(m1) + " " + ColourClientTests.hex(c) + " " + ColourClientTests.hex(p1) + " " + ColourClientTests.hex(p2));
+        PaintPalette flat = PaintPalette.parse(JsonParser.parseString("{\"shading\": 0}").getAsJsonObject());
+        PaintPalette strong = PaintPalette.parse(JsonParser.parseString("{\"shading\": 2}").getAsJsonObject());
+        expect("shading 0 turns it off; 2 makes it stronger", flat.shade(c, 2) == c && flat.shade(c, -2) == c
+            && luma(strong.shade(c, -1)) < luma(m1) && luma(strong.shade(c, 1)) > luma(p1), "");
+    }
+
+    /** MM-9: water over its floor: the floor shows through, less and darker the deeper the water. */
+    private static void water(PaintPalette d) {
+        int sand = 0xDBCFA3, stone = 0x7D7D7D, w = 0x2C52A0;
+        int shallow = d.water(sand, w, 1), mid = d.water(sand, w, 6), deep = d.water(sand, w, 16), deeper = d.water(sand, w, 40);
+        expect("shallow water shows the floor through it, tinted by the water's own colour",
+            ColourClientTests.diff(shallow, sand) > 20 && ColourClientTests.diff(shallow, w) > 20 && ColourClientTests.diff(d.water(stone, w, 1), shallow) >= 30,
+            ColourClientTests.hex(shallow) + " over sand, " + ColourClientTests.hex(d.water(stone, w, 1)) + " over stone");
+        expect("deeper water is darker and shows less of the floor; past water.depth only the water shows",
+            luma(mid) < luma(shallow) && luma(deep) < luma(mid) && deep == deeper && d.water(sand, w, 16) == d.water(stone, w, 16)
+                && ColourClientTests.diff(deep, 0x16181D) > 40,
+            ColourClientTests.hex(shallow) + " " + ColourClientTests.hex(mid) + " " + ColourClientTests.hex(deep));
     }
 
     /**
-     * MM-8b on the CPU: near colours merge into one, a stray sample or two inside a region joins it, and the region
-     * texture the shader cuts borders from runs straight through a staircase of blocks: its half-way line between two
-     * colours follows the staircase's diagonal, not its steps.
+     * MM-9 on the CPU: a tile prepared block for block. Every block keeps its own colour (a stray block shows, a border
+     * between two blocks stays exactly where it is), a ridge is lit on its rise and shaded past it, the shading reads
+     * across the tile's west and north borders from the neighbouring tiles (no seam), water shows its floor darker with
+     * depth, and the prep is cheap enough to run once per tile off the render thread.
      */
-    private static void organicBorders() {
-        PaintPalette d = PaintPalette.DEFAULT;
-        SurfaceTile t = new SurfaceTile(0, 0);
-        int sand = 0xDBCFA3, stone = 0x7D7D7D, side = SurfaceTile.SIDE;
+    private static void blocks(PaintPalette d) {
+        SurfaceTile t = new SurfaceTile(1, 0), west = new SurfaceTile(0, 0);
+        int speck = 0x866043, half = SurfaceTile.SIDE / 2, side = SurfaceTile.SIDE;
         for (int i = 0; i < SurfaceTile.AREA; i++) {
             int sx = i % side, sz = i / side;
-            // the border steps 2 samples (4 blocks) west every 4 rows: a staircase along a diagonal
-            int edge = 200 - 2 * (sz / 4);
-            boolean east = sx >= edge;
-            t.surface[i] = east ? SurfaceClass.ROCK : SurfaceClass.SAND;
-            // the sand in two shades a checkerboard apart (as grass variants are)
-            t.colour[i] = east ? stone : ((sx + sz) % 2 == 0 ? sand : 0xD5C99D);
+            boolean w = sx < half;
+            t.surface[i] = w ? SurfaceClass.GRASS : SurfaceClass.ROCK;
+            t.colour[i] = w ? (sx % 5 == 2 && sz % 5 == 2 ? speck : 0x4E7A2C) : 0x7D7D7D;
             t.height[i] = 70;
+            // a ridge three blocks high along x = 300
+            if (sx == 300) t.height[i] = 73;
+            // a pond from z 400: depth 1 at x 10 growing to 30 at x 39, over sand, and from x 40 over stone at depth 1
+            if (sz >= 400 && sz < 420 && sx >= 10 && sx < 50) {
+                int depth = sx < 40 ? 1 + (sx - 10) : 1;
+                t.height[i] = (short) (70 - depth);
+                t.water[i] = (byte) depth;
+                t.colour[i] = sx < 40 ? 0xDBCFA3 : 0x7D7D7D;
+                t.waterColour[i] = (short) (5 << 11 | 20 << 5 | 20);
+            }
             t.explored[i >>> 6] |= 1L << i;
+            // the tile to the west: its last column five blocks higher
+            west.height[i] = (short) (sx == side - 1 ? 75 : 70);
+            west.colour[i] = 0x4E7A2C;
+            west.explored[i >>> 6] |= 1L << i;
         }
-        // strays in the sand: one stone sample, two side by side
-        int[][] strays = {{40, 40}, {60, 60}, {61, 60}};
-        for (int[] p : strays) t.colour[SurfaceTile.index(p[0], p[1])] = stone;
         SurfaceTile[][] around = new SurfaceTile[3][3];
         around[1][1] = t;
-        TilePrep.Result r = TilePrep.prepare(around, d);
-        int a = TilePrep.APRON;
-        StringBuilder bad = new StringBuilder();
-        for (int[] p : strays) {
-            int at = r.pixel(TilePrep.SURFACE, p[0] + a, p[1] + a) & 0xFFFFFF, beside = r.pixel(TilePrep.SURFACE, p[0] - 5 + a, p[1] + a) & 0xFFFFFF;
-            if (ColourClientTests.diff(at, beside) > 12) bad.append(ColourClientTests.hex(at)).append(" at ").append(p[0]).append(',').append(p[1])
-                .append(" beside ").append(ColourClientTests.hex(beside)).append("; ");
+        around[1][0] = west;
+        // once to warm the JIT up, then the fastest of three (a single run on the busy CI machine times the compiler too)
+        TilePrep.prepare(around, d);
+        TilePrep.Result r = null;
+        long ns = Long.MAX_VALUE;
+        for (int run = 0; run < 3; run++) {
+            long t0 = System.nanoTime();
+            r = TilePrep.prepare(around, d);
+            ns = Math.min(ns, System.nanoTime() - t0);
         }
-        expect("stray blocks inside a region are merged into it (one sample, and two side by side)", bad.isEmpty(), bad.toString());
-        int lo = 255 * 3, hi = 0;
-        for (int z = 100; z < 110; z++) {
-            for (int x = 20; x < 30; x++) {
-                int c = r.pixel(TilePrep.SURFACE, x + a, z + a);
-                int sum = (c >> 16 & 255) + (c >> 8 & 255) + (c & 255);
-                lo = Math.min(lo, sum);
-                hi = Math.max(hi, sum);
-            }
-        }
-        expect("two near shades of one ground merge into one colour", hi - lo <= 6, (hi - lo) + " apart (r + g + b)");
-        // the half-way line between the two sides along each row, in the region texture and in the brushed colour
-        int sandP = r.pixel(TilePrep.SURFACE, 100 + a, 20 + a) & 0xFFFFFF, stoneP = r.pixel(TilePrep.SURFACE, 240 + a, 20 + a) & 0xFFFFFF;
-        java.util.List<double[]> reg = new java.util.ArrayList<>(), raw = new java.util.ArrayList<>();
-        for (int z = 16; z < 240; z++) {
-            double xr = crossing(r, TilePrep.REGION, z + a, sandP, stoneP), xs = crossing(r, TilePrep.SURFACE, z + a, sandP, stoneP);
-            if (!Double.isNaN(xr)) reg.add(new double[]{z, xr - a});
-            if (!Double.isNaN(xs)) raw.add(new double[]{z, xs - a});
-        }
-        double[] fr = lineFit(reg), fs = lineFit(raw);
-        expect("the region texture's border runs straight through a staircase of blocks (a curve, not steps)",
-            reg.size() > 200 && fr[0] <= 0.08 && fr[1] <= 0.2 && Math.abs(fr[2] + 0.5) < 0.05,
-            String.format(Locale.ROOT, "%d rows, off the line by %.3f samples (rms), %.3f at most, slope %.3f; the brushed colour's border %.3f rms, %.3f at most",
-                reg.size(), fr[0], fr[1], fr[2], fs[0], fs[1]));
-    }
-
-    /** Where along row {@code z} a texture first passes half way from {@code from} to {@code to} (texels, interpolated), or NaN. */
-    private static double crossing(TilePrep.Result r, int texture, int z, int from, int to) {
-        double prev = Double.NaN;
-        for (int x = 0; x < TilePrep.SIZE; x++) {
-            double p = along(r.pixel(texture, x, z), from, to);
-            if (!Double.isNaN(prev) && prev < 0.5 && p >= 0.5) return x - 1 + (0.5 - prev) / (p - prev);
-            prev = p;
-        }
-        return Double.NaN;
-    }
-
-    private static double along(int c, int from, int to) {
-        double num = 0, den = 0;
-        for (int sh = 0; sh <= 16; sh += 8) {
-            int a = from >> sh & 255, b = to >> sh & 255, v = c >> sh & 255;
-            num += (double) (v - a) * (b - a);
-            den += (double) (b - a) * (b - a);
-        }
-        return den == 0 ? 0 : num / den;
-    }
-
-    /** A least-squares line x = a + b z through the points: rms and largest distance off it, and b. */
-    private static double[] lineFit(java.util.List<double[]> pts) {
-        int n = pts.size();
-        if (n < 2) return new double[]{99, 99, 0};
-        double sz = 0, sx = 0, szz = 0, szx = 0;
-        for (double[] p : pts) {
-            sz += p[0];
-            sx += p[1];
-            szz += p[0] * p[0];
-            szx += p[0] * p[1];
-        }
-        double b = (n * szx - sz * sx) / (n * szz - sz * sz), a0 = (sx - b * sz) / n, ss = 0, worst = 0;
-        for (double[] p : pts) {
-            double e = p[1] - (a0 + b * p[0]);
-            ss += e * e;
-            worst = Math.max(worst, Math.abs(e));
-        }
-        return new double[]{Math.sqrt(ss / n), worst, b};
-    }
-
-    private static float saturation(int c) {
-        int r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255, max = Math.max(r, Math.max(g, b)), min = Math.min(r, Math.min(g, b));
-        return max == 0 ? 0 : (max - min) / (float) max;
-    }
-
-    /** The shore distance field on a small grid: a straight coast, a one-sample river, open land and the cap. */
-    private static void distanceField() {
-        int w = 40, h = 30;
-        boolean[] wet = new boolean[w * h];
-        // sea on the left (x < 10), a river one sample wide at x = 25
-        for (int z = 0; z < h; z++) {
-            for (int x = 0; x < 10; x++) wet[x + z * w] = true;
-            wet[25 + z * w] = true;
-        }
-        float[] d = TilePrep.signedDistance(wet, w, h, 16);
-        boolean coast = Math.abs(d[9 + 15 * w] - 0.5f) < 1e-3 && Math.abs(d[10 + 15 * w] + 0.5f) < 1e-3;
-        boolean deep = Math.abs(d[2 + 15 * w] - 7.5f) < 1e-3 && Math.abs(d[17 + 15 * w] + 7.5f) < 1e-3;
-        boolean river = Math.abs(d[25 + 15 * w] - 0.5f) < 1e-3 && Math.abs(d[24 + 15 * w] + 0.5f) < 1e-3 && Math.abs(d[27 + 15 * w] + 1.5f) < 1e-3;
-        boolean[] dry = new boolean[w * h];
-        float[] none = TilePrep.signedDistance(dry, w, h, 16);
-        boolean capped = none[0] == -16f && none[w * h - 1] == -16f;
-        boolean[] diag = new boolean[w * h];
-        diag[0] = true;
-        float[] dd = TilePrep.signedDistance(diag, w, h, 16);
-        boolean euclid = Math.abs(dd[3 + 4 * w] + 4.5f) < 1e-3;
-        expect("the shore distance field: half a sample either side of the coast, exact inland and at sea, rivers, the cap",
-            coast && deep && river && capped && euclid,
-            "coast " + coast + " deep " + deep + " river " + river + " cap " + capped + " euclid " + euclid);
-    }
-
-    /** Contours are off by default; the map's switch turns them on and off and the setting is saved. */
-    private static void contourToggle() {
-        boolean before = MapClient.contours;
-        MapScreen.toggleContours();
-        boolean on = MapClient.contours;
-        String saved = "";
-        try {
-            saved = Files.readString(MapClient.settingsPath());
-        } catch (Exception e) {
-            saved = e.toString();
-        }
-        boolean savedOn = saved.replace(" ", "").contains("\"contours\":true");
-        MapScreen.toggleContours();
-        boolean off = !MapClient.contours;
-        try {
-            saved = Files.readString(MapClient.settingsPath());
-        } catch (Exception e) {
-            saved = e.toString();
-        }
-        boolean savedOff = saved.replace(" ", "").contains("\"contours\":false");
-        expect("contours are off by default, and the map's switch turns them on and off and saves it",
-            !before && on && savedOn && off && savedOff, "before " + before + " on " + on + " saved " + savedOn + " off " + off + " saved " + savedOff);
+        int specked = r.pixel(52, 52) & 0xFFFFFF, plain = r.pixel(50, 50) & 0xFFFFFF;
+        expect("a stray block keeps its own colour, block for block (no brush)", specked == speck && plain == 0x4E7A2C,
+            ColourClientTests.hex(specked) + " where the speck is, " + ColourClientTests.hex(plain) + " beside it");
+        int left = r.pixel(half - 1, 100) & 0xFFFFFF, right = r.pixel(half, 100) & 0xFFFFFF;
+        expect("a border between two blocks stays exactly where it is: the blocks either side keep their own colours",
+            left == 0x4E7A2C && right == 0x7D7D7D, ColourClientTests.hex(left) + " | " + ColourClientTests.hex(right));
+        int ridge = r.pixel(300, 100) & 0xFFFFFF, past = r.pixel(301, 100) & 0xFFFFFF, flatStone = r.pixel(305, 100) & 0xFFFFFF;
+        expect("a ridge is lit where it rises (against its west neighbour) and shaded past it, in the shading's steps",
+            ridge == d.shade(0x7D7D7D, 3) && past == d.shade(0x7D7D7D, -3) && flatStone == 0x7D7D7D,
+            ColourClientTests.hex(ridge) + " on it, " + ColourClientTests.hex(past) + " past it, " + ColourClientTests.hex(flatStone) + " flat");
+        int edge = r.pixel(0, 100) & 0xFFFFFF;
+        SurfaceTile[][] alone = new SurfaceTile[3][3];
+        alone[1][1] = t;
+        int edgeAlone = TilePrep.prepare(alone, d).pixel(0, 100) & 0xFFFFFF;
+        expect("the shading reads across a tile border: a block below the west tile's last column is shaded, and not without that tile",
+            edge == d.shade(0x4E7A2C, -5) && edgeAlone == 0x4E7A2C, ColourClientTests.hex(edge) + " with the west tile, " + ColourClientTests.hex(edgeAlone) + " without");
+        int w1 = r.pixel(10, 410), w10 = r.pixel(19, 410), w30 = r.pixel(39, 410), stoneFloor = r.pixel(40, 410);
+        expect("water shows its floor, darker with depth",
+            luma(w10) < luma(w1) && luma(w30) < luma(w10) && (w1 >>> 24) == 255 && (stoneFloor >>> 24) == 255,
+            ColourClientTests.hex(w1) + " at 1, " + ColourClientTests.hex(w10) + " at 10, " + ColourClientTests.hex(w30) + " at 30, "
+                + ColourClientTests.hex(stoneFloor) + " at 1 over stone");
+        MapMod.LOGGER.info("SELFTEST client prep: a tile prepared in {} ms (fastest of three)", ns / 1_000_000.0);
+        expect("a tile's picture is cheap enough to work out once per tile off the render thread (under 150 ms here, warm)", ns < 150_000_000L,
+            String.format(java.util.Locale.ROOT, "%.1f ms", ns / 1e6));
     }
 
     private static void expect(String what, boolean ok, String detail) {
@@ -1109,7 +1007,8 @@ public final class MapClientTests {
             return;
         }
         if (what.equals("fog")) {
-            fogCheck = new FogCheck(SyntheticTiles::make);
+            // MM-9: the per-block picture and unexplored land (the fog check before; the run still asks for "fog")
+            edgeCheck = new EdgeCheck(SyntheticTiles::make);
             return;
         }
         if (what.startsWith("waypoints")) {
@@ -1159,7 +1058,7 @@ public final class MapClientTests {
             MapClient.open();
             expect("on joining, M opens the fullscreen map", mc.gui.screen() instanceof MapScreen, "");
             if (mc.gui.screen() instanceof MapScreen) mc.gui.setScreen(null);
-            painted();
+            look();
             cleanupJoin();
         } else if (what.equals("locked")) {
             expect("F3+T reloads the map palette", PaintPalette.loads() > palettesBeforeReload && PaintPalette.lastError().isEmpty(),
@@ -1215,11 +1114,11 @@ public final class MapClientTests {
             expect("the map runs next to Quicksilver", FabricLoader.getInstance().isModLoaded("quicksilver"), "");
             for (CaptureClientTests.Check c : CaptureClientTests.run(false)) expect(c.what(), c.ok(), c.detail());
             // the map was opened, zoomed and closed by the script before this
-            expect("the painted map painted frames and uploaded tiles while open", PaintMap.frames() > 0 && PaintMap.uploads() > 0,
+            expect("the map drew frames and uploaded tiles while open", PaintMap.frames() > 0 && PaintMap.uploads() > 0,
                 PaintMap.frames() + " frames, " + PaintMap.uploads() + " uploads, " + PaintMap.tilesPainted() + " tiles in the last");
-            expect("the painted map uploads, bakes and copies mips at most " + PaintMap.UPLOADS_PER_FRAME + " times a frame",
+            expect("the map uploads, bakes and copies mips at most " + PaintMap.UPLOADS_PER_FRAME + " times a frame",
                 PaintMap.maxUploadsPerFrame() <= PaintMap.UPLOADS_PER_FRAME, PaintMap.maxUploadsPerFrame() + " at most");
-            expect("the painted map lets its tiles' data go when it closes", !PaintMap.open(), "");
+            expect("the map lets its tiles' data go when it closes", !PaintMap.open(), "");
             expect("the baked tiles and mips stay while the map is closed in the same world", PaintMap.bakedTiles() + PaintMap.mips() > 0
                 && PaintMap.cacheBytes() > 0, PaintMap.bakedTiles() + " tiles, " + PaintMap.mips() + " mips, " + PaintMap.cacheBytes() / 1048576 + " MB");
             expect("tiles are prepared off the render thread before they are uploaded", PaintMap.prepared() >= PaintMap.uploads(),

@@ -5,7 +5,7 @@ import com.meakaandre.mapmod.client.map.MapClient;
 import com.meakaandre.mapmod.client.paint.PaintMap;
 import net.fabricmc.api.ClientModInitializer;
 
-/** The map on the client: surface capture into tiles, the painted fullscreen map, the compass strip and the keys. */
+/** The map on the client: surface capture into tiles, the fullscreen map, the compass strip and the keys. */
 public class MapModClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {

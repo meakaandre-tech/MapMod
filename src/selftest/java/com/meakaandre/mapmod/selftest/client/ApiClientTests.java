@@ -79,7 +79,7 @@ public final class ApiClientTests {
         ClientTickEvents.END_CLIENT_TICK.register(mc -> step());
     }
 
-    /** Rings round the player every 32 blocks, bent with the painted map's warp, and a check of the view's arithmetic. */
+    /** Rings round the player every 32 blocks, and a check of the view's arithmetic. */
     private static void drawRings(GuiGraphicsExtractor g, MapView view) {
         draws++;
         viewX = view.centreX();
@@ -93,7 +93,7 @@ public final class ApiClientTests {
             for (int a = 0; a < 48; a++) {
                 double t = a * Math.PI * 2 / 48;
                 double x = mc.player.getX() + Math.cos(t) * r, z = mc.player.getZ() + Math.sin(t) * r;
-                double px = view.screenX(x - MapOverlay.warpX(x, z)), pz = view.screenY(z - MapOverlay.warpZ(x, z));
+                double px = view.screenX(x), pz = view.screenY(z);
                 if (view.visible(px, pz, 0)) g.fill((int) px, (int) pz, (int) px + 1, (int) pz + 1, 0xC0E05050);
             }
         }
@@ -186,12 +186,13 @@ public final class ApiClientTests {
         ticks(10);
         then(() -> {
             expect("and on again", MapOverlay.enabled(OVERLAY) && draws > at[0] && settings().contains("\"" + OVERLAY + "\":true"), "");
-            double wx = MapOverlay.warpX(1000.5, -2000.25), wx2 = MapOverlay.warpX(1000.5 + MapOverlay.WARP_PERIOD, -2000.25 - MapOverlay.WARP_PERIOD);
             double most = 0;
-            for (int i = 0; i < 400; i++) most = Math.max(most, Math.abs(MapOverlay.warpZ(i * 37.0, i * 53.0)));
-            expect("the warp the painted borders follow repeats every 8192 blocks and stays within the palette's edges.warp",
-                MapOverlay.WARP_PERIOD == 8192 && Math.abs(wx - wx2) < 1e-3 && most > 0 && most <= 5 * 1.0001,
-                String.format(Locale.ROOT, "%.4f vs %.4f, at most %.3f blocks", wx, wx2, most));
+            for (int i = 0; i < 400; i++) {
+                most = Math.max(most, Math.abs(MapOverlay.warpX(i * 37.0, i * 53.0)));
+                most = Math.max(most, Math.abs(MapOverlay.warpZ(i * 37.0, i * 53.0)));
+            }
+            expect("the deprecated warp (MM-9: the map shows every block where it is) is 0 everywhere, so offsetting by it still lines up",
+                most == 0, String.format(Locale.ROOT, "at most %.3f blocks", most));
         });
 
         // ---- markers: added, moved, removed, per dimension
@@ -209,7 +210,7 @@ public final class ApiClientTests {
         });
         effect("markers");
 
-        // ---- the palette: one override over the resource packs' palette, and the map paints again
+        // ---- the palette: one override over the resource packs' palette, and the map bakes again
         then(() -> {
             int before = MapPalette.version();
             MapPalette.classColour(MapSurface.GRASS, OVERRIDE_RGB);
@@ -225,14 +226,21 @@ public final class ApiClientTests {
             } catch (IllegalArgumentException e) {
                 typed = true;
             }
-            expect("a palette key is overridden from code, and the palette's version moves",
-                MapPalette.version() > before && "#8040c0".equals(MapPalette.overrides().get("classes.0.colour")) && MapPalette.keys().contains("fog.edge"),
-                before + " -> " + MapPalette.version() + ", " + MapPalette.overrides());
+            expect("a palette key is overridden from code, and the palette's version moves; the keys are MM-9's",
+                MapPalette.version() > before && "#8040c0".equals(MapPalette.overrides().get("classes.0.colour")) && MapPalette.keys().contains("shading")
+                    && MapPalette.keys().contains("background") && MapPalette.keys().contains("water.depth") && !MapPalette.keys().contains("fog.edge"),
+                before + " -> " + MapPalette.version() + ", " + MapPalette.overrides() + ", keys " + MapPalette.keys());
             expect("an unknown key or a number given as a colour is refused", threw && typed, "");
             int v = MapPalette.version();
-            MapPalette.edit().number("hillshade", 0.5f).colour("water.shore", 0x102030).apply();
-            MapPalette.edit().clear("hillshade").clear("water.shore").apply();
+            MapPalette.edit().number("shading", 0.5f).colour("background", 0x102030).apply();
+            MapPalette.edit().clear("shading").clear("background").apply();
             expect("a builder applies several overrides at once, and they clear again", MapPalette.version() == v + 2
+                && MapPalette.overrides().keySet().equals(java.util.Set.of("classes.0.colour")), MapPalette.overrides().toString());
+            // the painted look's keys (MM-9): accepted, and change nothing
+            MapPalette.number("hillshade", 0.5f);
+            MapPalette.edit().colour("paper", 0x123456).number("fog.edge", 64).clear("contours.interval").apply();
+            expect("a deprecated palette key (the painted look's) is accepted and has no effect", MapPalette.isDeprecated("hillshade")
+                && MapPalette.isDeprecated("paper") && !MapPalette.isDeprecated("shading")
                 && MapPalette.overrides().keySet().equals(java.util.Set.of("classes.0.colour")), MapPalette.overrides().toString());
         });
         effect("palette");
@@ -337,12 +345,12 @@ public final class ApiClientTests {
         then(() -> {
             MapLock.lockMap(OWNER, Component.literal("one"));
             MapLock.lockMap(OTHER, Component.literal("two"));
-            MapLock.lockLayer(OTHER, MapLock.CONTOURS);
+            MapLock.lockLayer(OTHER, MapLock.PINS);
             MapLock.unlockMap(OWNER);
             boolean stillLocked = MapLock.mapLocked() && MapLock.reason().getString().equals("two");
             MapLock.unlockAll(OTHER);
             expect("one mod lifting its lock leaves another mod's in place; unlockAll lifts all of a mod's",
-                stillLocked && !MapLock.mapLocked() && !MapLock.layerLocked(MapLock.CONTOURS), "");
+                stillLocked && !MapLock.mapLocked() && !MapLock.layerLocked(MapLock.PINS), "");
             MapMarkers.removeAll(NS);
             expect("a mod's markers all go at once", MapMarkers.all().isEmpty(), MapMarkers.all().toString());
             LOG.info("SELFTEST api done: {} passed, {} failed", passed, failed);

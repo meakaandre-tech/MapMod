@@ -32,20 +32,20 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * The fullscreen map (M), laid out like Satisfactory's: the filter panel down the left, the painted map
+ * The fullscreen map (M), laid out like Satisfactory's: the filter panel down the left, the map
  * ({@link PaintMap}) filling the rest, with everything on it drawn over, and a button per overlay layer
  * ({@link MapLayer}) in the top bar. Drag to move (let go while moving and it glides on a moment, framerate-independent,
  * until any click), scroll to zoom round the mouse, C to centre on the player, and the waypoint key (B) opens "New
  * waypoint" at where the mouse points ({@link WaypointScreen}). Left click pins or unpins what is under the mouse (pins show on the compass
  * with their distance); right click on an empty spot places a marker there, and on one of your markers (or a shared one
  * of your group) renames it, changes its icon or colour, pins or unpins it, or removes it. A marker gets an icon, a colour and a name, and is
- * private or shared with the group. Mods' overlay layers ({@link MapOverlay}) draw over the painted map, each with a
+ * private or shared with the group. Mods' overlay layers ({@link MapOverlay}) draw over the map, each with a
  * button in the top bar after the map's own; while a mod locks the map ({@link MapLock}) it shows a locked panel instead.
  */
 public class MapScreen extends Screen {
     private static final int PANEL = 140, BAR = 16, FOOT = 14, ROW = 12;
-    /** The top bar's contours button: its left edge from the right of the screen, and its width. */
-    private static final int CONTOURS_RIGHT = 200, CONTOURS_W = 96;
+    /** The top bar's scale bar: its left edge from the right of the screen (the layer buttons end left of it). */
+    private static final int SCALE_RIGHT = 96;
     /** The widest the position under the mouse is expected to get, for laying out the top bar (MM-7). */
     private static final String COORDS_TEMPLATE = "X -0000000   Z -0000000";
     /** Lines of the hint at the bottom at most, and their height. */
@@ -126,23 +126,7 @@ public class MapScreen extends Screen {
             cz = mc.player.getZ();
             placed = true;
         }
-        if (editing) {
-            buildForm();
-        } else if (!MapLock.mapLocked() && !MapLock.layerLocked(MapLock.CONTOURS)) {
-            addRenderableWidget(Button.builder(contoursText(), b -> {
-                toggleContours();
-                b.setMessage(contoursText());
-            }).bounds(width - CONTOURS_RIGHT, 1, CONTOURS_W, 14).build());
-        }
-    }
-
-    /** Switches contour lines on or off (the top bar's button; also used by the selftests). */
-    public static void toggleContours() {
-        MapClient.setContours(!MapClient.contours);
-    }
-
-    private static Component contoursText() {
-        return Component.translatable(MapClient.contours ? "mapmod.map.contours_on" : "mapmod.map.contours_off");
+        if (editing) buildForm();
     }
 
     @Override
@@ -164,7 +148,7 @@ public class MapScreen extends Screen {
             return;
         }
         // a lock set or lifted while the map is open: the top bar's buttons follow, and an open marker form closes
-        boolean lockNow = MapLock.mapLocked() || MapLock.layerLocked(MapLock.CONTOURS);
+        boolean lockNow = MapLock.mapLocked();
         if (lockNow != lockedBar) {
             lockedBar = lockNow;
             if (MapLock.mapLocked() && editing) closeForm();
@@ -172,8 +156,8 @@ public class MapScreen extends Screen {
         }
     }
 
-    /** Whether the top bar was last built with the map or its contours locked. */
-    private boolean lockedBar = MapLock.mapLocked() || MapLock.layerLocked(MapLock.CONTOURS);
+    /** Whether the top bar was last built with the map locked. */
+    private boolean lockedBar = MapLock.mapLocked();
 
     /** True while a mod locks the map and this screen shows the locked panel (for the selftests). */
     public boolean locked() {
@@ -238,7 +222,7 @@ public class MapScreen extends Screen {
     /**
      * Where the top bar's things go and how high the bottom row is: the title, then the position under the mouse (by
      * the map's left edge, else just after the title, else in the bottom row on the right when the bar is too full), and
-     * from the right the scale, the contours button and the layer buttons. The hint wraps to the bottom row's width.
+     * from the right the scale and the layer buttons. The hint wraps to the bottom row's width.
      */
     public record Bar(List<Box> boxes, int coordsX, boolean coordsInFoot, List<net.minecraft.util.FormattedCharSequence> hint, int foot,
                       int hintWidth) {
@@ -250,7 +234,7 @@ public class MapScreen extends Screen {
     private Bar bar() {
         int layers = MapLock.mapLocked() ? 0 : layerButtons().size();
         if (barCache == null || barWidth != width || barLayers != layers) {
-            barCache = layout(font, width, layers, !MapLock.mapLocked() && !MapLock.layerLocked(MapLock.CONTOURS), !MapLock.mapLocked(), title);
+            barCache = layout(font, width, layers, !MapLock.mapLocked(), title);
             barWidth = width;
             barLayers = layers;
         }
@@ -262,18 +246,14 @@ public class MapScreen extends Screen {
     }
 
     /** The top bar and bottom row laid out for a screen width (GUI pixels) and a number of layer buttons. */
-    public static Bar layout(net.minecraft.client.gui.Font font, int width, int layers, boolean contours, boolean scaleBar, Component title) {
+    public static Bar layout(net.minecraft.client.gui.Font font, int width, int layers, boolean scaleBar, Component title) {
         List<Box> boxes = new ArrayList<>();
         int titleRight = 6 + font.width(title);
         boxes.add(new Box("title", 6, font.width(title)));
         int right = width;
         if (scaleBar) {
-            boxes.add(new Box("scale", width - 96, 80));
-            right = width - 96;
-        }
-        if (contours) {
-            boxes.add(new Box("contours", width - CONTOURS_RIGHT, CONTOURS_W));
-            right = width - CONTOURS_RIGHT;
+            boxes.add(new Box("scale", width - SCALE_RIGHT, 80));
+            right = width - SCALE_RIGHT;
         }
         for (int i = 0; i < layers; i++) {
             int x = layerX(width, i, layers);
@@ -386,7 +366,7 @@ public class MapScreen extends Screen {
     }
 
     private static int layerX(int width, int i, int count) {
-        return width - CONTOURS_RIGHT - (count - i) * LAYER_STEP - 4;
+        return width - SCALE_RIGHT - (count - i) * LAYER_STEP - 4;
     }
 
     private @Nullable LayerButton layerAt(double mx, double my) {

@@ -1,8 +1,6 @@
 package com.meakaandre.mapmod.api;
 
 import com.meakaandre.mapmod.client.map.MapClient;
-import com.meakaandre.mapmod.client.paint.PaintPalette;
-import com.meakaandre.mapmod.client.paint.TilePrep;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -16,13 +14,13 @@ import java.util.Objects;
 
 /**
  * Layers of your own on the fullscreen map (territory, routes, ranges): each draws in GUI space, every frame the map is
- * open, over the painted terrain and under the map's own icons, through a {@link MapView} that turns world positions
+ * open, over the terrain and under the map's own icons, through a {@link MapView} that turns world positions
  * into screen ones. Each layer gets a switch in the map's top bar (its glyph, its label as the tooltip), on by default
  * and kept with the map's other layer switches in {@code mapmod/settings.json} under {@code layers}, by the layer's id.
  * <p>
- * Overlays are drawn straight to the screen: never baked into the map's tiles, and never under its paper grain or
- * vignette. To follow the painted map's borders (coasts, region edges), offset positions by {@link #warpX}/{@link #warpZ}.
- * A layer can be locked with {@link MapLock#lockLayer} by its id. Register in your client initializer; client thread.
+ * Overlays are drawn straight to the screen, never baked into the map's tiles. Since MM-9 the map shows every block
+ * where it is (one pixel per block), so a world position needs no offset to line up with the terrain under it. A layer
+ * can be locked with {@link MapLock#lockLayer} by its id. Register in your client initializer; client thread.
  */
 public final class MapOverlay {
     /** Draws a layer. Called on the render thread while the fullscreen map is open; drawing is clipped to the map's area. */
@@ -35,7 +33,12 @@ public final class MapOverlay {
     public record Registered(Identifier id, Component label, int glyph, Layer layer) {
     }
 
-    /** The painted map's warp noise repeats every this many blocks along x and z. */
+    /**
+     * The painted map's warp noise repeated every this many blocks along x and z.
+     *
+     * @deprecated since MM-9 the map has no warp: {@link #warpX} and {@link #warpZ} are always 0.
+     */
+    @Deprecated
     public static final int WARP_PERIOD = 8192;
 
     private static final Map<Identifier, Registered> LAYERS = new LinkedHashMap<>();
@@ -80,21 +83,23 @@ public final class MapOverlay {
     }
 
     /**
-     * How far, in blocks along x, the painted map moves what is at a world position (the low-frequency noise that bends
-     * its coasts and region borders), at the palette's current strength: what the data has at (x, z) is painted at about
-     * (x - warpX(x, z), z - warpZ(x, z)). Repeats every {@link #WARP_PERIOD} blocks. Any thread.
+     * How far, in blocks along x, the painted map moved what is at a world position (the noise that bent its coasts and
+     * region borders).
+     *
+     * @deprecated since MM-9 the map shows every block where it is: always 0, so code that offsets by it still lines up.
      */
+    @Deprecated
     public static double warpX(double x, double z) {
-        return warp(x, z, 0);
+        return 0;
     }
 
-    /** The same along z. */
+    /**
+     * The same along z.
+     *
+     * @deprecated since MM-9: always 0, as {@link #warpX}.
+     */
+    @Deprecated
     public static double warpZ(double x, double z) {
-        return warp(x, z, 1);
-    }
-
-    private static double warp(double x, double z, int axis) {
-        // the shader warps the sampling position, in samples (4 blocks), by noise at unit strength times warp/4
-        return TilePrep.warp(x / 4, z / 4, axis) * PaintPalette.current().edgeWarp();
+        return 0;
     }
 }

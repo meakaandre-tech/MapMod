@@ -41,7 +41,7 @@ import java.util.Set;
  * The map on the client: what the server has sent (unlocks, fog, POIs, markers, the group's players, moving things),
  * what the player chose (pins and filters, kept in the game folder's {@code mapmod} folder) and the key: M opens the
  * map and B opens "New waypoint" ({@link Waypoints}; both changeable under "MapMod"). The terrain is the client's own surface
- * capture, painted by {@code client.paint}.
+ * capture, drawn by {@code client.paint}.
  */
 public final class MapClient {
     /** The map's keys in the controls, under MapMod. */
@@ -70,9 +70,7 @@ public final class MapClient {
      * Kept by id even for a layer no mod registered this time, so its switch is as the player left it when it comes back.
      */
     public static final Set<String> OVERLAYS_OFF = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    /** Contour lines on the painted map: off by default, switched in the map screen, kept in settings.json. */
-    public static boolean contours;
-    /** GPU memory for the painted map's baked tiles and mips (MB), kept in settings.json as {@code cache_mb}. */
+    /** GPU memory for the map's baked tiles and mips (MB), kept in settings.json as {@code cache_mb}. */
     public static int cacheMB = PaintMap.DEFAULT_CACHE_MB;
     /** Markers seen since joining, so a new death marker can be pinned at once. */
     private static final Set<String> SEEN = new HashSet<>();
@@ -306,7 +304,6 @@ public final class MapClient {
         try {
             JsonObject o = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
             if (o.has("hidden")) for (JsonElement e : o.getAsJsonArray("hidden")) HIDDEN.add(e.getAsString());
-            if (o.has("contours")) contours = o.get("contours").getAsBoolean();
             if (o.has("cache_mb")) cacheMB = Math.clamp(o.get("cache_mb").getAsInt(), 16, 4096);
             if (o.has("layers") && o.get("layers").isJsonObject()) {
                 JsonObject layers = o.getAsJsonObject("layers");
@@ -338,12 +335,6 @@ public final class MapClient {
         if (changed) saveSettings();
     }
 
-    /** Switches contour lines on or off and saves the setting. */
-    public static void setContours(boolean on) {
-        contours = on;
-        saveSettings();
-    }
-
     /** Where the map's settings are kept (for the selftests). */
     public static Path settingsPath() {
         return settingsFile();
@@ -354,7 +345,6 @@ public final class MapClient {
         JsonArray hidden = new JsonArray();
         for (String h : HIDDEN) hidden.add(h);
         o.add("hidden", hidden);
-        o.addProperty("contours", contours);
         o.addProperty("cache_mb", cacheMB);
         JsonObject layers = new JsonObject();
         for (MapLayer l : MapLayer.values()) layers.addProperty(l.id, !LAYERS_OFF.contains(l));

@@ -2,7 +2,6 @@ package com.meakaandre.mapmod.client.paint;
 
 import com.meakaandre.mapmod.MapMod;
 import com.meakaandre.mapmod.api.MapFeature;
-import com.meakaandre.mapmod.api.MapLock;
 import com.meakaandre.mapmod.client.capture.Capture;
 import com.meakaandre.mapmod.client.capture.SurfaceTile;
 import com.meakaandre.mapmod.client.map.MapClient;
@@ -27,7 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * The painted map (MM-3, baked and mipped in MM-4). While in a world the map keeps an index of the tiles there are
+ * The map's terrain (MM-3; baked and mipped in MM-4; one pixel per block, Xaero-style, in MM-9). While in a world the map keeps an index of the tiles there are
  * ({@link TileIndex}) and, once it has been opened, their baked pictures and the mip pyramid over them
  * ({@link BakeCache}), kept up by the capture's change events; while it is open it also holds the data and textures of
  * the tiles it is working on ({@link PaintTiles}, {@link TileTextures}). Each frame {@link MapPainter} paints the view
@@ -35,11 +34,10 @@ import java.util.concurrent.Executors;
  * icons on top. Closing the screen lets the data, textures and pictures go and keeps the baked tiles; leaving the world
  * lets everything go, and so does going to another dimension (MM-5), at once.
  * <p>
- * The fog over unexplored land (MM-5) is exactly what this client has captured, on every server and in every group: the
- * group's fog of war decides POIs, never terrain, so nothing the player has seen is fogged (but for the soft rim of the
- * fog's edge). The painter keeps it as masks ({@link FogMasks}), made from the captured samples and what may show
- * ({@link #mayShow}: everything). Hiding the map on purpose is {@code api.MapLock}'s, which locks the whole map (the
- * screen then paints nothing) or single layers, never parts of the land.
+ * Unexplored land is exactly what this client has not captured, on every server and in every group: the group's fog of
+ * war decides POIs, never terrain, so everything the player has seen shows. It is the palette's flat background, with
+ * the hard edges of the chunks captured (MM-9: no soft fog). Hiding the map on purpose is {@code api.MapLock}'s, which
+ * locks the whole map (the screen then draws nothing) or single layers, never parts of the land.
  */
 public final class PaintMap {
     /** Uploads, bakes and mip copies in one frame at most, together. */
@@ -75,7 +73,6 @@ public final class PaintMap {
         long windowGpuNanos, windowGpuFrames;
         double avgGpuMicros = -1;
         int tilesPainted;
-        boolean contours;
     }
 
     private PaintMap() {
@@ -98,7 +95,7 @@ public final class PaintMap {
         });
     }
 
-    /** The player went to another dimension: the baked tiles, mips and fog masks go at once (the map covers one). */
+    /** The player went to another dimension: the baked tiles and mips go at once (the map covers one). */
     private static void dimensionChanged() {
         unload();
         dimensionFrees++;
@@ -116,7 +113,7 @@ public final class PaintMap {
             if (q != null) q.cache.tileChanged(tx, tz);
         });
         index = i;
-        painter = p = new MapPainter(i, (long) MapClient.cacheMB * 1024 * 1024, PREP, PaintMap::mayShow);
+        painter = p = new MapPainter(i, (long) MapClient.cacheMB * 1024 * 1024, PREP);
         return p;
     }
 
@@ -155,9 +152,7 @@ public final class PaintMap {
         double blocksPerPixel = 1.0 / (v.scale() * scale);
         MapPainter.Frame f = new MapPainter.Frame(w, h, v.wx(v.left()), v.wz(v.top()), blocksPerPixel);
         TIMER.begin();
-        // contour lines show while switched on, unless a mod locks them (MM-6)
-        boolean contours = MapClient.contours && !MapLock.layerLocked(MapLock.CONTOURS);
-        MapGpu.Target picture = p.paint(f, PaintPalette.current(), PaintPalette.version(), contours, MapClient.unlocked(MapFeature.TERRAIN));
+        MapGpu.Target picture = p.paint(f, PaintPalette.current(), PaintPalette.version(), MapClient.unlocked(MapFeature.TERRAIN));
         TIMER.end();
         g.blit(picture.view, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
             v.left(), v.top(), v.left() + v.width(), v.top() + v.height(), 0f, 1f, 1f, 0f);
@@ -169,7 +164,6 @@ public final class PaintMap {
         s.bakes += p.lastBakes;
         s.mips += p.lastMips;
         s.tilesPainted = p.lastPainted;
-        s.contours = p.lastContours;
         s.windowFrames++;
         s.windowMicros += micros;
         s.windowOps += p.lastOps;
@@ -252,14 +246,9 @@ public final class PaintMap {
         return STATS.maxOps;
     }
 
-    /** Tiles painted live in the last frame. */
+    /** Tiles drawn straight from their own pictures (close up) in the last frame. */
     public static int tilesPainted() {
         return STATS.tilesPainted;
-    }
-
-    /** Whether the last frame painted with contour lines on (for the selftests). */
-    public static boolean contoursPainted() {
-        return STATS.contours;
     }
 
     /** Tiles prepared off-thread since the world was joined (for the selftests). */
@@ -284,48 +273,13 @@ public final class PaintMap {
         return p == null ? 0 : p.cache.bytes();
     }
 
-    /** Every chunk of a region may show. */
-    private static final long[] ALL_EXPLORED = new long[com.meakaandre.mapmod.map.MapGrid.FOG_LONGS];
-
-    static {
-        java.util.Arrays.fill(ALL_EXPLORED, -1L);
-    }
-
     /**
-     * What of a region may show over what was captured, by chunk: every chunk, so the fog is exactly what this client
-     * captured (the group's fog or its own capture, which comes to the same).
-     */
-    static long @Nullable [] mayShow(long region) {
-        return ALL_EXPLORED;
-    }
-
-    /**
-     * For the selftests: the fog over a captured block, worked out the way the open map's mask is (0 fogged, 1 shown,
-     * before the clouds roughen the edge), from the coverage the map holds. -1 if the map is not open or holds nothing there.
-     */
-    public static float fogAt(int x, int z) {
-        MapPainter p = painter;
-        return p == null ? -1 : p.masks.valueAt(x, z, PaintPalette.current().fogEdge());
-    }
-
-    /**
-     * Whether this client captured a block, as the fog knows it: kept while in the world, unlike the tiles' data, which
-     * the open map lets go once it has baked them.
+     * Whether this client captured a block, as the map knows it from the tiles it last prepared: kept while in the
+     * world, unlike the tiles' data, which the open map lets go once it has baked them.
      */
     public static boolean captured(int x, int z) {
         MapPainter p = painter;
-        return p != null && p.masks.captured(x, z);
-    }
-
-    /** For the selftests: whether the fog the masks are made from counts a block's chunk as explored. */
-    public static boolean fogSourceExplores(int x, int z) {
-        long[] bits = mayShow(com.meakaandre.mapmod.map.MapGrid.regionOfBlock(x, z));
-        return bits != null && com.meakaandre.mapmod.map.MapGrid.get(bits, com.meakaandre.mapmod.map.MapGrid.fogBit(x >> 4, z >> 4));
-    }
-
-    /** For the selftests: whether a captured block shows through the fog (its mask past where the fog starts to lift). */
-    public static boolean fogShows(int x, int z) {
-        return fogAt(x, z) >= 0.55f;
+        return p != null && p.coverage.captured(x, z);
     }
 
     /** Times the cache was let go on a change of dimension. */
@@ -333,12 +287,7 @@ public final class PaintMap {
         return dimensionFrees;
     }
 
-    /** Fog masks made, and frames painted mid-blend between two levels. */
-    public static long fogBuilds() {
-        MapPainter p = painter;
-        return p == null ? 0 : p.masks.builds;
-    }
-
+    /** Frames drawn mid-blend between two levels. */
     public static long fadeFrames() {
         MapPainter p = painter;
         return p == null ? 0 : p.fadeFrames;
@@ -387,44 +336,81 @@ public final class PaintMap {
     }
 
     /**
-     * The canopy path end to end (for the selftests): a tile with a known canopy pattern is prepared and uploaded into
-     * real textures, and the surface texture's alpha read back. Null if every texel carried its sample's canopy, else
-     * what was wrong. Render thread only.
+     * The tile picture path end to end (for the selftests, MM-9): a tile with a known pattern of colours, heights and
+     * explored blocks is prepared and uploaded into a real texture, and texels read back: an unexplored block is
+     * transparent, an explored one opaque in its colour where it is level with its neighbours, lighter one block above
+     * them and darker one below. Null if all were, else what was wrong. Render thread only.
      */
-    public static @Nullable String canopyCheck() {
+    public static @Nullable String pictureCheck() {
         SurfaceTile t = new SurfaceTile(0, 0);
         for (int i = 0; i < SurfaceTile.AREA; i++) {
-            t.canopy[i] = (byte) (i * 7 % 256);
-            t.explored[i >>> 6] |= 1L << i;
+            int sx = i % SurfaceTile.SIDE, sz = i / SurfaceTile.SIDE;
+            t.height[i] = 64;
+            t.colour[i] = 0x606060 + (sx % 32) * 0x10101;
+            if ((sx / 64 + sz / 64) % 5 != 4) t.explored[i >>> 6] |= 1L << i;
         }
+        // a block one higher than the land round it at 100, 100, one lower at 200, 150
+        t.height[SurfaceTile.index(100, 100)] = 65;
+        t.height[SurfaceTile.index(200, 150)] = 63;
         SurfaceTile[][] around = new SurfaceTile[3][3];
         around[1][1] = t;
-        TilePrep.Result r = TilePrep.prepare(around);
+        PaintPalette pal = PaintPalette.DEFAULT;
+        TilePrep.Result r = TilePrep.prepare(around, pal);
         try (TileTextures tex = TileTextures.create(0, 0)) {
             tex.upload(r);
             for (int i = 0; i < SurfaceTile.AREA; i += 97) {
                 int sx = i % SurfaceTile.SIDE, sz = i / SurfaceTile.SIDE;
-                int got = tex.pixel(TilePrep.SURFACE, sx + TilePrep.APRON, sz + TilePrep.APRON) >>> 24;
-                if (got != (t.canopy[i] & 0xFF)) return "sample " + sx + "," + sz + ": canopy " + (t.canopy[i] & 0xFF) + ", texel alpha " + got;
+                if (sx == 0 || sz == 0 || sx >= 99 && sx <= 101 || sx >= 199 && sx <= 201) continue;
+                int got = tex.pixel(sx, sz), want = t.explored(i) ? 0xFF000000 | t.colour[i] : 0;
+                // a block whose neighbour to the north or west is unexplored is not shaded against it
+                if (got != want) return "block " + sx + "," + sz + ": texel #" + Integer.toHexString(got) + ", expected #" + Integer.toHexString(want);
             }
-            if (tex.pixel(TilePrep.SURFACE, 0, 0) >>> 24 != 0) return "the apron of a tile with no neighbours has canopy";
+            int up = tex.pixel(100, 100) & 0xFFFFFF, down = tex.pixel(200, 150) & 0xFFFFFF;
+            int c1 = t.colour[SurfaceTile.index(100, 100)], c2 = t.colour[SurfaceTile.index(200, 150)];
+            if (up != pal.shade(c1, 2) || (up & 0xFF) <= (c1 & 0xFF)) return "a block one above its neighbours is #" + Integer.toHexString(up) + ", from #" + Integer.toHexString(c1);
+            if (down != pal.shade(c2, -2) || (down & 0xFF) >= (c2 & 0xFF)) return "a block one below its neighbours is #" + Integer.toHexString(down) + ", from #" + Integer.toHexString(c2);
+            // the block south of the raised one is lower than its north neighbour: darker
+            int south = tex.pixel(100, 101) & 0xFFFFFF, cs = t.colour[SurfaceTile.index(100, 101)];
+            if (south != pal.shade(cs, -1)) return "the block south of a raised one is #" + Integer.toHexString(south) + ", from #" + Integer.toHexString(cs);
         }
         return null;
     }
 
     /**
-     * Bake time per tile (MM-8): the prep off the render thread (the brush included, and how much of it the brush
-     * took) and the bake pass on it, averaged since the world was joined.
+     * Bake time per tile (MM-8): the prep off the render thread and the bake pass on it, averaged since the world was
+     * joined.
      */
     public static String bakeTimeLine() {
         MapPainter p = painter;
         if (p == null) return "  bake time per tile: no painter";
         double[] t = p.bakeTimes();
-        return String.format(Locale.ROOT, "  bake time per tile: prep %.1f ms avg off-thread (brush %.1f ms), bake pass %.0f us avg (%.0f us max) on the render thread; %d bakes",
-            t[0], t[1], t[2], p.bakeMaxNanos / 1e3, p.cache.leafBakes);
+        return String.format(Locale.ROOT, "  bake time per tile: prep %.1f ms avg off-thread, bake pass %.0f us avg (%.0f us max) on the render thread; %d bakes",
+            t[0], t[1], p.bakeMaxNanos / 1e3, p.cache.leafBakes);
     }
 
-    /** Compiles both shaders now (for the selftests): null if they compiled, else what went wrong. */
+    /**
+     * Tile memory and disk size (MM-9): bytes a tile's data takes in memory, and the tile files' count and total size in
+     * this world's folder.
+     */
+    public static String tileSizeLine() {
+        long files = 0, bytes = 0;
+        Path dir = Capture.dir();
+        if (dir != null) {
+            try (var list = java.nio.file.Files.list(dir)) {
+                for (Path f : (Iterable<Path>) list::iterator) {
+                    if (!f.getFileName().toString().endsWith(".mmt")) continue;
+                    files++;
+                    bytes += java.nio.file.Files.size(f);
+                }
+            } catch (java.io.IOException | RuntimeException e) {
+                // no folder yet
+            }
+        }
+        return String.format(Locale.ROOT, "  tiles: %.2f MB each in memory; %d files, %.1f KB avg, %.2f MB on disk",
+            SurfaceTile.memoryBytes() / 1048576.0, files, files == 0 ? 0 : bytes / 1024.0 / files, bytes / 1048576.0);
+    }
+
+    /** Compiles the shader now (for the selftests): null if it compiled, else what went wrong. */
     public static @Nullable String compileCheck() {
         return MapGpu.compileCheck();
     }
@@ -434,7 +420,7 @@ public final class PaintMap {
         MapPainter p = painter;
         PaintTiles held = tiles;
         List<String> lines = new ArrayList<>();
-        lines.add(MapMod.NAME + " painted map" + (held == null ? " (closed)" : " (open)"));
+        lines.add(MapMod.NAME + " map" + (held == null ? " (closed)" : " (open)"));
         boolean was = TIMER.awake();
         TIMER.wake();
         String gpu = !TIMER.supported() ? "n/a" : !was || s.avgGpuMicros < 0 ? "measuring for " + GpuTimer.AWAKE_MS / 1000 + " s, ask again"
@@ -451,13 +437,13 @@ public final class PaintMap {
             lines.add(String.format(Locale.ROOT, "  prepared off-thread %d tiles, %.1f ms avg, %.1f ms max; waiting %d",
                 n, n == 0 ? 0 : p.prepNanos.get() / 1e6 / n, p.prepMaxNanos.get() / 1e6, p.waiting()));
             lines.add(bakeTimeLine());
-            FogMasks m = p.masks;
-            lines.add(String.format(Locale.ROOT, "  fog masks %d held, %d made off-thread (%.1f ms avg, %.1f ms max), %d uploaded; %d mips made again from their parent; %d frames blended",
-                m.held(), m.builds, m.builds == 0 ? 0 : m.buildNanos.get() / 1e6 / m.builds, m.buildMaxNanos.get() / 1e6, m.uploads, c.splits, p.fadeFrames));
+            lines.add(String.format(Locale.ROOT, "  %d mips made again from their parent; %d frames blended; captured land known for %d tiles",
+                c.splits, p.fadeFrames, p.coverage.tiles()));
         }
+        lines.add(tileSizeLine());
         if (held != null) {
-            lines.add(String.format(Locale.ROOT, "  tiles held %d, loading %d (read %d, from capture %d); contours %s",
-                held.size(), held.loading(), held.read.get(), held.fromCapture.get(), MapClient.contours ? "on" : "off"));
+            lines.add(String.format(Locale.ROOT, "  tiles held %d, loading %d (read %d, from capture %d)",
+                held.size(), held.loading(), held.read.get(), held.fromCapture.get()));
         }
         return lines;
     }

@@ -16,7 +16,7 @@ import java.util.concurrent.CompletableFuture;
  * {@code /mapmod probe} (MM-7): what the map makes of the ground at a column. The live part is read now, on the client
  * thread, exactly as the capture reads it (the ground block, its class, the cell's colour, tint and biome); the stored
  * part is the sample the capture holds for that cell (class, colour, tint, height, the tile's revision), and the colour
- * the painted map gives it. A stored sample that differs from the live one means the tile was not captured again after
+ * the map gives it. A stored sample that differs from the live one means the tile was not captured again after
  * a change. MM-8: also the top block's texture, its average colour and its tint, and the colour the capture stores.
  */
 public final class Probe {
@@ -30,7 +30,7 @@ public final class Probe {
      * @param liveStored   the colour the capture would store for the cell now (0xRRGGBB)
      * @param storedClass  -1 if the cell was never captured
      * @param storedColour the colour the capture stored for the cell (0xRRGGBB)
-     * @param colour       the painted map's colour for the stored sample (before the brush, relief and the finish)
+     * @param colour       the map's colour for the stored sample (before the height shading and the water)
      */
     public record Result(int x, int y, int z, String block, int liveClass, int cellClass, int liveTint, String biome, int biomeGrass,
                          String texture, int average, String tintKind, int liveStored,
@@ -44,14 +44,14 @@ public final class Probe {
             out.add(String.format(Locale.ROOT, "probe %d %d %d: %s, class %s (%d), biome %s (grass #%06X)", x, y, z, block,
                 SurfaceClass.name(liveClass), liveClass, biome, biomeGrass));
             out.add(String.format(Locale.ROOT, "  top face: %s, average #%06X, tint %s", texture, average, tintKind));
-            out.add(String.format(Locale.ROOT, "  live cell: class %s (%d), colour #%06X, biome tint #%06X -> painted #%06X", SurfaceClass.name(cellClass), cellClass,
+            out.add(String.format(Locale.ROOT, "  live block: class %s (%d), colour #%06X, biome tint #%06X -> map #%06X", SurfaceClass.name(cellClass), cellClass,
                 liveStored, liveTint, liveColour));
             if (!captured()) {
                 out.add("  stored: not captured");
             } else {
                 out.add(String.format(Locale.ROOT, "  stored: class %s (%d), colour #%06X, biome tint #%06X, height %d, tile revision %d", SurfaceClass.name(storedClass),
                     storedClass, storedColour, storedTint, storedHeight, revision));
-                out.add(String.format(Locale.ROOT, "  painted colour #%06X%s", colour,
+                out.add(String.format(Locale.ROOT, "  map colour #%06X%s", colour,
                     storedClass != cellClass || storedColour != liveStored ? " (stored sample differs from the ground now)" : ""));
             }
             return out;
@@ -80,7 +80,7 @@ public final class Probe {
                 BlockState state = snap.get(x & 15, y, z & 15);
                 block = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
                 SurfaceSampler.Columns c = SurfaceSampler.columns(snap);
-                BlockState top = c.top[(x & 15) + (z & 15) * 16];
+                BlockState top = c.shown[(x & 15) + (z & 15) * 16];
                 if (top != null) {
                     BlockColours.Look look = BlockColours.look(top);
                     texture = look.texture();
@@ -88,7 +88,7 @@ public final class Probe {
                     tintKind = look.tintName();
                 }
                 SurfaceSampler.Samples s = SurfaceSampler.sample(snap);
-                int n = ((x & 15) / SurfaceTile.SPACING) + ((z & 15) / SurfaceTile.SPACING) * SurfaceTile.PER_CHUNK;
+                int n = (x & 15) + (z & 15) * SurfaceTile.PER_CHUNK;
                 cellClass = s.surface[n];
                 liveTint = SurfaceSampler.rgb888(s.tint[n]);
                 liveStored = s.colour[n];
@@ -98,7 +98,7 @@ public final class Probe {
                     grass = b.value().getGrassColor(x, z) & 0xFFFFFF;
                 }
             }
-            int liveColour = cellClass < 0 ? 0 : p.landColour(cellClass, liveStored, liveTint, y);
+            int liveColour = cellClass < 0 ? 0 : p.landColour(cellClass, liveStored, liveTint);
             SurfaceTile t = store.peek(SurfaceTile.tileOfBlock(x), SurfaceTile.tileOfBlock(z));
             if (t == null) {
                 store.loadIfSaved(SurfaceTile.tileOfBlock(x), SurfaceTile.tileOfBlock(z));
@@ -111,7 +111,7 @@ public final class Probe {
             }
             int cls = t.surface[i], tint = SurfaceSampler.rgb888(t.tint[i]), h = t.height[i], stored = t.colour[i];
             return new Result(x, y, z, block, liveClass, cellClass, liveTint, biome, grass, texture, average, tintKind, liveStored,
-                cls, tint, h, stored, t.revision, p.landColour(cls, stored, tint, h), liveColour);
+                cls, tint, h, stored, t.revision, p.landColour(cls, stored, tint), liveColour);
         });
     }
 }

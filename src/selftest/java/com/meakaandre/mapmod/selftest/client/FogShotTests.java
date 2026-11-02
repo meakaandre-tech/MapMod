@@ -15,10 +15,11 @@ import java.nio.file.Path;
 import java.util.Locale;
 
 /**
- * MM-8c, on a server without MapMod after the colour checks: the fog at three zooms, for the smoke run's screenshots. A
- * made-up tile far east of the player holds an 80-block explored patch on its own (a fresh base); the map opens close up
- * on the land round the player (the fog's soft edge, about 48 blocks), then far out over both (8 and 32 blocks a pixel),
- * where both must stay clearly visible, every overlay layer off. Logs "SELFTEST fogshots geometry ..." (where world 0, 0
+ * MM-8c, on a server without MapMod after the colour checks: unexplored land at three zooms, for the smoke run's
+ * screenshots. A made-up tile far east of the player holds an 80-block explored patch on its own (a fresh base); the map
+ * opens close up on the land round the player (MM-9: unexplored land is the flat background, its edge the hard edge of
+ * the chunks captured), then far out over both (8 and 32 blocks a pixel), where both must stay clearly visible, every
+ * overlay layer off. Logs "SELFTEST fogshots geometry ..." (where world 0, 0
  * is on screen and the pixels a block) and "SELFTEST fogshots shot ..." where the run takes each screenshot, and
  * "SELFTEST fogshots done" at the end; check-selftests.py reads the shots.
  */

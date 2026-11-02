@@ -14,47 +14,56 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 
 /**
- * One tile of the captured surface: 512x512 blocks as 256x256 samples, one per 2x2 block cell (MM-8; 4x4 before), each
- * with a height, a water depth, a surface class ({@link SurfaceClass}), the block colour seen from above (RGB), a biome
- * tint (RGB565) and a canopy density, and a bit saying whether it has been explored (sampled) at all.
+ * One tile of the captured surface: 512x512 blocks, one sample per block (MM-9; one per 2x2 cell in MM-8, 4x4 before),
+ * each with the ground's height, a water depth, a surface class ({@link SurfaceClass}), the colour seen from above (RGB),
+ * a biome tint (RGB565), how far above the ground the top that shows from above is, the water's own colour (RGB565), and
+ * a bit saying whether it has been explored (sampled) at all.
  * <p>
  * File layout ({@code .mmt}), little-endian:
  * <pre>
  *   header, uncompressed:  u32 magic "MMT1" · u16 format version · u8 sample spacing (blocks) · u16 samples per side
  *                          · u32 body length
- *   body, one zstd frame:  height plane   i16 x 65536   top motion-blocking non-leaf block (water floor under water)
- *                          water plane    u8  x 65536   water depth in blocks (0 on land)
- *                          class plane    u8  x 65536   {@link SurfaceClass} 0-7: only for effects since MM-8 (water,
- *                                                       forest, snow) and for a palette's class colour overrides
- *                          tint plane     u16 x 65536   biome grass colour (foliage colour on forest floor), RGB565
- *                          canopy plane   u8  x 65536   share of the cell's columns under leaves or logs, 0-255
- *                          colour planes  u8  x 65536 x 3 (red, then green, then blue): the cell's colour from above,
- *                                                       {@link BlockColours}: the top face's average texture colour
- *                                                       times its tint (MM-8)
- *                          explored mask  u64 x 1024    bit i = sample i has been sampled
+ *   body, one zstd frame:  height plane   i16 x 262144  top motion-blocking non-leaf block (water floor under water)
+ *                          water plane    u8  x 262144  water depth in blocks (0 on land)
+ *                          class plane    u8  x 262144  {@link SurfaceClass} 0-7: which palette class colour override
+ *                                                       applies ({@code api.MapSurface}, {@code api.MapPalette})
+ *                          tint plane     u16 x 262144  biome grass colour (foliage colour on forest floor), RGB565:
+ *                                                       what a class colour override is tinted by
+ *                          above plane    u8  x 262144  blocks from the ground up to the top that shows (leaves, a huge
+ *                                                       mushroom's cap; 0 elsewhere): the height the shading reads
+ *                          colour planes  u8  x 262144 x 3 (red, then green, then blue): the block seen from above,
+ *                                                       {@link BlockColours}: its top face's average texture colour
+ *                                                       times its tint; under water the floor's (MM-9)
+ *                          water colour   u16 x 262144  the water's own colour (its biome's), RGB565; 0 on land
+ *                          explored mask  u64 x 4096    bit i = sample i has been sampled
  * </pre>
- * Sample i is at (i % 256, i / 256) in the tile: x then z, so planes upload as textures row by row. Format 1 (MM-1 to
- * MM-7: 4-block samples, no colour) is not read: such tiles are dropped and the land captured again.
+ * Sample i is at (i % 512, i / 512) in the tile: x then z, so planes upload as textures row by row. Formats 1 (MM-1 to
+ * MM-7: 4-block samples, no colour) and 2 (MM-8: 2-block samples) are not read: such tiles are dropped and the land
+ * captured again.
  */
 public final class SurfaceTile {
     public static final int MAGIC = 0x31544D4D; // "MMT1" read little-endian
-    public static final int FORMAT = 2;
+    public static final int FORMAT = 3;
     /** Blocks per sample along each axis. */
-    public static final int SPACING = 2;
+    public static final int SPACING = 1;
     /** Samples per tile side, and the tile's size in blocks and chunks. */
-    public static final int SIDE = 256, BLOCKS = SIDE * SPACING, CHUNKS = BLOCKS / 16;
+    public static final int SIDE = 512, BLOCKS = SIDE * SPACING, CHUNKS = BLOCKS / 16;
     /** Samples along a chunk. */
     public static final int PER_CHUNK = 16 / SPACING;
     public static final int AREA = SIDE * SIDE;
     private static final int HEADER = 4 + 2 + 1 + 2 + 4;
-    private static final int BODY = AREA * 2 + AREA + AREA + AREA * 2 + AREA + AREA * 3 + AREA / 8;
+    private static final int BODY = AREA * 2 + AREA + AREA + AREA * 2 + AREA + AREA * 3 + AREA * 2 + AREA / 8;
 
     public final int tileX, tileZ;
     public final short[] height = new short[AREA];
-    public final byte[] water = new byte[AREA], surface = new byte[AREA], canopy = new byte[AREA];
+    public final byte[] water = new byte[AREA], surface = new byte[AREA];
+    /** Blocks from the ground up to the top that shows from above (leaves, a mushroom cap), 0-255 (MM-9). */
+    public final byte[] above = new byte[AREA];
     public final short[] tint = new short[AREA];
-    /** The colour from above, 0xRRGGBB (MM-8). */
+    /** The colour from above, 0xRRGGBB (MM-8); under water the floor's (MM-9). */
     public final int[] colour = new int[AREA];
+    /** The water's own colour, RGB565 (its biome's water colour times the water texture); 0 on land (MM-9). */
+    public final short[] waterColour = new short[AREA];
     public final long[] explored = new long[AREA / 64];
     /**
      * When the data last changed, in milliseconds since the epoch, and never smaller than before: a renderer can tell a
@@ -104,13 +113,14 @@ public final class SurfaceTile {
             for (int sx = 0; sx < PER_CHUNK; sx++) {
                 int n = sx + sz * PER_CHUNK, i = index(baseX + sx, baseZ + sz);
                 if (!explored(i) || height[i] != s.height[n] || water[i] != s.water[n] || surface[i] != s.surface[n]
-                    || tint[i] != s.tint[n] || canopy[i] != s.canopy[n] || colour[i] != s.colour[n]) {
+                    || tint[i] != s.tint[n] || above[i] != s.above[n] || colour[i] != s.colour[n] || waterColour[i] != s.waterColour[n]) {
                     height[i] = s.height[n];
                     water[i] = s.water[n];
                     surface[i] = s.surface[n];
                     tint[i] = s.tint[n];
-                    canopy[i] = s.canopy[n];
+                    above[i] = s.above[n];
                     colour[i] = s.colour[n];
+                    waterColour[i] = s.waterColour[n];
                     explored[i >>> 6] |= 1L << i;
                     changed = true;
                 }
@@ -158,8 +168,9 @@ public final class SurfaceTile {
         System.arraycopy(water, 0, t.water, 0, AREA);
         System.arraycopy(surface, 0, t.surface, 0, AREA);
         System.arraycopy(tint, 0, t.tint, 0, AREA);
-        System.arraycopy(canopy, 0, t.canopy, 0, AREA);
+        System.arraycopy(above, 0, t.above, 0, AREA);
         System.arraycopy(colour, 0, t.colour, 0, AREA);
+        System.arraycopy(waterColour, 0, t.waterColour, 0, AREA);
         System.arraycopy(explored, 0, t.explored, 0, explored.length);
         t.revision = revision;
         return t;
@@ -167,7 +178,8 @@ public final class SurfaceTile {
 
     public boolean sameData(SurfaceTile o) {
         return Arrays.equals(height, o.height) && Arrays.equals(water, o.water) && Arrays.equals(surface, o.surface)
-            && Arrays.equals(tint, o.tint) && Arrays.equals(canopy, o.canopy) && Arrays.equals(colour, o.colour)
+            && Arrays.equals(tint, o.tint) && Arrays.equals(above, o.above) && Arrays.equals(colour, o.colour)
+            && Arrays.equals(waterColour, o.waterColour)
             && Arrays.equals(explored, o.explored);
     }
 
@@ -176,8 +188,9 @@ public final class SurfaceTile {
         for (short h : height) body.putShort(h);
         body.put(water).put(surface);
         for (short t : tint) body.putShort(t);
-        body.put(canopy);
+        body.put(above);
         for (int shift = 16; shift >= 0; shift -= 8) for (int c : colour) body.put((byte) (c >> shift));
+        for (short w : waterColour) body.putShort(w);
         for (long l : explored) body.putLong(l);
         ZstdCompressor zstd = compressor();
         byte[] packed = new byte[zstd.maxCompressedLength(BODY)];
@@ -186,6 +199,11 @@ public final class SurfaceTile {
         out.putInt(MAGIC).putShort((short) FORMAT).put((byte) SPACING).putShort((short) SIDE).putInt(BODY);
         out.put(packed, 0, n);
         return out.array();
+    }
+
+    /** Bytes one tile takes in memory (its planes as held, not packed): for {@code /mapmod stats} (MM-9). */
+    public static long memoryBytes() {
+        return (long) AREA * (2 + 1 + 1 + 1 + 2 + 4 + 2) + AREA / 8;
     }
 
     /** A stored biome tint (RGB565) as 0xRRGGBB. */
@@ -222,8 +240,9 @@ public final class SurfaceTile {
         for (int i = 0; i < AREA; i++) t.height[i] = body.getShort();
         body.get(t.water).get(t.surface);
         for (int i = 0; i < AREA; i++) t.tint[i] = body.getShort();
-        body.get(t.canopy);
+        body.get(t.above);
         for (int shift = 16; shift >= 0; shift -= 8) for (int i = 0; i < AREA; i++) t.colour[i] |= (body.get() & 0xFF) << shift;
+        for (int i = 0; i < AREA; i++) t.waterColour[i] = body.getShort();
         for (int i = 0; i < t.explored.length; i++) t.explored[i] = body.getLong();
         return t;
     }

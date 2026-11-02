@@ -5,7 +5,7 @@ package com.meakaandre.mapmod.api;
  * is always there. (A lock a client-side mod drives itself, with no server involved, is {@link MapLock}.)
  */
 public enum MapFeature {
-    /** The painted terrain: without it the fullscreen map shows only fog and what stands on it. */
+    /** The terrain: without it the fullscreen map shows only its background and what stands on it. */
     TERRAIN,
     /** The fullscreen map (M). */
     FULLSCREEN;

@@ -9,7 +9,8 @@ import java.nio.file.Path;
 
 /**
  * Made-up but plausible tiles for the selftests (MM-4): rolling hills from smooth noise in world space (so neighbours
- * meet), sea and lakes below 62 with sand round them, forest patches, rock and snow on the heights. Used to give the
+ * meet), sea and lakes below 62 with sand round them and under them, forest patches with trees standing up from the
+ * ground (MM-9), rock and snow on the heights. Used to give the
  * smoke run a large explored area to zoom out over without walking it, and by the bake cache check.
  */
 final class SyntheticTiles {
@@ -67,9 +68,12 @@ final class SyntheticTiles {
                 // grass green in RGB565, a little browner on the plains
                 int g = 40 + (int) (forest * 20);
                 t.tint[i] = (short) (12 << 11 | g << 5 | 8);
-                t.canopy[i] = (byte) (cls == SurfaceClass.FOREST ? Math.min(255, (int) ((forest - 0.5) * 900)) : 0);
-                // MM-8: colours as the capture would store them (water, sand, snow, stone, oak leaves, grass)
-                t.colour[i] = water > 0 ? 0x2A4F86 : switch (cls) {
+                // MM-9: trees 3 to 6 blocks tall over forest floor, as the capture stores the crown above the ground
+                t.above[i] = (byte) (cls == SurfaceClass.FOREST ? 3 + (int) (hash((int) wx, (int) wz) * 4) : 0);
+                // MM-9: under water the floor's colour, and the water's own apart (RGB565)
+                t.waterColour[i] = water > 0 ? (short) (5 << 11 | 19 << 5 | 16) : 0;
+                // MM-8: colours as the capture would store them (sand, snow, stone, oak leaves, grass)
+                t.colour[i] = switch (cls) {
                     case SurfaceClass.SAND -> 0xDBCFA3;
                     case SurfaceClass.SNOW -> 0xF4F8F8;
                     case SurfaceClass.ROCK -> 0x7D7D7D;

@@ -22,17 +22,22 @@ import java.util.Set;
  * <li>A locked <b>map</b> still opens with M, and shows a "map locked" panel with the reason given instead of the map:
  * no terrain, no layers, no markers. The compass strip stays; lock layers too to keep their things off it.</li>
  * <li>A locked <b>layer</b> is hidden on the fullscreen map and on the compass strip, its switch leaves the top bar,
- * and the player's own setting for it is kept for when it unlocks. Layers are {@link #CONTOURS} (the painted map's
- * contour lines), {@link #PLAYERS}, {@link #MARKERS} (placed and death markers, waypoints, and {@link MapMarkers}'
+ * and the player's own setting for it is kept for when it unlocks. Layers are {@link #PLAYERS}, {@link #MARKERS} (placed and death markers, waypoints, and {@link MapMarkers}'
  * markers; while it is locked the waypoint key places none, as while the map is),
  * {@link #PINS}, {@link #POIS} (POIs and moving things) and {@link #MOB_RADAR}, and each {@link MapOverlay} by its
  * id.</li>
  * </ul>
- * What the fog shows does not change: the painted terrain is everything this client has captured itself, whatever the
- * group's fog says (that gates POIs only). Client thread.
+ * What the terrain shows does not change: it is everything this client has captured itself, whatever the group's fog
+ * says (that gates POIs only). Client thread.
  */
 public final class MapLock {
-    /** The painted map's contour lines. */
+    /**
+     * The painted map's contour lines.
+     *
+     * @deprecated since MM-9 the map has no contour lines (it shows one pixel per block with height shading): locking
+     * this layer still works and has no effect.
+     */
+    @Deprecated
     public static final Identifier CONTOURS = MapMod.id("contours");
     /** You and your group's players. */
     public static final Identifier PLAYERS = MapMod.id("players");

@@ -26,7 +26,7 @@ import java.util.Map;
 
 /**
  * Drawing for the fullscreen map's overlays: a view (a centre in the world, a scale and a rectangle on screen) and the
- * icons of everything on it. The terrain under them is painted by {@code client.paint}.
+ * icons of everything on it. The terrain under them is drawn by {@code client.paint}.
  */
 public final class MapDraw {
     private static final Map<Identifier, ItemStack> ITEMS = new HashMap<>();

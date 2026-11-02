@@ -2,54 +2,53 @@ package com.meakaandre.mapmod.client.paint;
 
 import com.meakaandre.mapmod.MapMod;
 import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 
 /**
- * One tile's fields on the GPU: the {@link TilePrep#TEXTURES} RGBA8 textures {@link TilePrep} lays out (fields, surface
- * colour with canopy, effects, water colour, shore distance, the blurred colour borders follow), each {@link TilePrep#SIZE} square with the apron. The
- * work is done off-thread; {@link #upload} only copies the prepared pixels in. Render thread only.
+ * One tile's picture on the GPU (MM-9): a {@link TilePrep#SIZE}-square RGBA8 texture, a texel a block, as {@link TilePrep}
+ * worked it out. The work is done off-thread; {@link #upload} only copies the prepared pixels in. Row 0 of the texture is
+ * the tile's north edge (v 0). Render thread only.
  */
 final class TileTextures implements AutoCloseable {
-    static final int APRON = TilePrep.APRON, SIZE = TilePrep.SIZE;
-    private static final String[] NAMES = {"fields", "surface", "effects", "water", "shore", "region"};
+    static final int SIZE = TilePrep.SIZE;
 
-    final DynamicTexture[] textures = new DynamicTexture[TilePrep.TEXTURES];
+    final DynamicTexture texture;
     /** The stamps of the tile and its neighbours this upload was made from. */
     long key;
 
     private TileTextures(int tx, int tz) {
-        for (int i = 0; i < textures.length; i++) {
-            String name = NAMES[i];
-            textures[i] = new DynamicTexture(() -> MapMod.ID + " map " + name + " " + tx + "," + tz, new NativeImage(SIZE, SIZE, false));
-        }
+        texture = new DynamicTexture(() -> MapMod.ID + " map tile " + tx + "," + tz, new NativeImage(SIZE, SIZE, false));
     }
 
     static TileTextures create(int tx, int tz) {
         return new TileTextures(tx, tz);
     }
 
-    /** Copies prepared pixels in and uploads every texture. */
+    GpuTextureView view() {
+        return texture.getTextureView();
+    }
+
+    /** Copies prepared pixels in and uploads the texture. */
     void upload(TilePrep.Result prepared) {
-        for (int t = 0; t < textures.length; t++) {
-            NativeImage image = textures[t].getPixels();
-            if (image == null) return;
-            int[] px = prepared.pixels()[t];
-            for (int z = 0; z < SIZE; z++) {
-                int row = z * SIZE;
-                for (int x = 0; x < SIZE; x++) image.setPixel(x, z, px[row + x]);
-            }
+        NativeImage image = texture.getPixels();
+        if (image == null) return;
+        int[] px = prepared.pixels();
+        for (int z = 0; z < SIZE; z++) {
+            int row = z * SIZE;
+            for (int x = 0; x < SIZE; x++) image.setPixel(x, z, px[row + x]);
         }
-        for (DynamicTexture t : textures) t.upload();
+        texture.upload();
     }
 
     /** A texel as it was uploaded (ARGB), for the selftests. */
-    int pixel(int texture, int x, int z) {
-        NativeImage image = textures[texture].getPixels();
+    int pixel(int x, int z) {
+        NativeImage image = texture.getPixels();
         return image == null ? 0 : image.getPixel(x, z);
     }
 
     @Override
     public void close() {
-        for (DynamicTexture t : textures) t.close();
+        texture.close();
     }
 }

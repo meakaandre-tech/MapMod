@@ -209,7 +209,7 @@ public final class MapModApi {
 
     /**
      * Clears a group's fog over a disc round a spot (a radar's sweep) and sends it to the group's players: POIs there show
-     * on their maps and compasses. The group's fog gates POIs only; the painted terrain is what each client has captured
+     * on their maps and compasses. The group's fog gates POIs only; the terrain is what each client has captured
      * itself. Server thread.
      */
     public static void reveal(ServerLevel level, String group, BlockPos centre, int radiusBlocks) {

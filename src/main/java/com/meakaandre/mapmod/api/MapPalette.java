@@ -8,24 +8,26 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Restyles the painted map from code: overrides of single values of {@code assets/mapmod/map_palette.json}, laid over
- * whatever the resource packs give, kept until cleared and laid over again after every resource reload (F3+T). Any
- * change makes the map paint its tiles again. Values are clamped as the JSON's are.
+ * Restyles the map from code: overrides of single values of {@code assets/mapmod/map_palette.json}, laid over whatever
+ * the resource packs give, kept until cleared and laid over again after every resource reload (F3+T). Any change makes
+ * the map bake its tiles again. Values are clamped as the JSON's are.
  * <p>
  * Keys are the JSON's paths, dotted ({@link #keys()}): {@code classes.<id>.colour} and {@code classes.<id>.tint} for the
- * surface classes ({@link MapSurface}'s ids 0-7), and {@code water.shallow}, {@code water.deep}, {@code water.shore},
- * {@code paper}, {@code snow.colour}, {@code fog.colour} (colours) and the numbers ({@code hillshade}, {@code edges.warp},
- * {@code fog.edge}, {@code colour.saturation}, {@code colour.value}, {@code colour.brush_size}, {@code colour.merge}, {@code water.tint}...).
- * One change at a time with {@link #colour}/{@link #number}, or several at once with {@link #edit()}. Client thread.
+ * surface classes ({@link MapSurface}'s ids 0-7), {@code background} (a colour: unexplored land), and the numbers
+ * {@code shading} (the height shading's strength), {@code water.opacity}, {@code water.depth} and {@code water.darken}
+ * (how the floor shows through water). One change at a time with {@link #colour}/{@link #number}, or several at once with
+ * {@link #edit()}. Client thread.
  * <p>
- * Since MM-8 the map paints the land in each block's real colour (the average of its top texture, as the resource packs
- * give it, times its biome tint), pulled toward a muted painted palette by {@code colour.saturation} and
- * {@code colour.value}, with colours closer than {@code colour.merge} merged into one (MM-8b), and brushed into
- * patches {@code colour.brush_size} blocks across. A class colour
- * ({@link #classColour}, {@code classes.<id>.colour}) is now an optional override on top of that: none is set by
- * default, and one that is set replaces the real colour of every sample of that class (tinted by its biome as much as
- * {@link #classTint} says), until it is cleared. {@code classes.<id>.tint} only matters with a class colour set. Nothing
- * in this API changed its signature.
+ * Since MM-9 the map looks like Xaero's World Map: one pixel per block in the block's real colour (the average of its top
+ * texture, as the resource packs give it, times its biome tint), shaded by height against its north and west neighbours.
+ * A class colour ({@link #classColour}, {@code classes.<id>.colour}) is an optional override on top of that: none is set
+ * by default, and one that is set replaces the real colour of every block of that class (tinted by its biome as much as
+ * {@link #classTint} says), until it is cleared.
+ * <p>
+ * The painted look's keys (MM-3 to MM-8: {@code paper}, {@code hillshade}, {@code edges.*}, {@code forest.*},
+ * {@code contours.*}, {@code finish.*}, {@code fog.*}, {@code colour.*}, {@code height_tint.*}, {@code snow.*} and the
+ * old {@code water.*} ones) are deprecated: they are no longer in {@link #keys()}, and setting or clearing one is
+ * accepted and does nothing (logged once), so mods that set them keep working. Nothing in this API changed its signature.
  */
 public final class MapPalette {
     private MapPalette() {
@@ -36,11 +38,26 @@ public final class MapPalette {
         return PaintPalette.KEYS.keySet();
     }
 
-    /** True if the key is a colour (0xRRGGBB), false if a number. */
+    /** True if the key is a colour (0xRRGGBB), false if a number (deprecated keys answer as they used to). */
     public static boolean isColour(String key) {
         Boolean c = PaintPalette.KEYS.get(key);
+        if (c == null) c = PaintPalette.DEPRECATED.get(key);
         if (c == null) throw new IllegalArgumentException("no map palette key " + key + "; the keys are " + keys());
         return c;
+    }
+
+    /** True for a key of the painted look before MM-9: accepted, and does nothing. */
+    public static boolean isDeprecated(String key) {
+        return PaintPalette.DEPRECATED.containsKey(key);
+    }
+
+    private static final java.util.Set<String> WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** True (after a one-time warning) if a key is deprecated and so to be left out. */
+    private static boolean skip(String key) {
+        if (!isDeprecated(key)) return false;
+        if (WARNED.add(key)) com.meakaandre.mapmod.MapMod.LOGGER.warn("map palette key {} is deprecated since MM-9 and has no effect", key);
+        return true;
     }
 
     /** Overrides a colour, 0xRRGGBB. */
@@ -54,8 +71,8 @@ public final class MapPalette {
     }
 
     /**
-     * Overrides a surface class's colour (class ids as {@link MapSurface}'s): that class's ground is painted in it
-     * instead of its blocks' real colours (MM-8; {@link #clear} with {@code "classes.<id>.colour"} brings them back).
+     * Overrides a surface class's colour (class ids as {@link MapSurface}'s): that class's ground shows in it instead
+     * of its blocks' real colours (MM-8; {@link #clear} with {@code "classes.<id>.colour"} brings them back).
      */
     public static void classColour(int classId, int rgb) {
         edit().classColour(classId, rgb).apply();
@@ -90,7 +107,7 @@ public final class MapPalette {
 
     /**
      * A palette's version: it changes every time the palette does (a resource reload, or overrides applied), as the
-     * map paints its tiles again.
+     * map bakes its tiles again.
      */
     public static int version() {
         return PaintPalette.version();
@@ -106,6 +123,7 @@ public final class MapPalette {
 
         public Builder colour(String key, int rgb) {
             if (!isColour(key)) throw new IllegalArgumentException(key + " is a number, not a colour");
+            if (skip(key)) return this;
             next.put(key, new JsonPrimitive(String.format("#%06x", rgb & 0xFFFFFF)));
             return this;
         }
@@ -113,6 +131,7 @@ public final class MapPalette {
         public Builder number(String key, float value) {
             if (isColour(key)) throw new IllegalArgumentException(key + " is a colour, not a number");
             if (!Float.isFinite(value)) throw new IllegalArgumentException(key + " must be a finite number");
+            if (skip(key)) return this;
             next.put(key, new JsonPrimitive(value));
             return this;
         }
@@ -136,7 +155,7 @@ public final class MapPalette {
             return this;
         }
 
-        /** Applies the overrides: the palette changes and the map paints its tiles again. */
+        /** Applies the overrides: the palette changes and the map bakes its tiles again. */
         public void apply() {
             PaintPalette.override(next);
         }

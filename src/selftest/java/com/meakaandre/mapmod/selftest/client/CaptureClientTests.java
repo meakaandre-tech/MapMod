@@ -58,17 +58,22 @@ final class CaptureClientTests {
             int i = SurfaceTile.indexOfBlock(px, pz);
             underPlayer = tile.explored(i);
             detail = "height " + tile.height[i] + " under a player at y " + mc.player.getBlockY() + ", water " + (tile.water[i] & 0xFF)
-                + ", " + SurfaceClass.name(tile.surface[i]) + ", canopy " + (tile.canopy[i] & 0xFF) + ", " + tile.exploredCount() + " explored";
+                + ", " + SurfaceClass.name(tile.surface[i]) + ", top " + (tile.above[i] & 0xFF) + " above it, " + tile.exploredCount() + " explored";
             boolean classes = true;
             for (byte c : tile.surface) classes &= c >= 0 && c < SurfaceClass.COUNT;
-            // the sample stands for its cell's middle column: its height is that column's top block, or below it
-            // where leaves, logs, plants or water were looked past
-            int sp = SurfaceTile.SPACING, mx = Math.floorDiv(px, sp) * sp + sp / 2, mz = Math.floorDiv(pz, sp) * sp + sp / 2;
-            int top = mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, mx, mz) - 1;
-            detail += ", top block of its middle column at y " + top;
+            // MM-9: a sample a block; its height is the column's top block, or below it where leaves, logs, plants or
+            // water were looked past, and the top that shows from above is the column's top block on land
+            int top = mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, px, pz) - 1;
+            detail += ", top block of its column at y " + top;
             out.add(new Check("capture: the sample under the player is explored and at its column's surface", underPlayer
                 && tile.height[i] <= top && tile.height[i] >= top - 40, detail));
             out.add(new Check("capture: every surface class is one of the eight", classes, ""));
+            // one sample per block (MM-9): the tile is 512 samples a side, and the player's chunk has all 256 explored
+            int cx0 = Math.floorMod(px >> 4, SurfaceTile.CHUNKS) * 16, cz0 = Math.floorMod(pz >> 4, SurfaceTile.CHUNKS) * 16, inChunk = 0;
+            for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) if (tile.explored(SurfaceTile.index(cx0 + x, cz0 + z))) inChunk++;
+            sizes(tile);
+            out.add(new Check("capture: one sample per block, every block of the player's chunk explored",
+                SurfaceTile.SPACING == 1 && SurfaceTile.SIDE == 512 && SurfaceTile.FORMAT == 3 && inChunk == 256, inChunk + " of 256"));
         } else {
             out.add(new Check("capture: the tile the player is in is held", false, detail));
         }
@@ -118,5 +123,34 @@ final class CaptureClientTests {
             if (got != (byte) e[1]) wrong.add(e[0] + " is " + SurfaceClass.name(got));
         }
         return new Check("capture: blocks land in their class by tag, then map colour", wrong.isEmpty(), wrong.toString());
+    }
+
+    /**
+     * MM-9: the player's tile packed now, against the same land laid out as MM-8 packed it (2-block samples, each its
+     * cell's middle column), with the same zstd, and both in memory: for the report on what one pixel per block costs.
+     */
+    static void sizes(SurfaceTile t) {
+        int side = 256, area = side * side;
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(area * 2 + area + area + area * 2 + area + area * 3 + area / 8)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        int[] mid = new int[area];
+        for (int i = 0; i < area; i++) mid[i] = SurfaceTile.index((i % side) * 2 + 1, (i / side) * 2 + 1);
+        for (int i = 0; i < area; i++) b.putShort(t.height[mid[i]]);
+        for (int i = 0; i < area; i++) b.put(t.water[mid[i]]);
+        for (int i = 0; i < area; i++) b.put(t.surface[mid[i]]);
+        for (int i = 0; i < area; i++) b.putShort(t.tint[mid[i]]);
+        for (int i = 0; i < area; i++) b.put((byte) (t.above[mid[i]] != 0 ? 255 : 0));
+        for (int shift = 16; shift >= 0; shift -= 8) for (int i = 0; i < area; i++) b.put((byte) (t.colour[mid[i]] >> shift));
+        long[] explored = new long[area / 64];
+        for (int i = 0; i < area; i++) if (t.explored(mid[i])) explored[i >>> 6] |= 1L << i;
+        for (long l : explored) b.putLong(l);
+        io.airlift.compress.v3.zstd.ZstdCompressor z = SurfaceTile.codec().equals("native")
+            ? new io.airlift.compress.v3.zstd.ZstdNativeCompressor() : new io.airlift.compress.v3.zstd.ZstdJavaCompressor();
+        byte[] out = new byte[z.maxCompressedLength(b.capacity())];
+        int mm8 = z.compress(b.array(), 0, b.capacity(), out, 0, out.length) + 13, mm9 = t.pack().length;
+        long mem8 = (long) area * (2 + 1 + 1 + 2 + 1 + 4) + area / 8;
+        MapMod.LOGGER.info(String.format(java.util.Locale.ROOT,
+            "SELFTEST sizes: the player's tile (%d of %d blocks explored) is %.1f KB on disk (MM-9), %.1f KB in MM-8's layout; %.2f MB in memory (MM-9), %.2f MB (MM-8)",
+            t.exploredCount(), SurfaceTile.AREA, mm9 / 1024.0, mm8 / 1024.0, SurfaceTile.memoryBytes() / 1048576.0, mem8 / 1048576.0));
     }
 }

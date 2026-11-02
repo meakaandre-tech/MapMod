@@ -1,96 +1,52 @@
 #version 330
 #extension GL_ARB_separate_shader_objects : require
 
-// The painted map's quads (MM-4): a baked tile or mip drawn with linear filtering (also how a mip is made from its four
-// children: each drawn into a quarter, so every texel is the mean of a 2x2 block), or plain paper. On screen the fog
-// over unexplored land (MM-5), the paper grain and the vignette go on as each pixel is written: the fog from the cell's
-// mask and a static cloud texture in world space, the grain from the screen position, so the grain stays one screen
-// pixel fine at every zoom and never scales with the map; baked tiles and mips carry none of it. Mid-blend between two
-// mip levels a quad also reads the old level (Src2) and mixes it in.
+// The map's quads (MM-9). Textures hold one texel a block (a mip a texel per 2^k blocks), premultiplied: explored land
+// opaque in its colour, unexplored land transparent black.
+//  - copy (mode 0): the texel as it is: a tile's picture into its baked texture (nearest, texel for texel), or a mip's
+//    four children each into a quarter (linear, so every texel is the exact mean of a 2x2 block);
+//  - on screen (mode 1): close up read nearest (the sampler), so blocks are crisp squares; zoomed out, where a pixel
+//    spans more than a texel, four taps spread over the pixel's footprint average it, so the picture does not shimmer as
+//    it moves; then laid over the flat background, so unexplored land is the background with hard chunk edges;
+//  - background (mode 2): the background on screen, transparent in a texture.
+// Mid-blend between two mip levels a quad also reads the old level (Src2) and mixes it in.
 
 uniform sampler2D Src;
 uniform sampler2D Src2;
-uniform sampler2D Fog;
 
 layout(std140) uniform MapQuad {
     vec4 Rect;
     vec4 Samples;
-    vec4 Params;            // x: 0 copy, 1 copy and finish, 2 paper and finish  y: paper grain  z: vignette  w: share of Src2
-    vec4 View;              // xy: size of the target (pixels)  z: 1 with a fog mask  w: the fog mask's sharpness
-    vec4 Paper;             // rgb
+    vec4 Params;     // x: 0 copy, 1 on screen, 2 background  w: share of Src2
+    vec4 Background; // rgb  a: 1 on screen
     vec4 Samples2;
-    vec4 MaskUv;
-    vec4 World;
-    vec4 FogColour;         // rgb, a: cloud strength
 };
 
 layout(location = 0) in vec2 uv;
 layout(location = 1) in vec2 uv2;
-layout(location = 2) in vec2 maskUv;
-layout(location = 3) in vec2 world;
 
 layout(location = 0) out vec4 fragColor;
 
-// world-space noise repeats every PERIOD samples (8192 blocks), as map_paint's does
-const float PERIOD = 2048.0;
-
-float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-// smooth value noise over cells of size 1, repeating every n cells (n = 0: never)
-float vnoise(vec2 p, float n) {
-    vec2 i = floor(p), f = p - i;
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    vec2 j = i + 1.0;
-    if (n > 0.0) {
-        i = mod(i, n);
-        j = mod(j, n);
-    }
-    float a = hash(i), b = hash(vec2(j.x, i.y)), c = hash(vec2(i.x, j.y)), d = hash(j);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-// static clouds in world space (samples), 0 to 1: three octaves, 256, 64 and 16 blocks across, each settling to its
-// middle before it is fine enough to alias
-float clouds(vec2 ws) {
-    float spp = max(length(fwidth(ws)), 1e-4);
-    float c = 0.5 * mix(vnoise(ws / 64.0, PERIOD / 64.0), 0.5, smoothstep(16.0, 48.0, spp));
-    c += 0.3 * mix(vnoise(ws / 16.0 + vec2(19.0, 7.0), PERIOD / 16.0), 0.5, smoothstep(4.0, 12.0, spp));
-    c += 0.2 * mix(vnoise(ws / 4.0 + vec2(5.0, 31.0), PERIOD / 4.0), 0.5, smoothstep(1.0, 3.0, spp));
-    return c;
-}
-
-// unexplored land fades into fog: its edge from the mask, roughened by the clouds, which also mottle the fog itself. The
-// mask holds the signed distance to the edge's middle (0.5 there); View.w scales it to the edge's width at this zoom
-// (MM-8c), so the edge is a few pixels wide far out and about 48 blocks close up, as smooth either way
-vec3 fog(vec3 c, float mask) {
-    float cl = clouds(world);
-    float s = FogColour.a;
-    float shown = smoothstep(0.0, 1.0, 0.5 + (mask - 0.5) * View.w + (cl - 0.5) * 0.75 * s);
-    vec3 f = mix(FogColour.rgb, Paper.rgb, s * smoothstep(0.35, 0.75, cl));
-    return mix(f, c, shown);
-}
-
-// paper grain, fixed to the screen like the paper under a painting, and the vignette
-vec3 finish(vec3 c) {
-    vec2 fc = gl_FragCoord.xy;
-    float g = 0.65 * vnoise(fc / 2.0, 0.0) + 0.35 * vnoise(fc / 6.0, 0.0);
-    c *= 1.0 + Params.y * (g - 0.5) * 2.0;
-    vec2 v = max(View.xy, vec2(1.0));
-    vec2 hs = 0.5 * vec2(v.x / v.y, 1.0);
-    float r = length((fc / v - 0.5) * vec2(v.x / v.y, 1.0)) / length(hs);
-    return c * (1.0 - Params.z * smoothstep(0.45, 1.0, r));
+// a pixel's footprint averaged: one tap where it covers a texel or less, else four spread over it
+vec4 area(sampler2D s, vec2 p) {
+    vec2 size = vec2(textureSize(s, 0));
+    vec2 texels = fwidth(p) * size;
+    if (max(texels.x, texels.y) <= 1.0) return texture(s, p);
+    vec2 d = 0.25 * fwidth(p);
+    return 0.25 * (texture(s, p + vec2(-d.x, -d.y)) + texture(s, p + vec2(d.x, -d.y))
+        + texture(s, p + vec2(-d.x, d.y)) + texture(s, p + vec2(d.x, d.y)));
 }
 
 void main() {
-    vec3 c = Params.x > 1.5 ? Paper.rgb : texture(Src, uv).rgb;
-    if (Params.w > 0.0) c = mix(c, texture(Src2, uv2).rgb, Params.w);
-    if (Params.x > 0.5) {
-        float mask = View.z > 0.5 ? texture(Fog, maskUv).r : 0.0;
-        c = finish(fog(c, mask));
+    if (Params.x > 1.5) {
+        fragColor = Background.a > 0.5 ? vec4(Background.rgb, 1.0) : vec4(0.0);
+        return;
     }
-    fragColor = vec4(c, 1.0);
+    if (Params.x < 0.5) {
+        fragColor = texture(Src, uv);
+        return;
+    }
+    vec4 c = area(Src, uv);
+    if (Params.w > 0.0) c = mix(c, area(Src2, uv2), Params.w);
+    fragColor = vec4(c.rgb + Background.rgb * (1.0 - c.a), 1.0);
 }

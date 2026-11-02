@@ -15,7 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * The eight surface classes the painted map knows, and how any block (vanilla or modded) lands in one: block tags
+ * The eight surface classes the map knows, and how any block (vanilla or modded) lands in one: block tags
  * first, then the block's {@link MapColor}. No per-mod code; mods may put a block or a tag in a class of their choice
  * ({@code api.MapSurface}), which wins over both.
  */

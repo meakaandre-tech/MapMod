@@ -16,8 +16,8 @@ import java.util.function.BiFunction;
  * MM-5: then, with room enough, every cell under the top one is let go and a tile in the middle changes: the cells
  * under the top one are made again from its picture and only the changed tile and its neighbours bake, not all 16.
  * MM-8d: then a second block, one level-3 cell, with a corner's tiles not loaded at first: the quarter over them stays
- * dirty (never clean over paper) until they arrive, bake and are copied in; then, its children evicted and a changed
- * tile held back, it keeps its picture (never paper) until baked again. The mip is read back from the GPU to check its
+ * dirty (never clean over nothing) until they arrive, bake and are copied in; then, its children evicted and a changed
+ * tile held back, it keeps its picture (never empty) until baked again. The mip is read back from the GPU to check its
  * quarters' colour. Render thread only.
  */
 public final class BakeCheck implements AutoCloseable {
@@ -52,9 +52,7 @@ public final class BakeCheck implements AutoCloseable {
         index = new TileIndex((tx, tz) -> {
             if (self[0] != null) self[0].cache.tileChanged(tx, tz);
         });
-        long[] clear = new long[com.meakaandre.mapmod.map.MapGrid.FOG_LONGS];
-        java.util.Arrays.fill(clear, -1L);
-        painter = new MapPainter(index, (long) BUDGET_TILES * BakeCache.SIDE * BakeCache.SIDE * 4, null, region -> clear);
+        painter = new MapPainter(index, (long) BUDGET_TILES * BakeCache.SIDE * BakeCache.SIDE * 4, null);
         self[0] = painter;
         painter.provider(new MapPainter.Provider() {
             @Override
@@ -89,7 +87,7 @@ public final class BakeCheck implements AutoCloseable {
         double bpp = 1 << level;
         int px = BakeCache.SIDE;
         painter.paint(new MapPainter.Frame(px, px, tx * (double) BakeCache.SIDE, tz * (double) BakeCache.SIDE, bpp),
-            PaintPalette.current(), PaintPalette.version(), false, true);
+            PaintPalette.current(), PaintPalette.version(), true);
         maxOps = Math.max(maxOps, painter.lastOps);
         frames++;
         settledFrames = painter.idle() ? settledFrames + 1 : 0;
@@ -206,7 +204,7 @@ public final class BakeCheck implements AutoCloseable {
                 BakeCache.Baked top = c.get(3, T1 >> 3, T1 >> 3);
                 boolean three = top != null && Integer.bitCount(top.dirty) == 1;
                 if ((!three || frames < 300) && frames < PATIENCE) return;
-                expect("a mip built while a child's tiles are missing keeps that quarter dirty: never clean over paper",
+                expect("a mip built while a child's tiles are missing keeps that quarter dirty: never clean over nothing",
                     top != null && !c.clean(top) && Integer.bitCount(top.dirty) == 1 && c.emptySplitsAvoided > avoidedAt,
                     top == null ? "no level-3 cell after " + frames + " frames" : "dirty quarters " + Integer.toBinaryString(top.dirty) + ", missing children made from below "
                         + (c.emptySplitsAvoided - avoidedAt) + " times, " + frames + " frames");
@@ -218,7 +216,7 @@ public final class BakeCheck implements AutoCloseable {
                 frame3();
                 if (reading != null && !reading.isDone() && frames < PATIENCE) return;
                 int[] q = quarters(reading);
-                expect("while the tiles are missing the mip shows paper in that quarter only, its other quarters real colour",
+                expect("while the tiles are missing the mip is empty in that quarter only, its other quarters real colour",
                     q != null && count(q, 2) == 1 && count(q, 0) == 3, describe(q));
                 // the tiles' data arrives (as a tile read from disk does): the quarter is made and copied in
                 withheld.clear();
@@ -245,7 +243,7 @@ public final class BakeCheck implements AutoCloseable {
                 int[] q = quarters(reading);
                 expect("the rebuilt mip holds real colour in every quarter, the one that was missing too", q != null && count(q, 0) == 4, describe(q));
                 // evicted and baked again: every cell under the level-3 one goes, a tile in the corner changes and its
-                // data is held back a while; the level-3 cell keeps its picture (never paper) until it is baked again
+                // data is held back a while; the level-3 cell keeps its picture (never empty) until it is baked again
                 c.evictBelow(3);
                 long k = TileIndex.key(T1 + 6, T1 + 6);
                 SurfaceTile t = world.get(k);
@@ -274,7 +272,7 @@ public final class BakeCheck implements AutoCloseable {
                 frame3();
                 if (reading != null && !reading.isDone() && frames < PATIENCE) return;
                 int[] q = quarters(reading);
-                expect("meanwhile it still shows real colour everywhere: an evicted child never turns into paper", q != null && count(q, 0) == 4, describe(q));
+                expect("meanwhile it still shows real colour everywhere: an evicted child never turns empty", q != null && count(q, 0) == 4, describe(q));
                 withheld.clear();
                 reading = null;
                 phase = 11;
@@ -307,24 +305,23 @@ public final class BakeCheck implements AutoCloseable {
         frame(3, T1, T1);
     }
 
-    /** Per quarter of a 512-pixel read-back: 0 real colour, 2 paper, 1 a mix; null if there is none. */
+    /** Per quarter of a 512-pixel read-back: 0 real colour, 2 empty (transparent), 1 a mix; null if there is none. */
     private static int @Nullable [] quarters(java.util.concurrent.@Nullable CompletableFuture<int[]> f) {
         if (f == null || !f.isDone() || f.isCompletedExceptionally()) return null;
         int[] px = f.getNow(null);
         if (px == null || px.length != BakeCache.SIDE * BakeCache.SIDE) return null;
-        int paper = PaintPalette.current().paper(), h = BakeCache.SIDE / 2;
+        int h = BakeCache.SIDE / 2;
         int[] out = new int[4];
         for (int q = 0; q < 4; q++) {
-            int papery = 0, n = 0;
+            int empty = 0, n = 0;
             for (int y = (q >> 1) * h + 8; y < (q >> 1) * h + h - 8; y += 4) {
                 for (int x = (q & 1) * h + 8; x < (q & 1) * h + h - 8; x += 4) {
                     int c = px[x + y * BakeCache.SIDE];
                     n++;
-                    if (Math.abs((c >> 16 & 255) - (paper >> 16 & 255)) <= 10 && Math.abs((c >> 8 & 255) - (paper >> 8 & 255)) <= 10
-                        && Math.abs((c & 255) - (paper & 255)) <= 10) papery++;
+                    if ((c >>> 24) < 16) empty++;
                 }
             }
-            out[q] = papery * 10 < n * 2 ? 0 : papery * 10 > n * 9 ? 2 : 1;
+            out[q] = empty * 10 < n * 2 ? 0 : empty * 10 > n * 9 ? 2 : 1;
         }
         return out;
     }
@@ -339,7 +336,7 @@ public final class BakeCheck implements AutoCloseable {
     private static String describe(int @Nullable [] q) {
         if (q == null) return "no read-back";
         StringBuilder b = new StringBuilder("quarters:");
-        for (int x : q) b.append(x == 0 ? " colour" : x == 2 ? " paper" : " mixed");
+        for (int x : q) b.append(x == 0 ? " colour" : x == 2 ? " empty" : " mixed");
         return b.toString();
     }
 

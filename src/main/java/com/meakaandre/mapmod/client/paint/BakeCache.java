@@ -10,9 +10,10 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Baked tiles and the mip pyramid over them, on the GPU, within a memory budget (MM-4). Level 0 holds tiles painted
- * once at one pixel a block ({@value #SIDE} square); level k holds 512-pixel cells 2^k tiles across, each made from the
- * four cells of the level below drawn into its quarters with linear filtering. A baked tile is out of date when the
+ * Baked tiles and the mip pyramid over them, on the GPU, within a memory budget (MM-4). Level 0 holds tiles' pictures
+ * at one pixel a block (MM-9: copied texel for texel from {@link TileTextures}) ({@value #SIDE} square); level k holds 512-pixel cells 2^k tiles across, each made from the
+ * four cells of the level below drawn into its quarters with linear filtering: each texel the exact mean of a 2x2 block
+ * (premultiplied, so unexplored land, transparent, averages in as nothing). A baked tile is out of date when the
  * revisions it was made from ({@link TileIndex#key3x3}) are not the index's any more; a mip keeps one dirty bit per
  * quarter, set when that child is re-made or when a tile under it changes, and cleared when the quarter is copied from
  * a child that is itself up to date. Least recently used cells go first when the budget is exceeded; they are made again
@@ -26,14 +27,15 @@ import java.util.Optional;
  * coarser.
  * <p>
  * MM-8d: a quarter only ever takes a child with real content (baked tiles, or a mip made from them). A quarter that
- * was never copied in ({@link #EMPTY}) holds paper, so its missing child is made from below, never "made again" from
- * that paper: that once marked paper clean, so explored land showed as paper rectangles at far zoom for good. Render
+ * was never copied in ({@link #EMPTY}) holds nothing (transparent; paper before MM-9), so its missing child is made from
+ * below, never "made again" from that emptiness: that once marked it clean, so explored land showed as empty rectangles
+ * at far zoom for good. Render
  * thread only.
  */
 final class BakeCache implements AutoCloseable {
     static final int SIDE = SurfaceTile.BLOCKS;
     static final int LEVELS = TileIndex.LEVELS;
-    /** A mip quarter's {@code builtAt} while nothing has been copied into it: it holds paper, not a picture (MM-8d). */
+    /** A mip quarter's {@code builtAt} while nothing has been copied into it: it holds nothing, not a picture (MM-8d). */
     static final long EMPTY = Long.MAX_VALUE;
 
     static final class Baked {
@@ -70,7 +72,7 @@ final class BakeCache implements AutoCloseable {
     long leafBakes, mipBuilds, evictions, splits;
     /**
      * MM-8d: times a missing child under a quarter that had never been copied in was made from its children instead of
-     * from the parent's paper (before MM-8d it was "made again" from that paper, counted clean, and the paper stayed).
+     * from the parent's empty quarter (before MM-8d it was "made again" from it, counted clean, and stayed empty).
      */
     long emptySplitsAvoided;
 
@@ -221,8 +223,8 @@ final class BakeCache implements AutoCloseable {
                 // the child was evicted: made again from this cell's own picture of it, out of date only where it changed
                 jobs.split(level, x, z, q);
             } else {
-                // MM-8d: a quarter never copied in holds paper, not a picture of its child: the child is made from its
-                // own children (baked tiles, in the end), never from that paper
+                // MM-8d: a quarter never copied in holds nothing, not a picture of its child: the child is made from its
+                // own children (baked tiles, in the end), never from that emptiness
                 if (c == null && b != null && dirty && level - 1 >= 1 && b.builtAt[q] == EMPTY) emptySplitsAvoided++;
                 need(level - 1, cx, cz, allowed + 1, jobs);
             }
@@ -244,11 +246,11 @@ final class BakeCache implements AutoCloseable {
     }
 
     /**
-     * Copies a mip's quarters in from children that are up to date (made, and cleared to paper, if it is new): those
+     * Copies a mip's quarters in from children that are up to date (made, and cleared to transparent, if it is new): those
      * out of date, and those whose child is in more detail than the quarter; the mips over it take it again. Returns
      * false if there was nothing ready after all.
      */
-    boolean buildMip(MapGpu gpu, int level, int x, int z, PaintPalette pal) {
+    boolean buildMip(MapGpu gpu, int level, int x, int z) {
         Baked b = get(level, x, z);
         boolean fresh = b == null;
         int occ = occupiedChildren(level, x, z);
@@ -257,7 +259,7 @@ final class BakeCache implements AutoCloseable {
             b.dirty = occ;
             Arrays.fill(b.builtAt, EMPTY);
         }
-        // a quarter with no tile under it holds paper and nothing in it can change
+        // a quarter with no tile under it holds nothing (transparent) and nothing in it can change
         b.dirty &= occ;
         touch(b);
         List<MapGpu.TexQuad> quads = new ArrayList<>(4);
@@ -276,7 +278,7 @@ final class BakeCache implements AutoCloseable {
             b.builtAt[q] = builtAt(c);
         }
         if (quads.isEmpty() && !fresh) return false;
-        gpu.quads(b.target, fresh ? MapGpu.clear(pal) : Optional.empty(), quads, null, false);
+        gpu.quads(b.target, fresh ? MapGpu.TRANSPARENT : Optional.empty(), quads, null);
         mipBuilds++;
         dirtyAbove(level, x, z);
         return true;
@@ -290,18 +292,18 @@ final class BakeCache implements AutoCloseable {
     boolean split(MapGpu gpu, int level, int x, int z, int q) {
         Baked b = get(level, x, z);
         int cx = x * 2 + (q & 1), cz = z * 2 + (q >> 1);
-        // MM-8d: never from a quarter that holds paper, not a picture
+        // MM-8d: never from a quarter that holds nothing, not a picture
         if (b == null || level < 2 || get(level - 1, cx, cz) != null || b.builtAt[q] == EMPTY) return false;
         Baked c = add(level - 1, cx, cz);
         touch(b);
         touch(c);
         float u0 = (q & 1) * 0.5f, vTop = 1 - (q >> 1) * 0.5f;
-        gpu.quads(c.target, Optional.empty(), List.of(new MapGpu.TexQuad(b.target.view, 0, 0, SIDE, SIDE, u0, vTop, u0 + 0.5f, vTop - 0.5f)), null, true);
+        gpu.quads(c.target, Optional.empty(), List.of(new MapGpu.TexQuad(b.target.view, 0, 0, SIDE, SIDE, u0, vTop, u0 + 0.5f, vTop - 0.5f).nearest(true)), null);
         long made = b.builtAt[q];
         byte deficit = (byte) Math.min(Byte.MAX_VALUE, b.deficit[q] + 1);
         int occ = occupiedChildren(level - 1, cx, cz);
         for (int q2 = 0; q2 < 4; q2++) {
-            // a quarter with no tile under it is paper, as fine as it gets
+            // a quarter with no tile under it holds nothing, as fine as it gets
             if ((occ & 1 << q2) == 0) continue;
             c.deficit[q2] = deficit;
             c.builtAt[q2] = made;
@@ -334,7 +336,7 @@ final class BakeCache implements AutoCloseable {
         for (Baked b : gone) remove(b);
     }
 
-    /** Everything goes (the palette or contours changed, or the world unloaded). */
+    /** Everything goes (the palette changed, or the world unloaded). */
     void clear() {
         for (Long2ObjectOpenHashMap<Baked> m : levels) {
             for (Baked b : m.values()) b.target.close();
