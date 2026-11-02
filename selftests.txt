@@ -1,0 +1,93 @@
+SELFTEST map: 37 passed, 0 failed
+SELFTEST smoke: 2 passed, 0 failed
+SELFTEST client: 132 passed, 0 failed
+SELFTEST restart: 7 passed, 0 failed
+SELFTEST local: 22 passed, 0 failed
+SELFTEST colours: 26 passed, 0 failed
+SELFTEST api: 32 passed, 0 failed
+SELFTEST fogshots: 4 passed, 0 failed
+screenshots: 12 (client-01.png, client-02.png, client-03.png, client-04.png, client-05.png, client-06.png, client-07.png, client-08.png, client-09.png, client-10.png, client-11.png, client-12.png)
+screenshots on a server without MapMod: 12 (local-01.png, local-02.png, local-03.png, local-04.png, local-05.png, local-06.png, local-07.png, local-08.png, local-09.png, local-10.png, local-11.png, local-12.png)
+client-02.png: 0 lines of background between tiles
+client-03.png: 0 lines of background between tiles
+client-04.png: 0 lines of background between tiles
+client-05.png: 0 lines of background between tiles
+client-06.png: 0 lines of background between tiles
+client-07.png: 0 lines of background between tiles
+client-08.png: 0 lines of background between tiles
+local-02.png: 0 lines of background between tiles
+local-03.png: 0 lines of background between tiles
+local-04.png: 0 lines of background between tiles
+local-05.png: 0 lines of background between tiles
+local-10.png: 0 lines of background between tiles
+local-11.png: 0 lines of background between tiles
+local-12.png: 0 lines of background between tiles
+local-03.png (patch): mycelium #6F6365 ok
+local-03.png (patch): grass #327324 ok
+local-03.png (patch): sand #DBCFA3 ok
+local-03.png (patch): stone #7E7E7E ok
+local-03.png (patch): terracotta #A25426 ok
+local-03.png: the mycelium/grass border (straight, 88 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-03.png: the grass/sand border (straight, 88 rows) is 0.04 blocks off the blocks' line at most (0.00 on average) ok
+local-03.png: the grass/sand border (stairs, 60 rows) is 0.04 blocks off the blocks' line at most (0.00 on average) ok
+local-03.png: the sand/stone border (straight, 88 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-03.png: the sand/stone border (stairs, 60 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-03.png: the stone/terracotta border (straight, 87 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-03.png: a stray block in the mycelium at -32, -11.5 is 278 off the strip; the blocks beside it are the strip's colour ok
+local-03.png: a stray block in the grass at -17.5, -11.5 is 388 off the strip; the blocks beside it are the strip's colour ok
+local-03.png: a stray block in the grass at -13.5, -7.5 is 177 off the strip; the blocks beside it are the strip's colour ok
+local-03.png: the poppy on the grass at -19.5, -13.5 is 1 off the grass: looked past, ok
+local-03.png: a stray block in the sand at 2.5, -13.5 is 211 off the strip; the blocks beside it are the strip's colour ok
+local-03.png: a stray block in the stone at 18.5, -11.5 is 211 off the strip; the blocks beside it are the strip's colour ok
+local-03.png: a stray block in the terracotta at 32.5, -9.5 is 166 off the strip; the blocks beside it are the strip's colour ok
+local-03.png: blocks are crisp squares: 2 of 1600 corner pixels differ from their block's middle ok
+local-03.png: the mycelium/grass border is 0 pixels wide (median of 24 rows)
+local-03.png: the grass/sand border is 0 pixels wide (median of 24 rows)
+local-03.png: the sand/stone border is 0 pixels wide (median of 24 rows)
+local-03.png: the stone/terracotta border is 0 pixels wide (median of 24 rows)
+local-03.png: the patch's north edge over the mycelium is 91 brighter than the row behind it ok
+local-03.png: the patch's north edge over the grass is 113 brighter than the row behind it ok
+local-03.png: the patch's north edge over the sand is 35 brighter than the row behind it ok
+local-03.png: the patch's north edge over the stone is 78 brighter than the row behind it ok
+local-03.png: the patch's north edge over the terracotta is 96 brighter than the row behind it ok
+local-04.png (patch-mid): mycelium #6F6365 ok
+local-04.png (patch-mid): grass #317324 ok
+local-04.png (patch-mid): sand #DBCFA3 ok
+local-04.png (patch-mid): stone #7E7E7E ok
+local-04.png (patch-mid): terracotta #A25426 ok
+local-04.png: the mycelium/grass border (straight, 23 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-04.png: the grass/sand border (straight, 23 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-04.png: the grass/sand border (stairs, 16 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-04.png: the sand/stone border (straight, 23 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-04.png: the sand/stone border (stairs, 16 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-04.png: the stone/terracotta border (straight, 23 rows) is 0.00 blocks off the blocks' line at most (0.00 on average) ok
+local-04.png: a stray block in the mycelium at -32, -11.5 is 278 off the strip; the blocks beside it are the strip's colour ok
+local-04.png: a stray block in the grass at -17.5, -11.5 is 389 off the strip; the blocks beside it are the strip's colour ok
+local-04.png: a stray block in the grass at -13.5, -7.5 is 178 off the strip; the blocks beside it are the strip's colour ok
+local-04.png: the poppy on the grass at -19.5, -13.5 is 0 off the grass: looked past, ok
+local-04.png: a stray block in the sand at 2.5, -13.5 is 211 off the strip; the blocks beside it are the strip's colour ok
+local-04.png: a stray block in the stone at 18.5, -11.5 is 211 off the strip; the blocks beside it are the strip's colour ok
+local-04.png: a stray block in the terracotta at 32.5, -9.5 is 166 off the strip; the blocks beside it are the strip's colour ok
+local-05.png (patch-far): mycelium #6F6365 ok
+local-05.png (patch-far): grass #317324 ok
+local-05.png (patch-far): sand #DBCFA3 ok
+local-05.png (patch-far): stone #7E7E7E ok
+local-05.png (patch-far): terracotta #A25426 ok
+local-05.png: mycelium far out is even: 0 at most off its mean ok
+local-05.png: grass far out is even: 0 at most off its mean ok
+local-05.png: sand far out is even: 0 at most off its mean ok
+local-05.png: stone far out is even: 0 at most off its mean ok
+local-05.png: terracotta far out is even: 0 at most off its mean ok
+local-05.png: the mycelium/grass border is 0.00 blocks off the blocks' line on average (6 rows)
+local-05.png: the grass/sand border is 0.00 blocks off the blocks' line on average (6 rows)
+local-05.png: the sand/stone border is 0.00 blocks off the blocks' line on average (6 rows)
+local-05.png: the stone/terracotta border is 0.00 blocks off the blocks' line on average (6 rows)
+local-10.png (fog-near): 2496 crossings between land and the background, 1.00 of them within a block of a chunk line (0.19 for an edge that ignores the grid) ok
+local-11.png (fog-mid): round the player 9 of 9 pixels show land ok
+local-11.png (fog-mid): the 80-block patch: 9 of 9 pixels show land ok
+local-11.png (fog-mid): half way between them 9 of 9 pixels are the background ok
+local-12.png (fog-far): round the player 9 of 9 pixels show land ok
+local-12.png (fog-far): the 80-block patch: 9 of 9 pixels show land ok
+local-12.png (fog-far): half way between them 9 of 9 pixels are the background ok
+total: 262 passed, 0 failed
+green
