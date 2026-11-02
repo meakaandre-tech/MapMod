@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "mm-9-xaero"]
   workflow_dispatch:
 
 permissions:
